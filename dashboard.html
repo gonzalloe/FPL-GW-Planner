@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FPL Predictor v7 — AI Squad Optimizer</title>
+<style>
+:root {
+  --bg: #0a0e17; --bg2: #0f1520; --surface: #151c2c; --surface2: #1a2236; --surface3: #1f2940;
+  --border: #2a3450; --border-light: #354060; --text: #e8ecf4; --text2: #8892a8; --text3: #5a6580;
+  --accent: #00e676; --accent-dim: rgba(0,230,118,.12); --blue: #42a5f5; --blue-dim: rgba(66,165,245,.12);
+  --gold: #ffd54f; --gold-dim: rgba(255,213,79,.12); --red: #ff5252; --red-dim: rgba(255,82,82,.12);
+  --orange: #ffa726; --orange-dim: rgba(255,167,38,.12); --purple: #ab47bc; --purple-dim: rgba(171,71,188,.12);
+  --dgw: #ff9800; --dgw-dim: rgba(255,152,0,.15);
+  --gkp: #f0c040; --def: #3bc55e; --mid: #42a5f5; --fwd: #ff5252;
+  --radius: 10px; --radius-sm: 6px; --shadow: 0 4px 20px rgba(0,0,0,.4); --transition: all .2s ease;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Inter',-apple-system,'Segoe UI',sans-serif; background:var(--bg); color:var(--text); display:flex; min-height:100vh; }
+
+/* Sidebar */
+.sidebar { width:220px; background:var(--bg2); border-right:1px solid var(--border); padding:16px 0; flex-shrink:0; position:sticky; top:0; height:100vh; overflow-y:auto; }
+.sidebar-logo { padding:12px 20px 20px; border-bottom:1px solid var(--border); margin-bottom:8px; }
+.sidebar-logo h1 { font-size:18px; color:var(--accent); }
+.sidebar-logo small { color:var(--text3); font-size:11px; }
+.nav-item { display:flex; align-items:center; gap:10px; padding:10px 20px; color:var(--text2); cursor:pointer; transition:var(--transition); font-size:13px; border-left:3px solid transparent; }
+.nav-item:hover { background:var(--surface); color:var(--text); }
+.nav-item.active { background:var(--surface); color:var(--accent); border-left-color:var(--accent); font-weight:600; }
+.nav-item .badge { background:var(--dgw); color:#000; font-size:10px; padding:1px 6px; border-radius:8px; font-weight:700; margin-left:auto; }
+
+/* Main */
+.main { flex:1; padding:24px; max-width:1200px; }
+.page { display:none; } .page.active { display:block; }
+h2 { font-size:20px; margin-bottom:16px; display:flex; align-items:center; gap:10px; }
+h2 .dgw-alert { background:var(--dgw); color:#000; font-size:12px; padding:3px 10px; border-radius:12px; font-weight:700; }
+
+/* Cards */
+.card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:16px; }
+.card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+.card-header h3 { font-size:15px; }
+.stats-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:20px; }
+.stat-box { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px; text-align:center; }
+.stat-box .label { font-size:11px; color:var(--text3); text-transform:uppercase; letter-spacing:.5px; }
+.stat-box .value { font-size:24px; font-weight:700; margin:4px 0; }
+.stat-box .sub { font-size:11px; color:var(--text2); }
+
+/* DGW badge */
+.dgw-badge { background:var(--dgw); color:#000; font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px; display:inline-block; }
+.bgw-badge { background:var(--text3); color:#fff; font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px; }
+.tier-badge { font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600; display:inline-block; }
+.tier-nailed { background:var(--accent-dim); color:var(--accent); }
+.tier-regular { background:var(--blue-dim); color:var(--blue); }
+.tier-rotation { background:var(--orange-dim); color:var(--orange); }
+.tier-fringe { background:var(--red-dim); color:var(--red); }
+
+/* Availability flags */
+.avail-badge { font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600; display:inline-block; margin-left:4px; }
+.avail-available { background:var(--accent-dim); color:var(--accent); }
+.avail-doubtful { background:var(--orange-dim); color:var(--orange); }
+.avail-flagged-75 { background:rgba(255,193,7,.12); color:#ffc107; }
+.avail-flagged-50 { background:var(--orange-dim); color:var(--orange); }
+.avail-flagged-25 { background:var(--red-dim); color:var(--red); }
+.injury-icon { font-size:11px; margin-left:3px; cursor:help; }
+.injury-tooltip { position:relative; display:inline-block; }
+.injury-tooltip .tooltip-text { visibility:hidden; background:var(--surface3); color:var(--text); border:1px solid var(--border); padding:6px 10px; border-radius:var(--radius-sm); font-size:11px; position:absolute; bottom:120%; left:50%; transform:translateX(-50%); white-space:nowrap; z-index:10; box-shadow:var(--shadow); }
+.injury-tooltip:hover .tooltip-text { visibility:visible; }
+.raw-xpts { font-size:10px; color:var(--text3); text-decoration:line-through; margin-left:4px; }
+.risk-label { font-size:9px; color:var(--orange); font-weight:600; display:block; }
+
+/* Chip cards */
+.chip-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px; }
+.chip-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; position:relative; transition:var(--transition); }
+.chip-card:hover { border-color:var(--accent); transform:translateY(-2px); }
+.chip-card.recommended { border-color:var(--accent); box-shadow:0 0 20px rgba(0,230,118,.15); }
+.chip-card .chip-code { font-size:28px; font-weight:800; color:var(--text3); }
+.chip-card .chip-name { font-size:15px; font-weight:600; margin:4px 0; }
+.chip-card .chip-score { position:absolute; top:16px; right:16px; }
+.chip-score-ring { width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; }
+.chip-card .reasons { margin-top:10px; }
+.chip-card .reasons li { font-size:12px; color:var(--text2); margin:4px 0; list-style:none; }
+.chip-card .reasons li::before { content:"✓ "; color:var(--accent); }
+.chip-card.recommended .rec-label { position:absolute; top:-10px; left:16px; background:var(--accent); color:#000; font-size:10px; font-weight:700; padding:2px 10px; border-radius:8px; }
+
+/* Pitch view */
+.pitch { background:linear-gradient(to bottom,#1a472a,#1d5c36,#1a472a); border-radius:var(--radius); padding:30px 20px; margin-bottom:16px; position:relative; min-height:420px; }
+.pitch::before { content:''; position:absolute; top:50%; left:10%; right:10%; height:1px; background:rgba(255,255,255,.15); }
+.pitch-row { display:flex; justify-content:center; gap:12px; margin:10px 0; flex-wrap:wrap; }
+.pitch-player { text-align:center; width:80px; }
+.pitch-player .shirt { width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px; margin:0 auto 4px; border:2px solid rgba(255,255,255,.2); position:relative; }
+.pitch-player .shirt.gkp { background:var(--gkp); color:#000; }
+.pitch-player .shirt.def { background:var(--def); color:#fff; }
+.pitch-player .shirt.mid { background:var(--mid); color:#fff; }
+.pitch-player .shirt.fwd { background:var(--fwd); color:#fff; }
+.pitch-player .shirt .captain-badge { position:absolute; top:-4px; right:-4px; background:var(--gold); color:#000; font-size:8px; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; }
+.pitch-player .shirt .dgw-dot { position:absolute; bottom:-2px; left:50%; transform:translateX(-50%); background:var(--dgw); width:8px; height:8px; border-radius:50%; }
+.pitch-player .shirt .injury-dot { position:absolute; top:-4px; left:-4px; background:var(--orange); width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:800; color:#000; }
+.pitch-player .name { font-size:10px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#fff; }
+.pitch-player .xpts { font-size:10px; color:rgba(255,255,255,.7); }
+.pitch-player .fixture-info { font-size:9px; color:rgba(255,255,255,.5); }
+
+/* Table */
+.tbl-wrap { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th { background:var(--surface2); padding:10px 8px; text-align:left; font-size:11px; text-transform:uppercase; color:var(--text3); letter-spacing:.5px; position:sticky; top:0; z-index:1; cursor:pointer; white-space:nowrap; }
+th:hover { color:var(--text); }
+td { padding:8px; border-bottom:1px solid var(--border); vertical-align:middle; }
+tr:hover td { background:var(--surface2); }
+.pos-badge { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; }
+.pos-GKP { background:var(--gkp); color:#000; } .pos-DEF { background:var(--def); color:#fff; }
+.pos-MID { background:var(--mid); color:#fff; } .pos-FWD { background:var(--fwd); color:#fff; }
+
+/* Confidence bar */
+.conf-bar { width:50px; height:6px; background:var(--surface3); border-radius:3px; overflow:hidden; display:inline-block; vertical-align:middle; }
+.conf-bar .fill { height:100%; border-radius:3px; }
+
+/* FDR badge */
+.fdr { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; min-width:22px; text-align:center; }
+.fdr-1 { background:#00e676; color:#000; } .fdr-2 { background:#66bb6a; color:#000; }
+.fdr-3 { background:#78909c; color:#fff; } .fdr-4 { background:#ef5350; color:#fff; }
+.fdr-5 { background:#b71c1c; color:#fff; }
+
+/* Filters */
+.filters { display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; align-items:center; }
+.filter-btn { padding:6px 14px; border-radius:20px; border:1px solid var(--border); background:transparent; color:var(--text2); cursor:pointer; font-size:12px; transition:var(--transition); }
+.filter-btn:hover, .filter-btn.active { background:var(--accent-dim); color:var(--accent); border-color:var(--accent); }
+input[type=text], input[type=number], select { padding:6px 12px; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--surface2); color:var(--text); font-size:13px; outline:none; }
+input:focus, select:focus { border-color:var(--accent); }
+
+/* My Team */
+.team-input { display:flex; gap:10px; margin-bottom:20px; }
+.team-input input { flex:1; max-width:300px; }
+.btn { padding:8px 20px; border-radius:var(--radius-sm); border:none; cursor:pointer; font-weight:600; font-size:13px; transition:var(--transition); }
+.btn-primary { background:var(--accent); color:#000; }
+.btn-primary:hover { background:#00c853; }
+.btn-secondary { background:var(--surface2); color:var(--text); border:1px solid var(--border); }
+
+/* Responsive */
+@media(max-width:768px) {
+  .sidebar { display:none; }
+  .main { padding:12px; }
+  .stats-row { grid-template-columns:repeat(2,1fr); }
+  .chip-grid { grid-template-columns:1fr; }
+}
+
+/* Loading */
+.loading { text-align:center; padding:40px; color:var(--text3); }
+.loading::after { content:''; display:block; width:30px; height:30px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; margin:12px auto 0; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* Fixtures row in table */
+.fix-list { display:flex; gap:4px; flex-wrap:wrap; }
+.fix-item { display:inline-flex; align-items:center; gap:3px; font-size:11px; }
+.fix-xg { font-size:9px; color:var(--text3); margin-left:2px; }
+.fix-xg strong { color:var(--accent); }
+
+/* Team form indicators */
+.form-str { font-size:11px; font-family:monospace; letter-spacing:1px; }
+.form-W { color:var(--accent); } .form-D { color:var(--orange); } .form-L { color:var(--red); }
+.momentum-bar { width:40px; height:6px; background:var(--surface3); border-radius:3px; overflow:hidden; display:inline-block; vertical-align:middle; position:relative; }
+.momentum-bar .fill { height:100%; border-radius:3px; position:absolute; top:0; }
+.momentum-positive { background:var(--accent); left:50%; }
+.momentum-negative { background:var(--red); right:50%; }
+.wr-badge { font-size:10px; padding:2px 5px; border-radius:3px; font-weight:600; }
+.wr-high { background:var(--accent-dim); color:var(--accent); }
+.wr-mid { background:var(--orange-dim); color:var(--orange); }
+.wr-low { background:var(--red-dim); color:var(--red); }
+
+/* AI Chat */
+.chat-container { display:flex; flex-direction:column; height:calc(100vh - 160px); max-height:700px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+.chat-messages { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:16px; scroll-behavior:smooth; }
+.chat-msg { display:flex; gap:10px; max-width:90%; animation:chatIn .3s ease; }
+.chat-msg.bot { align-self:flex-start; }
+.chat-msg.user { align-self:flex-end; flex-direction:row-reverse; }
+@keyframes chatIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+.chat-avatar { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0; background:var(--surface2); }
+.chat-msg.user .chat-avatar { background:var(--accent-dim); }
+.chat-bubble { padding:12px 16px; border-radius:12px; font-size:13px; line-height:1.7; max-width:100%; overflow-x:auto; }
+.bot-bubble { background:var(--surface2); border:1px solid var(--border); border-top-left-radius:4px; }
+.user-bubble { background:var(--accent-dim); border:1px solid rgba(0,230,118,.2); border-top-right-radius:4px; color:var(--text); }
+.chat-text { white-space:pre-wrap; word-break:break-word; }
+.chat-text h2 { font-size:16px; margin:8px 0 6px; color:var(--accent); }
+.chat-text h3 { font-size:14px; margin:8px 0 4px; color:var(--blue); }
+.chat-text table { width:100%; border-collapse:collapse; margin:8px 0; font-size:12px; }
+.chat-text th { background:var(--surface3); padding:5px 8px; text-align:left; font-size:11px; color:var(--text3); border-bottom:1px solid var(--border); }
+.chat-text td { padding:4px 8px; border-bottom:1px solid var(--border); }
+.chat-text strong { color:var(--accent); }
+.chat-text code { background:var(--surface3); padding:1px 4px; border-radius:3px; font-size:12px; }
+.chat-suggestions { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+.suggestion-btn { padding:6px 12px; border-radius:16px; border:1px solid var(--border); background:var(--surface3); color:var(--text2); cursor:pointer; font-size:12px; transition:var(--transition); white-space:nowrap; }
+.suggestion-btn:hover { background:var(--accent-dim); color:var(--accent); border-color:var(--accent); }
+.chat-input-bar { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--border); background:var(--bg2); }
+.chat-input-bar input { flex:1; padding:10px 16px; border-radius:20px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:14px; outline:none; }
+.chat-input-bar input:focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(0,230,118,.1); }
+.chat-send-btn { width:42px; height:42px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px; padding:0; flex-shrink:0; }
+.chat-spinner { width:16px; height:16px; border:2px solid rgba(0,0,0,.2); border-top-color:#000; border-radius:50%; animation:spin .6s linear infinite; display:inline-block; }
+.chat-typing { display:flex; gap:4px; padding:8px 16px; align-items:center; }
+.chat-typing-dot { width:6px; height:6px; background:var(--text3); border-radius:50%; animation:typingBounce 1.2s infinite ease-in-out; }
+.chat-typing-dot:nth-child(2) { animation-delay:.2s; }
+.chat-typing-dot:nth-child(3) { animation-delay:.4s; }
+@keyframes typingBounce { 0%,80%,100% { transform:translateY(0); } 40% { transform:translateY(-6px); } }
+.comparison-cards { display:grid; grid-template-columns:1fr auto 1fr; gap:12px; margin:12px 0; align-items:center; }
+.compare-card { background:var(--surface3); border-radius:var(--radius); padding:12px; text-align:center; }
+.compare-card.winner { border:1px solid var(--accent); box-shadow:0 0 10px rgba(0,230,118,.1); }
+.compare-vs { font-size:20px; font-weight:800; color:var(--text3); }
+.chat-fab { position:fixed; bottom:24px; right:24px; width:56px; height:56px; border-radius:50%; background:var(--accent); color:#000; display:flex; align-items:center; justify-content:center; font-size:24px; cursor:pointer; box-shadow:0 4px 20px rgba(0,230,118,.4); transition:var(--transition); z-index:100; }
+.chat-fab:hover { transform:scale(1.1); box-shadow:0 6px 30px rgba(0,230,118,.5); }
+.chat-fab.hidden { display:none; }
+.chat-text ul, .chat-text ol { padding-left:20px; margin:4px 0; }
+.chat-text li { margin:2px 0; }
+.chat-text p { margin:4px 0; }
+.chat-text hr { border:none; border-top:1px solid var(--border); margin:8px 0; }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <h1>FPL Predictor</h1>
+    <small>AI-Powered v7</small>
+  </div>
+  <div class="nav-item active" data-page="overview">📊 Overview</div>
+  <div class="nav-item" data-page="squad">⚽ Best Squad</div>
+  <div class="nav-item" data-page="chips">🎯 Chip Strategy</div>
+  <div class="nav-item" data-page="picks">🏆 Top Picks</div>
+  <div class="nav-item" data-page="dgw">🔥 DGW Focus</div>
+  <div class="nav-item" data-page="differentials">💎 Differentials</div>
+  <div class="nav-item" data-page="value">💰 Value Picks</div>
+  <div class="nav-item" data-page="myteam">👤 My Team</div>
+  <div class="nav-item" data-page="all">📋 All Players</div>
+  <div style="border-top:1px solid var(--border);margin:12px 0;"></div>
+  <div class="nav-item" data-page="chat" style="color:var(--accent);">🤖 AI Chat</div>
+</nav>
+
+<!-- Main content -->
+<div class="main">
+
+<!-- Overview -->
+<div class="page active" id="page-overview">
+  <h2>GW<span id="gw-num">--</span> Overview <span id="dgw-alert-badge"></span></h2>
+  <div id="dgw-banner" style="display:none;background:var(--dgw-dim);border:1px solid var(--dgw);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;">
+    <strong style="color:var(--dgw)">⚡ DOUBLE GAMEWEEK</strong>
+    <span id="dgw-teams-text" style="color:var(--text2);font-size:13px;margin-left:8px;"></span>
+  </div>
+  <div class="stats-row" id="overview-stats"></div>
+  <div class="card">
+    <div class="card-header"><h3>Optimal Starting XI</h3><span id="formation-badge" style="color:var(--accent);font-size:13px;"></span></div>
+    <div class="pitch" id="pitch-view"><div class="loading">Loading...</div></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3>Chip Recommendation</h3></div>
+    <div id="chip-mini"></div>
+  </div>
+</div>
+
+<!-- Best Squad -->
+<div class="page" id="page-squad">
+  <h2>⚽ Best Squad — GW<span class="gw-num">--</span></h2>
+  <div id="squad-stats" class="stats-row"></div>
+  <div class="card"><h3 style="margin-bottom:12px;">Starting XI</h3><div class="tbl-wrap"><table id="tbl-xi"></table></div></div>
+  <div class="card"><h3 style="margin-bottom:12px;">Bench</h3><div class="tbl-wrap"><table id="tbl-bench"></table></div></div>
+</div>
+
+<!-- Chip Strategy -->
+<div class="page" id="page-chips">
+  <h2>🎯 Chip Strategy — GW<span class="gw-num">--</span></h2>
+  <div id="chip-gw-info" class="card" style="margin-bottom:20px;"></div>
+  <div class="chip-grid" id="chip-cards"></div>
+  <div class="card" style="margin-top:20px;">
+    <h3 style="margin-bottom:12px;">Chip Usage Guide</h3>
+    <div id="chip-guide" style="font-size:13px;color:var(--text2);line-height:1.8;"></div>
+  </div>
+</div>
+
+<!-- Top Picks -->
+<div class="page" id="page-picks">
+  <h2>🏆 Top Picks — GW<span class="gw-num">--</span></h2>
+  <div class="filters" id="picks-filters"></div>
+  <div class="card"><div class="tbl-wrap"><table id="tbl-picks"></table></div></div>
+</div>
+
+<!-- DGW Focus -->
+<div class="page" id="page-dgw">
+  <h2>🔥 Double Gameweek Focus</h2>
+  <div id="dgw-info-card" class="card"></div>
+  <div class="card" style="margin-top:16px;"><h3 style="margin-bottom:12px;">Best DGW Players</h3><div class="tbl-wrap"><table id="tbl-dgw"></table></div></div>
+</div>
+
+<!-- Differentials -->
+<div class="page" id="page-differentials">
+  <h2>💎 Differentials — GW<span class="gw-num">--</span> <small style="color:var(--text3);font-size:13px;">&lt;10% ownership</small></h2>
+  <div class="card"><div class="tbl-wrap"><table id="tbl-diff"></table></div></div>
+</div>
+
+<!-- Value Picks -->
+<div class="page" id="page-value">
+  <h2>💰 Value Picks — GW<span class="gw-num">--</span> <small style="color:var(--text3);font-size:13px;">≤6.5m</small></h2>
+  <div class="card"><div class="tbl-wrap"><table id="tbl-value"></table></div></div>
+</div>
+
+<!-- My Team -->
+<div class="page" id="page-myteam">
+  <h2>👤 My Team</h2>
+  <div class="team-input">
+    <input type="text" id="team-id-input" placeholder="Enter FPL Team ID...">
+    <button class="btn btn-primary" onclick="loadMyTeam()">Import Team</button>
+  </div>
+  <div id="my-team-content"><p style="color:var(--text3);">Enter your FPL Team ID above. Find it at: fantasy.premierleague.com/entry/<strong>YOUR_ID</strong>/event/...</p></div>
+</div>
+
+<!-- All Players -->
+<div class="page" id="page-all">
+  <h2>📋 All Players — GW<span class="gw-num">--</span></h2>
+  <div class="filters">
+    <input type="text" id="search-all" placeholder="Search player..." oninput="filterAll()">
+    <select id="filter-pos" onchange="filterAll()"><option value="">All Pos</option><option>GKP</option><option>DEF</option><option>MID</option><option>FWD</option></select>
+    <select id="filter-dgw" onchange="filterAll()"><option value="">All</option><option value="dgw">DGW Only</option><option value="nailed">Nailed Only</option><option value="available">✓ Available Only</option><option value="flagged">⚠ Flagged Only</option></select>
+  </div>
+  <div class="card"><div class="tbl-wrap"><table id="tbl-all"></table></div></div>
+</div>
+
+<!-- AI Chat -->
+<div class="page" id="page-chat">
+  <h2>🤖 AI Assistant</h2>
+  <p style="color:var(--text3);font-size:13px;margin-bottom:16px;">Ask me anything about FPL — player comparisons, captain picks, chip strategy, transfer advice, and more. All answers are backed by real prediction data.</p>
+  <div class="chat-container">
+    <div class="chat-messages" id="chat-messages">
+      <div class="chat-msg bot">
+        <div class="chat-avatar">🤖</div>
+        <div class="chat-bubble bot-bubble">
+          <div class="chat-text">Hi! I'm your FPL AI assistant. Ask me anything about your squad, player picks, or strategy. Here are some things I can help with:</div>
+          <div class="chat-suggestions" id="initial-suggestions">
+            <button class="suggestion-btn" onclick="askSuggestion(this)">Who should I captain this GW?</button>
+            <button class="suggestion-btn" onclick="askSuggestion(this)">Compare Salah vs Haaland</button>
+            <button class="suggestion-btn" onclick="askSuggestion(this)">Best DGW players?</button>
+            <button class="suggestion-btn" onclick="askSuggestion(this)">Should I use Bench Boost?</button>
+            <button class="suggestion-btn" onclick="askSuggestion(this)">Best differential picks?</button>
+            <button class="suggestion-btn" onclick="askSuggestion(this)">Best budget midfielders?</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chat-input-bar">
+      <input type="text" id="chat-input" placeholder="Ask about players, captain, chips, transfers..." onkeydown="if(event.key==='Enter')sendChat()">
+      <button class="btn btn-primary chat-send-btn" onclick="sendChat()" id="chat-send-btn">
+        <span id="send-icon">➤</span>
+        <span id="send-spinner" style="display:none;" class="chat-spinner"></span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Floating Chat Bubble (when not on chat page) -->
+<div class="chat-fab" id="chat-fab" onclick="openChatPage()" title="Ask AI">
+  🤖
+</div>
+
+</div><!-- /main -->
+
+<script>
+let DATA = null;
+let ALL_PREDICTIONS = [];
+
+// ── Navigation ──
+document.querySelectorAll('.nav-item').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    document.getElementById('page-' + el.dataset.page).classList.add('active');
+  });
+});
+
+// ── Load Data ──
+async function loadData() {
+  try {
+    const r = await fetch('/api/predictions');
+    if (!r.ok) {
+      // Run predictions first
+      const r2 = await fetch('/api/run');
+      DATA = await r2.json();
+    } else {
+      DATA = await r.json();
+    }
+    ALL_PREDICTIONS = DATA.predictions || [];
+    render();
+  } catch(e) {
+    document.querySelector('.main').innerHTML = `<div class="card" style="margin-top:40px;text-align:center;"><h3>Error loading data</h3><p style="color:var(--text3);margin-top:8px;">${e.message}</p><button class="btn btn-primary" style="margin-top:12px;" onclick="location.reload()">Retry</button></div>`;
+  }
+}
+
+function render() {
+  if (!DATA) return;
+  const gw = DATA.gameweek;
+  const gwInfo = DATA.gw_info || {};
+  const squad = DATA.squad || {};
+  const chips = DATA.chip_analysis || {};
+
+  // Set GW numbers
+  document.getElementById('gw-num').textContent = gw;
+  document.querySelectorAll('.gw-num').forEach(el => el.textContent = gw);
+
+  // DGW banner
+  if (gwInfo.is_dgw) {
+    document.getElementById('dgw-alert-badge').innerHTML = '<span class="dgw-alert">DOUBLE GW</span>';
+    document.getElementById('dgw-banner').style.display = 'block';
+    const teams = Object.values(gwInfo.dgw_teams || {}).map(t => t.short_name || t.name).join(', ');
+    document.getElementById('dgw-teams-text').textContent = `${Object.keys(gwInfo.dgw_teams).length} teams play twice: ${teams}`;
+    // Add DGW badge to nav
+    document.querySelector('[data-page="dgw"]').querySelector('.badge')?.remove();
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.textContent = Object.keys(gwInfo.dgw_teams).length;
+    document.querySelector('[data-page="dgw"]').appendChild(badge);
+  }
+
+  renderOverviewStats(squad, gwInfo, chips);
+  renderPitch(squad);
+  renderChipMini(chips);
+  renderSquadTables(squad);
+  renderChipPage(chips, gwInfo);
+  renderPicksTable(DATA.top_picks || ALL_PREDICTIONS.slice(0, 30));
+  renderDGWPage(gwInfo);
+  renderDiffTable(DATA.differentials || []);
+  renderValueTable(DATA.value_picks || []);
+  renderAllTable(ALL_PREDICTIONS);
+}
+
+// ── Overview Stats ──
+function renderOverviewStats(squad, gwInfo, chips) {
+  const best = chips.best_chip;
+  const squadTotal = squad.squad_total_xpts || 0;
+  const html = `
+    <div class="stat-box"><div class="label">XI + Captain</div><div class="value" style="color:var(--accent);">${squad.predicted_total_points || '--'}</div><div class="sub">Starting XI points</div></div>
+    <div class="stat-box"><div class="label">Squad Total</div><div class="value" style="color:var(--blue);">${squadTotal || '--'}</div><div class="sub">All 15 players xPts</div></div>
+    <div class="stat-box"><div class="label">Formation</div><div class="value">${squad.formation || '--'}</div><div class="sub">Cost: &pound;${squad.total_cost || '--'}m</div></div>
+    <div class="stat-box"><div class="label">DGW Players</div><div class="value" style="color:var(--dgw);">${squad.dgw_players || 0}</div><div class="sub">${squad.dgw_in_xi || 0} in Starting XI</div></div>
+    <div class="stat-box"><div class="label">Best Chip</div><div class="value" style="color:${best && best.score >= 50 ? 'var(--accent)' : 'var(--text3)'};">${best ? best.code : 'SAVE'}</div><div class="sub">${best ? best.name + ' (' + best.score + '/100)' : 'No chip recommended'}</div></div>
+    <div class="stat-box"><div class="label">Captain</div><div class="value" style="font-size:16px;color:var(--gold);">${squad.captain ? squad.captain.name : '--'}</div><div class="sub">${squad.captain ? squad.captain.predicted_points + ' xPts' + (squad.captain.is_dgw ? ' [DGW]' : '') : ''}</div></div>
+  `;
+  document.getElementById('overview-stats').innerHTML = html;
+  document.getElementById('formation-badge').textContent = squad.formation;
+}
+
+// ── Pitch View ──
+function renderPitch(squad) {
+  const xi = squad.starting_xi || [];
+  const groups = { 1:[], 2:[], 3:[], 4:[] };
+  xi.forEach(p => { if (groups[p.position_id]) groups[p.position_id].push(p); });
+
+  const captain = squad.captain;
+  const vice = squad.vice_captain;
+
+  function playerCard(p) {
+    const posClass = p.position.toLowerCase();
+    const isCap = captain && captain.player_id === p.player_id;
+    const isVice = vice && vice.player_id === p.player_id;
+    const fix = (p.fixtures || []).map(f => `${f.opponent}(${f.venue})`).join('+');
+    const fixXg = (p.fixtures || []).map(f => f.fixture_xg || 0);
+    const totalXg = fixXg.reduce((a,b)=>a+b,0).toFixed(1);
+    const avail = p.availability || {};
+    const isDoubtful = avail.status === 'doubtful';
+    const chance = avail.chance != null ? avail.chance : 100;
+    const injuryDot = isDoubtful ? `<div class="injury-dot" title="${p.news || 'Doubtful'}">!</div>` : '';
+    const formStr = (p.team_last5_form || '').split('').map(c =>
+      `<span class="form-${c}">${c}</span>`
+    ).join('');
+    return `<div class="pitch-player">
+      <div class="shirt ${posClass}" ${isDoubtful ? 'style="opacity:0.7;border-color:var(--orange);"' : ''}>
+        ${p.name.substring(0,3).toUpperCase()}
+        ${isCap ? '<div class="captain-badge">C</div>' : isVice ? '<div class="captain-badge" style="background:var(--text3);">V</div>' : ''}
+        ${p.is_dgw ? '<div class="dgw-dot"></div>' : ''}
+        ${injuryDot}
+      </div>
+      <div class="name">${p.name}</div>
+      <div class="xpts">${p.predicted_points} pts</div>
+      <div class="fixture-info">${fix}</div>
+      <div style="font-size:8px;color:rgba(255,255,255,.5);">xG:${totalXg} <span class="form-str" style="font-size:8px;">${formStr}</span></div>
+      ${isDoubtful ? `<div style="font-size:8px;color:var(--orange);margin-top:1px;">\u26A0 ${chance}%</div>` : ''}
+    </div>`;
+  }
+
+  const html = `
+    <div class="pitch-row">${groups[4].map(playerCard).join('')}</div>
+    <div class="pitch-row">${groups[3].map(playerCard).join('')}</div>
+    <div class="pitch-row">${groups[2].map(playerCard).join('')}</div>
+    <div class="pitch-row">${groups[1].map(playerCard).join('')}</div>
+  `;
+  document.getElementById('pitch-view').innerHTML = html;
+}
+
+// ── Chip Mini (overview) ──
+function renderChipMini(chips) {
+  const recs = chips.recommendations || [];
+  if (!recs.length) { document.getElementById('chip-mini').innerHTML = '<p style="color:var(--text3);">No chip data</p>'; return; }
+  const best = recs[0];
+  const color = best.score >= 70 ? 'var(--accent)' : best.score >= 40 ? 'var(--orange)' : 'var(--text3)';
+  document.getElementById('chip-mini').innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px;">
+      <div style="font-size:32px;font-weight:800;color:${color};">${best.code}</div>
+      <div>
+        <div style="font-weight:600;">${best.name} <span style="color:${color};font-size:13px;">(${best.score}/100)</span></div>
+        <div style="font-size:12px;color:var(--text2);margin-top:4px;">${best.reasons.slice(0,2).join(' · ')}</div>
+        ${best.predicted_total ? `<div style="font-size:12px;color:var(--accent);margin-top:2px;">Predicted: ${best.predicted_total} pts</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+// ── Squad Tables ──
+function renderSquadTables(squad) {
+  const xi = squad.starting_xi || [];
+  const bench = squad.bench || [];
+  const captain = squad.captain;
+  const vice = squad.vice_captain;
+
+  document.getElementById('squad-stats').innerHTML = `
+    <div class="stat-box"><div class="label">XI + Captain</div><div class="value" style="color:var(--accent);">${squad.predicted_total_points}</div></div>
+    <div class="stat-box"><div class="label">Squad Total xPts</div><div class="value" style="color:var(--blue);">${squad.squad_total_xpts || '?'}</div></div>
+    <div class="stat-box"><div class="label">Formation</div><div class="value">${squad.formation}</div></div>
+    <div class="stat-box"><div class="label">Cost</div><div class="value">&pound;${squad.total_cost}m</div></div>
+    <div class="stat-box"><div class="label">DGW in XI</div><div class="value" style="color:var(--dgw);">${squad.dgw_in_xi}/${xi.length}</div></div>
+    <div class="stat-box"><div class="label">Budget Left</div><div class="value">&pound;${squad.budget_remaining}m</div></div>
+  `;
+
+  document.getElementById('tbl-xi').innerHTML = playerTableHTML(xi, captain, vice);
+  document.getElementById('tbl-bench').innerHTML = playerTableHTML(bench);
+}
+
+function playerTableHTML(players, captain, vice) {
+  let html = `<thead><tr><th>Pos</th><th>Player</th><th>Team</th><th>Status</th><th>Fixtures</th><th>xPts</th><th>Price</th><th>Tier</th><th>Form</th><th>Team L5</th><th>WR</th><th>Conf</th></tr></thead><tbody>`;
+  players.forEach(p => {
+    const isCap = captain && captain.player_id === p.player_id;
+    const isVice = vice && vice.player_id === p.player_id;
+    const capBadge = isCap ? ' <span style="color:var(--gold);font-weight:700;">\u00A9</span>' : isVice ? ' <span style="color:var(--text3);font-weight:700;">V</span>' : '';
+
+    // Availability status
+    const avail = p.availability || {};
+    const availStatus = avail.status || 'available';
+    const availChance = avail.chance != null ? avail.chance : 100;
+    const news = p.news || avail.news || '';
+
+    let statusHtml = '';
+    if (availStatus === 'doubtful') {
+      const flagClass = availChance <= 25 ? 'avail-flagged-25' : availChance <= 50 ? 'avail-flagged-50' : 'avail-flagged-75';
+      statusHtml = `<span class="injury-tooltip"><span class="avail-badge ${flagClass}">\u26A0 ${availChance}%</span>${news ? `<span class="tooltip-text">${news}</span>` : ''}</span>`;
+    } else if (availStatus === 'unavailable') {
+      statusHtml = `<span class="injury-tooltip"><span class="avail-badge avail-flagged-25">\u274C Out</span>${news ? `<span class="tooltip-text">${news}</span>` : ''}</span>`;
+    } else {
+      statusHtml = '<span class="avail-badge avail-available">\u2713</span>';
+    }
+
+    // xPts display
+    const rawXpts = p.raw_xpts || p.predicted_points;
+    const isDiscounted = rawXpts > 0 && Math.abs(rawXpts - p.predicted_points) > 0.1;
+    let xptsHtml = `<strong style="color:var(--accent);">${p.predicted_points}</strong>`;
+    if (isDiscounted) {
+      xptsHtml += `<span class="raw-xpts">${rawXpts}</span>`;
+      xptsHtml += `<span class="risk-label">risk-adj</span>`;
+    }
+
+    // Team last 5 form string with colored letters
+    const formStr = (p.team_last5_form || '').split('').map(c =>
+      `<span class="form-${c}">${c}</span>`
+    ).join('');
+
+    // Win rate badge
+    const wr = p.team_season_wr || 0;
+    const wrPct = Math.round(wr * 100);
+    const wrClass = wr >= 0.5 ? 'wr-high' : wr >= 0.35 ? 'wr-mid' : 'wr-low';
+
+    html += `<tr>
+      <td><span class="pos-badge pos-${p.position}">${p.position}</span></td>
+      <td><strong>${p.name}</strong>${capBadge} ${p.is_dgw ? '<span class="dgw-badge">DGW</span>' : ''}</td>
+      <td>${p.team}</td>
+      <td>${statusHtml}</td>
+      <td>${renderFixtures(p.fixtures)}</td>
+      <td>${xptsHtml}</td>
+      <td>&pound;${p.price}m</td>
+      <td><span class="tier-badge tier-${p.starter_quality?.tier || 'unknown'}">${p.starter_quality?.tier || '?'}</span></td>
+      <td>${p.form || '--'}</td>
+      <td><span class="form-str">${formStr || '--'}</span></td>
+      <td><span class="wr-badge ${wrClass}">${wrPct}%</span></td>
+      <td>${confBar(p.confidence)}</td>
+    </tr>`;
+  });
+  return html + '</tbody>';
+}
+
+function renderFixtures(fixtures) {
+  if (!fixtures || !fixtures.length) return '<span style="color:var(--text3);">BGW</span>';
+  return '<div class="fix-list">' + fixtures.map(f => {
+    const xgStr = f.fixture_xg ? `<span class="fix-xg" title="Team xG: ${f.fixture_xg} | xGC: ${f.fixture_xgc} | CS%: ${Math.round((f.cs_probability||0)*100)}%">xG:<strong>${f.fixture_xg}</strong></span>` : '';
+    return `<span class="fix-item"><span class="fdr fdr-${f.fdr}">${f.opponent}</span><small>(${f.venue})</small>${xgStr}</span>`;
+  }).join('') + '</div>';
+}
+
+function confBar(val) {
+  const pct = Math.round((val || 0) * 100);
+  const color = pct >= 70 ? 'var(--accent)' : pct >= 50 ? 'var(--orange)' : 'var(--red)';
+  return `<div class="conf-bar"><div class="fill" style="width:${pct}%;background:${color};"></div></div> <span style="font-size:11px;color:var(--text3);">${pct}%</span>`;
+}
+
+// ── Chip Strategy Page ──
+function renderChipPage(chips, gwInfo) {
+  // GW info card
+  const dgwCount = Object.keys(gwInfo.dgw_teams || {}).length;
+  document.getElementById('chip-gw-info').innerHTML = `
+    <div style="display:flex;gap:20px;flex-wrap:wrap;">
+      <div><span style="color:var(--text3);font-size:12px;">Gameweek</span><br><strong style="font-size:20px;">${gwInfo.gameweek}</strong></div>
+      <div><span style="color:var(--text3);font-size:12px;">Fixtures</span><br><strong style="font-size:20px;">${gwInfo.total_fixtures}</strong></div>
+      <div><span style="color:var(--text3);font-size:12px;">Type</span><br><strong style="font-size:20px;color:${gwInfo.is_dgw ? 'var(--dgw)' : 'var(--text2)'};">${gwInfo.is_dgw ? 'DOUBLE GW' : 'Standard'}</strong></div>
+      <div><span style="color:var(--text3);font-size:12px;">DGW Teams</span><br><strong style="font-size:20px;color:var(--dgw);">${dgwCount}</strong></div>
+    </div>
+  `;
+
+  // Chip cards
+  const recs = chips.recommendations || [];
+  const bestChip = chips.best_chip;
+  let html = '';
+  recs.forEach(rec => {
+    const isRec = bestChip && rec.chip === bestChip.chip && rec.score >= 50;
+    const scoreColor = rec.score >= 70 ? 'var(--accent)' : rec.score >= 40 ? 'var(--orange)' : 'var(--text3)';
+    const ringBg = rec.score >= 70 ? 'var(--accent-dim)' : rec.score >= 40 ? 'var(--orange-dim)' : 'var(--surface3)';
+    html += `<div class="chip-card ${isRec ? 'recommended' : ''}">
+      ${isRec ? '<div class="rec-label">★ RECOMMENDED</div>' : ''}
+      <div class="chip-score"><div class="chip-score-ring" style="background:${ringBg};color:${scoreColor};">${rec.score}</div></div>
+      <div class="chip-code">${rec.code}</div>
+      <div class="chip-name">${rec.name}</div>
+      <ul class="reasons">${rec.reasons.map(r => `<li>${r}</li>`).join('')}</ul>
+      ${rec.predicted_total ? `<div style="margin-top:8px;font-size:13px;color:var(--accent);font-weight:600;">Predicted: ${rec.predicted_total} pts</div>` : ''}
+      ${rec.captain_xp ? `<div style="margin-top:8px;font-size:13px;color:var(--gold);font-weight:600;">Captain: ${rec.captain} (${rec.captain_xp} xPts, +${rec.extra_points} from TC)</div>` : ''}
+    </div>`;
+  });
+  document.getElementById('chip-cards').innerHTML = html;
+
+  // Guide
+  document.getElementById('chip-guide').innerHTML = `
+    <p><strong style="color:var(--dgw);">Bench Boost (BB):</strong> Best in a DGW when all 15 players are nailed starters with 2 fixtures. Combine with WC the week before for maximum impact.</p>
+    <p style="margin-top:8px;"><strong style="color:var(--gold);">Triple Captain (TC):</strong> Best on a DGW premium player (Haaland, Salah) with 2 easy fixtures and great form. The extra points from one elite DGW captain often exceed BB.</p>
+    <p style="margin-top:8px;"><strong style="color:var(--blue);">Free Hit (FH):</strong> Best for BGWs where many of your players blank, or a one-off DGW where you need maximum exposure without disrupting your squad.</p>
+    <p style="margin-top:8px;"><strong style="color:var(--purple);">Wildcard (WC):</strong> Use strategically 1 GW before a big DGW to build a squad loaded with DGW players, then activate BB the following week.</p>
+  `;
+}
+
+// ── DGW Focus ──
+function renderDGWPage(gwInfo) {
+  const dgwTeams = gwInfo.dgw_teams || {};
+  const dgwPlayers = ALL_PREDICTIONS.filter(p => p.is_dgw);
+
+  let teamsHtml = '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">';
+  Object.values(dgwTeams).forEach(t => {
+    teamsHtml += `<div style="background:var(--dgw-dim);border:1px solid var(--dgw);border-radius:var(--radius-sm);padding:8px 14px;"><strong style="color:var(--dgw);">${t.short_name || t.name}</strong> <span style="color:var(--text2);font-size:12px;">${t.fixture_count} fixtures</span></div>`;
+  });
+  teamsHtml += '</div>';
+
+  document.getElementById('dgw-info-card').innerHTML = `
+    <h3 style="margin-bottom:12px;">DGW Teams (${Object.keys(dgwTeams).length})</h3>
+    ${teamsHtml}
+    <p style="font-size:13px;color:var(--text2);">${dgwPlayers.length} players with double fixtures. Prioritize DGW nailed starters for maximum point potential.</p>
+  `;
+
+  document.getElementById('tbl-dgw').innerHTML = playerTableHTML(dgwPlayers.slice(0, 30));
+}
+
+// ── Picks Table ──
+function renderPicksTable(players) {
+  const container = document.getElementById('picks-filters');
+  container.innerHTML = `
+    <button class="filter-btn active" onclick="filterPicks(this,'all')">All</button>
+    <button class="filter-btn" onclick="filterPicks(this,'GKP')">GKP</button>
+    <button class="filter-btn" onclick="filterPicks(this,'DEF')">DEF</button>
+    <button class="filter-btn" onclick="filterPicks(this,'MID')">MID</button>
+    <button class="filter-btn" onclick="filterPicks(this,'FWD')">FWD</button>
+    <button class="filter-btn" onclick="filterPicks(this,'dgw')" style="border-color:var(--dgw);color:var(--dgw);">DGW Only</button>
+    <button class="filter-btn" onclick="filterPicks(this,'available')" style="border-color:var(--accent);color:var(--accent);">✓ Available Only</button>
+    <button class="filter-btn" onclick="filterPicks(this,'flagged')" style="border-color:var(--orange);color:var(--orange);">⚠ Flagged</button>
+  `;
+  window._picksData = players;
+  document.getElementById('tbl-picks').innerHTML = playerTableHTML(players);
+}
+
+function filterPicks(btn, filter) {
+  document.querySelectorAll('#picks-filters .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  let filtered = window._picksData || [];
+  if (filter === 'dgw') filtered = filtered.filter(p => p.is_dgw);
+  else if (filter === 'available') filtered = filtered.filter(p => (p.availability?.status || 'available') === 'available');
+  else if (filter === 'flagged') filtered = filtered.filter(p => (p.availability?.status || 'available') !== 'available');
+  else if (filter !== 'all') filtered = filtered.filter(p => p.position === filter);
+  document.getElementById('tbl-picks').innerHTML = playerTableHTML(filtered);
+}
+
+// ── Diff & Value Tables ──
+function renderDiffTable(players) { document.getElementById('tbl-diff').innerHTML = playerTableHTML(players); }
+function renderValueTable(players) { document.getElementById('tbl-value').innerHTML = playerTableHTML(players); }
+
+// ── All Players Table ──
+function renderAllTable(players) {
+  window._allData = players;
+  document.getElementById('tbl-all').innerHTML = playerTableHTML(players.slice(0, 80));
+}
+
+function filterAll() {
+  const search = document.getElementById('search-all').value.toLowerCase();
+  const pos = document.getElementById('filter-pos').value;
+  const dgw = document.getElementById('filter-dgw').value;
+  let filtered = window._allData || [];
+  if (search) filtered = filtered.filter(p => p.name.toLowerCase().includes(search) || p.team.toLowerCase().includes(search));
+  if (pos) filtered = filtered.filter(p => p.position === pos);
+  if (dgw === 'dgw') filtered = filtered.filter(p => p.is_dgw);
+  if (dgw === 'nailed') filtered = filtered.filter(p => p.starter_quality?.tier === 'nailed');
+  if (dgw === 'available') filtered = filtered.filter(p => (p.availability?.status || 'available') === 'available');
+  if (dgw === 'flagged') filtered = filtered.filter(p => (p.availability?.status || 'available') !== 'available');
+  document.getElementById('tbl-all').innerHTML = playerTableHTML(filtered.slice(0, 80));
+}
+
+// ── My Team ──
+async function loadMyTeam() {
+  const id = document.getElementById('team-id-input').value.trim();
+  if (!id) return;
+  const container = document.getElementById('my-team-content');
+  container.innerHTML = '<div class="loading">Loading your team...</div>';
+  try {
+    const r = await fetch(`/api/my-team?id=${id}`);
+    const data = await r.json();
+    if (data.error) { container.innerHTML = `<div class="card"><p style="color:var(--red);">Error: ${data.error}</p></div>`; return; }
+
+    let html = `<div class="stats-row">
+      <div class="stat-box"><div class="label">Team</div><div class="value" style="font-size:14px;">${data.info?.name || 'Unknown'}</div></div>
+      <div class="stat-box"><div class="label">Overall Rank</div><div class="value" style="font-size:18px;">${(data.gw_summary?.overall_rank || '--').toLocaleString()}</div></div>
+      <div class="stat-box"><div class="label">GW Points</div><div class="value">${data.gw_summary?.points || '--'}</div></div>
+      <div class="stat-box"><div class="label">Total Points</div><div class="value">${data.gw_summary?.total_points || '--'}</div></div>
+    </div>`;
+
+    if (data.starters?.length) {
+      html += '<div class="card"><h3 style="margin-bottom:12px;">Your Squad</h3><div class="tbl-wrap"><table>' + playerTableHTML(data.starters) + '</table></div></div>';
+    }
+    if (data.transfer_suggestions?.length) {
+      html += '<div class="card"><h3 style="margin-bottom:12px;">Suggested Transfers</h3>';
+      data.transfer_suggestions.forEach(t => {
+        html += `<div style="display:flex;align-items:center;gap:12px;padding:10px;border-bottom:1px solid var(--border);">
+          <div style="flex:1;text-align:right;"><strong style="color:var(--red);">${t.out.name}</strong><br><span style="font-size:11px;color:var(--text3);">${t.out.position} · £${t.out.price}m · ${t.out.predicted_points} xPts</span></div>
+          <div style="color:var(--accent);font-size:20px;">→</div>
+          <div style="flex:1;"><strong style="color:var(--accent);">${t.in.name}</strong>${t.in.is_dgw ? ' <span class="dgw-badge">DGW</span>' : ''}<br><span style="font-size:11px;color:var(--text3);">${t.in.position} · £${t.in.price}m · ${t.in.predicted_points} xPts</span></div>
+          <div style="color:var(--accent);font-weight:700;">+${t.points_gain} pts</div>
+        </div>`;
+      });
+      html += '</div>';
+    }
+    container.innerHTML = html;
+  } catch(e) {
+    container.innerHTML = `<div class="card"><p style="color:var(--red);">Error: ${e.message}</p></div>`;
+  }
+}
+
+// ── Saved settings ──
+async function loadSettings() {
+  try {
+    const r = await fetch('/api/settings');
+    const s = await r.json();
+    if (s.team_id) document.getElementById('team-id-input').value = s.team_id;
+  } catch(e) {}
+}
+
+// ── AI Chat ──
+let chatBusy=false;
+function openChatPage(){document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));document.querySelector('[data-page="chat"]').classList.add('active');document.getElementById('page-chat').classList.add('active');document.getElementById('chat-fab').classList.add('hidden');document.getElementById('chat-input').focus();}
+document.querySelectorAll('.nav-item').forEach(el=>{el.addEventListener('click',()=>{const fab=document.getElementById('chat-fab');if(el.dataset.page==='chat')fab.classList.add('hidden');else fab.classList.remove('hidden');});});
+function askSuggestion(btn){document.getElementById('chat-input').value=btn.textContent;sendChat();}
+
+function appendChatMsg(role,content,suggestions){
+  const msgs=document.getElementById('chat-messages');
+  const div=document.createElement('div');div.className='chat-msg '+role;
+  const avatar=document.createElement('div');avatar.className='chat-avatar';avatar.textContent=role==='bot'?'\u{1F916}':'\u{1F464}';
+  const bubble=document.createElement('div');bubble.className='chat-bubble '+(role==='bot'?'bot-bubble':'user-bubble');
+  const text=document.createElement('div');text.className='chat-text';
+  if(role==='bot')text.innerHTML=renderMarkdown(content);
+  else text.textContent=content;
+  bubble.appendChild(text);
+  if(suggestions&&suggestions.length){
+    const sg=document.createElement('div');sg.className='chat-suggestions';
+    suggestions.forEach(s=>{const b=document.createElement('button');b.className='suggestion-btn';b.textContent=s;b.onclick=function(){askSuggestion(this);};sg.appendChild(b);});
+    bubble.appendChild(sg);
+  }
+  div.appendChild(avatar);div.appendChild(bubble);msgs.appendChild(div);
+  msgs.scrollTop=msgs.scrollHeight;
+}
+
+function showTyping(){
+  const msgs=document.getElementById('chat-messages');
+  const div=document.createElement('div');div.className='chat-msg bot';div.id='typing-ind';
+  div.innerHTML='<div class="chat-avatar">\u{1F916}</div><div class="chat-bubble bot-bubble"><div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div></div>';
+  msgs.appendChild(div);msgs.scrollTop=msgs.scrollHeight;return 'typing-ind';
+}
+function removeTyping(id){const el=document.getElementById(id);if(el)el.remove();}
+
+function renderMarkdown(text){
+  if(!text)return'';
+  let h=text;
+  // Tables
+  h=h.replace(/^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)*)/gm,function(m,hdr,sep,body){
+    const ths=hdr.split('|').filter(c=>c.trim()).map(c=>'<th>'+c.trim()+'</th>').join('');
+    const rows=body.trim().split('\n').map(r=>'<tr>'+r.split('|').filter(c=>c.trim()).map(c=>'<td>'+c.trim()+'</td>').join('')+'</tr>').join('');
+    return '<table><thead><tr>'+ths+'</tr></thead><tbody>'+rows+'</tbody></table>';
+  });
+  // Headers
+  h=h.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+  h=h.replace(/^## (.+)$/gm,'<h2>$1</h2>');
+  // Bold
+  h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  // Lists
+  h=h.replace(/^- (.+)$/gm,'<li>$1</li>');
+  h=h.replace(/(<li>.*<\/li>\n?)+/g,'<ul>$&</ul>');
+  // Line breaks
+  h=h.replace(/\n\n/g,'<br><br>');
+  h=h.replace(/\n/g,'<br>');
+  // Emoji cleanup
+  h=h.replace(/<br><ul>/g,'<ul>');
+  h=h.replace(/<\/ul><br>/g,'</ul>');
+  h=h.replace(/<br><table>/g,'<table>');
+  h=h.replace(/<\/table><br>/g,'</table>');
+  h=h.replace(/<br><h([23])>/g,'<h$1>');
+  return h;
+}
+
+async function sendChat(){
+  if(chatBusy)return;
+  const input=document.getElementById('chat-input');
+  const q=input.value.trim();if(!q)return;
+  input.value='';chatBusy=true;
+  appendChatMsg('user',q);
+  const tid=showTyping();
+  document.getElementById('send-icon').style.display='none';
+  document.getElementById('send-spinner').style.display='inline-block';
+  try{
+    const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+    const data=await r.json();
+    removeTyping(tid);
+    appendChatMsg('bot',data.answer||'Sorry, no answer.',data.suggestions||[]);
+  }catch(e){
+    removeTyping(tid);
+    appendChatMsg('bot','Error: '+e.message,['Who should I captain?','Best DGW players?']);
+  }
+  chatBusy=false;
+  document.getElementById('send-icon').style.display='';
+  document.getElementById('send-spinner').style.display='none';
+  document.getElementById('chat-input').focus();
+}
+
+// ── Init ──
+loadSettings();
+loadData();
+</script>
+</body>
+</html>
