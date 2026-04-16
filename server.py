@@ -9,6 +9,7 @@ import webbrowser
 import sys
 import os
 import time
+import threading
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -118,6 +119,18 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             return
         if path == "/api/chip-analysis":
             self._serve_chip_analysis()
+            return
+        if path == "/api/gw-planner":
+            team_id = params.get("id", [None])[0]
+            horizon = int(params.get("horizon", [5])[0])
+            self._serve_gw_planner(team_id, horizon)
+            return
+        if path == "/api/fixture-ticker":
+            self._serve_fixture_ticker()
+            return
+        if path == "/api/fixture-rankings":
+            num_gws = int(params.get("gws", [5])[0])
+            self._serve_fixture_rankings(num_gws)
             return
 
         if path == "/" or path == "":
@@ -372,6 +385,57 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
     def _serve_settings(self):
         self._json_response(_load_settings())
 
+    def _serve_gw_planner(self, team_id, horizon):
+        """Generate multi-GW transfer plan for a team."""
+        if not team_id:
+            settings = _load_settings()
+            team_id = settings.get("team_id")
+        if not team_id:
+            self._json_response({"error": "No team ID. Import your team first."}, 400)
+            return
+        try:
+            team_id = int(team_id)
+            from gw_planner import GWPlanner
+            planner = GWPlanner(horizon=horizon)
+            plan = planner.plan_from_team_id(team_id, horizon=horizon)
+            if plan.get("error"):
+                self._json_response(plan, 400)
+                return
+            self._json_response(plan)
+        except Exception as e:
+            import traceback
+            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+
+    def _serve_fixture_ticker(self):
+        """Return fixture ticker for all 20 teams."""
+        try:
+            from gw_planner import GWPlanner
+            planner = GWPlanner(horizon=6)
+            ticker = planner.build_fixture_ticker()
+            self._json_response({
+                "from_gw": planner.next_gw,
+                "to_gw": planner.next_gw + planner.horizon - 1,
+                "teams": ticker,
+            })
+        except Exception as e:
+            import traceback
+            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+
+    def _serve_fixture_rankings(self, num_gws):
+        """Rank teams by fixture difficulty over next N GWs."""
+        try:
+            from gw_planner import GWPlanner
+            planner = GWPlanner(horizon=num_gws)
+            rankings = planner.rank_teams_by_fixtures(num_gws=num_gws)
+            self._json_response({
+                "from_gw": planner.next_gw,
+                "num_gws": num_gws,
+                "rankings": rankings,
+            })
+        except Exception as e:
+            import traceback
+            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+
     def _json_response(self, data, code=200):
         body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(code)
@@ -388,19 +452,22 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
 
 def serve(port: int = PORT, open_browser: bool = True):
     print(f"\n{'='*50}")
-    print(f"  FPL Predictor Server v4 (AI Chat)")
+    print(f"  FPL Predictor Server v5 (GW Planner)")
     print(f"{'='*50}")
-    print(f"\n  Dashboard:      http://localhost:{port}")
-    print(f"  API:            http://localhost:{port}/api/predictions")
-    print(f"  Run:            http://localhost:{port}/api/run")
-    print(f"  My Team:        http://localhost:{port}/api/my-team?id=YOUR_ID")
-    print(f"  News:           http://localhost:{port}/api/news")
-    print(f"  Chip Analysis:  http://localhost:{port}/api/chip-analysis")
-    print(f"  AI Chat:        POST http://localhost:{port}/api/chat")
+    print(f"\n  Dashboard:        http://localhost:{port}")
+    print(f"  API:              http://localhost:{port}/api/predictions")
+    print(f"  GW Planner:       http://localhost:{port}/api/gw-planner?id=TEAM_ID")
+    print(f"  Fixture Ticker:   http://localhost:{port}/api/fixture-ticker")
+    print(f"  Fixture Rankings: http://localhost:{port}/api/fixture-rankings?gws=5")
+    print(f"  AI Chat:          POST http://localhost:{port}/api/chat")
     print(f"\n  Press Ctrl+C to stop\n")
 
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", port), FPLHandler) as httpd:
+
+    class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+        daemon_threads = True
+
+    with ThreadedTCPServer(("", port), FPLHandler) as httpd:
         if open_browser:
             webbrowser.open(f"http://localhost:{port}")
         try:
