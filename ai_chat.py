@@ -115,6 +115,17 @@ class FPLChatEngine:
             (r'\bbargain\b', 2.5), (r'\bbang\s+for\b', 2.5),
             (r'\benabled?r?\b', 1.5), (r'\bprice\b.*\brise\b', 2.0),
         ],
+        "what_if": [
+            (r'\bif\b.*\b(100|guaranteed|nailed|definitely|certain|sure|will)\b.*\bplay\b', 4.0),
+            (r'\bif\b.*\bplay\b.*\bboth\b', 4.0), (r'\bif\b.*\bstarts?\b.*\bboth\b', 4.0),
+            (r'\bwhat\s+if\b', 3.0), (r'\bassume\b', 2.5), (r'\bhypothetical\b', 3.0),
+            (r'\bif\b.*\b(plays?|starts?)\b.*\b(90|full|every)\b', 3.5),
+            (r'\bwithout\b.*\b(discount|rotation|risk)\b', 3.0),
+            (r'\braw\b.*\bxpts?\b', 3.0), (r'\bmax\b.*\bxpts?\b', 2.5),
+            (r'\bceiling\b', 2.5), (r'\bupside\b', 2.0),
+            (r'\bif\b.*\b100%\b', 3.5), (r'\bper\s*fixture\b', 3.0),
+            (r'\bbreakdown\b', 2.5), (r'\bper\s*game\b', 2.5),
+        ],
     }
 
     # Team aliases — maps various ways to refer to a team to its FPL 3-letter code
@@ -237,6 +248,7 @@ class FPLChatEngine:
             "squad": self._handle_squad,
             "differential": self._handle_differentials,
             "value": self._handle_value,
+            "what_if": self._handle_what_if,
         }
 
         handler = handlers.get(best_intent, self._handle_general)
@@ -261,6 +273,8 @@ class FPLChatEngine:
                 score += 2.0
             if intent in ("player_lookup", "transfer") and entities.get("players"):
                 score += 1.5
+            if intent == "what_if" and entities.get("players"):
+                score += 2.0
             if intent == "value" and entities.get("price_range"):
                 score += 2.0
 
@@ -293,6 +307,10 @@ class FPLChatEngine:
             'sell', 'buy', 'keep', 'drop', 'think', 'much', 'score', 'going', 'next', 'bench',
             'boost', 'free', 'hit', 'chip', 'wildcard', 'triple', 'not', 'but', 'are', 'was',
             'were', 'been', 'being', 'if', 'then', 'too', 'also', 'some', 'which', 'when',
+            'games', 'game', 'both', 'play', 'plays', 'playing', 'start', 'starts',
+            'starting', 'guaranteed', 'certain', 'definitely', 'sure', 'assume', 'assuming',
+            'hypothetical', 'raw', 'max', 'ceiling', 'upside', 'breakdown', 'per', 'each',
+            'fixture', 'fixtures', 'minutes', 'nailed', '100',
         }
 
         found = []
@@ -771,10 +789,24 @@ class FPLChatEngine:
         if avail.get("status") == "doubtful":
             sections.append(f"\n⚠️ **Flagged**: {p.get('news', 'Doubtful')} ({avail.get('chance', '?')}% chance)")
 
-        # Fixtures
+        # Fixtures with per-fixture breakdown
         sections.append(f"\n### Fixtures")
-        for f in p.get("fixtures", []):
-            sections.append(f"- vs **{f.get('opponent', '?')}** ({f.get('venue', '?')}) — FDR: {f.get('fdr', '?')}")
+        fixtures = p.get("fixtures", [])
+        if fixtures:
+            sections.append("")
+            sections.append("| Fixture | xPts | xMins | xG | CS% | FDR |")
+            sections.append("|---------|------|-------|-----|-----|-----|")
+            for f in fixtures:
+                opp = f.get("opponent", "?")
+                venue = f.get("venue", "?")
+                xp = f.get("xp_adjusted", f.get("xp_single", 0))
+                xmins = f.get("xmins", 0)
+                xg = f.get("fixture_xg", 0)
+                cs = f.get("cs_probability", 0)
+                fdr = f.get("fdr", "?")
+                sections.append(f"| {opp}({venue}) | {xp:.2f} | {xmins:.0f} | {xg:.2f} | {cs*100:.0f}% | {fdr} |")
+        else:
+            sections.append("- **Blank Gameweek** — no fixtures")
 
         rank = next((i+1 for i, pp in enumerate(self.predictions) if pp.get("player_id") == p.get("player_id")), "?")
         sections.append(f"\n**Overall rank: #{rank}** out of {len(self.predictions)} players")
@@ -990,6 +1022,91 @@ class FPLChatEngine:
             "answer": "\n".join(sections),
             "data": {"type": "value"},
             "suggestions": ["Best budget defenders?", "Best budget midfielders?", "Cheapest nailed starters?"]
+        }
+
+    def _handle_what_if(self, q: str, original: str, entities: dict) -> dict:
+        """Handle hypothetical/what-if questions about player performance."""
+        players = entities.get("players", [])
+        if not players:
+            return self._fallback("Which player? Try: **'If Darlow plays both DGW games, what's his xPts?'**")
+
+        p = players[0]
+        gw = self.gw_info.get("gameweek", "?")
+        fixtures = p.get("fixtures", [])
+        avail = p.get("availability", {})
+        starter = p.get("starter_quality", {})
+
+        sections = []
+        sections.append(f"## 🔮 What-If Analysis: {p['name']} — GW{gw}\n")
+
+        # Current prediction (with discounts)
+        current_xpts = p["predicted_points"]
+        raw_xpts = p.get("raw_xpts", current_xpts)
+
+        sections.append("### Current Prediction\n")
+        sections.append(f"| Metric | Value |")
+        sections.append(f"|--------|-------|")
+        sections.append(f"| **Predicted xPts** | **{current_xpts:.2f}** (after availability/rotation discounts) |")
+        sections.append(f"| **Raw xPts** | **{raw_xpts:.2f}** (before availability discount) |")
+        sections.append(f"| Starter Tier | {starter.get('tier', '?')} (start rate: {starter.get('start_rate', '?')}) |")
+        sections.append(f"| Availability | {avail.get('status', 'available')} ({avail.get('chance', 100)}%) |")
+        if p.get("is_dgw"):
+            sections.append(f"| DGW | ✅ {p.get('num_fixtures', 2)} fixtures |")
+            if starter.get("dgw_both_start_prob") is not None:
+                sections.append(f"| P(start both) | {int(starter['dgw_both_start_prob'] * 100)}% |")
+
+        # Per-fixture breakdown
+        if fixtures:
+            sections.append(f"\n### Per-Fixture Breakdown\n")
+            sections.append("| Fixture | xPts (raw) | xPts (adj) | xMins | xG | xGC | CS% |")
+            sections.append("|---------|-----------|-----------|-------|-----|------|-----|")
+            total_raw_fix = 0
+            for i, f in enumerate(fixtures):
+                xp_raw = f.get("xp_single", 0)
+                xp_adj = f.get("xp_adjusted", 0)
+                xmins = f.get("xmins", 0)
+                xg = f.get("fixture_xg", 0)
+                xgc = f.get("fixture_xgc", 0)
+                cs = f.get("cs_probability", 0)
+                opp = f.get("opponent", "?")
+                venue = f.get("venue", "?")
+                total_raw_fix += xp_raw
+                sections.append(f"| {opp}({venue}) | {xp_raw:.2f} | {xp_adj:.2f} | {xmins:.0f} | {xg:.2f} | {xgc:.2f} | {cs*100:.0f}% |")
+            sections.append(f"| **Total** | **{total_raw_fix:.2f}** | **{current_xpts:.2f}** | | | | |")
+
+        # The hypothetical: 100% playing both games
+        sections.append(f"\n### 💡 If {p['name']} plays 90 mins in ALL fixtures\n")
+
+        if fixtures:
+            # Sum the raw per-fixture xPts — this is the "ceiling" without rotation discount
+            # But we need to explain: raw xPts already has the rotation/minutes baked in
+            # The "100% play" scenario means using xp_single (raw) for each fixture
+            total_100 = sum(f.get("xp_single", 0) for f in fixtures)
+            sections.append(f"**If guaranteed to play 90 mins every game: ~{total_100:.2f} xPts**\n")
+            sections.append(f"This is the **raw total** before any availability discount.")
+            diff = total_100 - current_xpts
+            if diff > 0.5:
+                sections.append(f"\nThat's **+{diff:.2f} more** than the current prediction of {current_xpts:.2f}.")
+                sections.append(f"The gap comes from:")
+                if avail.get("status") == "doubtful":
+                    sections.append(f"- ⚠️ **Availability discount**: flagged at {avail.get('chance', '?')}% chance of playing")
+                if starter.get("tier") not in ("nailed",) and p.get("is_dgw"):
+                    sections.append(f"- 🔄 **Rotation risk**: {starter.get('tier', '?')} tier — model expects some rest in 2nd fixture")
+                if starter.get("tier") == "nailed" and p.get("is_dgw"):
+                    sections.append(f"- 📉 **Slight DGW rest risk**: even nailed players have ~8% chance of being rested for 1 game")
+            else:
+                sections.append(f"\nMinimal difference — the model already expects {p['name']} to play most/all minutes.")
+        else:
+            sections.append(f"No fixtures this GW (blank gameweek).")
+
+        return {
+            "answer": "\n".join(sections),
+            "data": {"type": "what_if", "player": self._player_card(p)},
+            "suggestions": [
+                f"Compare {p['name']} vs {self.predictions[0]['name']}" if self.predictions else "Best picks?",
+                f"Should I captain {p['name']}?",
+                f"Best {p['position']} picks this week?",
+            ]
         }
 
     def _handle_general(self, q: str, original: str, entities: dict) -> dict:
