@@ -519,6 +519,9 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             chips_available = ["BB", "TC", "FH", "WC"]
             chips_used_list = []
             bank = 0.0
+            HALF_CUTOFF = 20  # GW20+ = second half
+            current_half = 2  # default to 2nd half
+            chip_name_map = {"bboost": "BB", "3xc": "TC", "freehit": "FH", "wildcard": "WC"}
 
             if settings.get("team_id"):
                 try:
@@ -530,36 +533,45 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
                         bank = team_data.get("gw_summary", {}).get("bank", 0)
 
                         # Parse chips used — handle FPL's chip naming
+                        # FPL 25/26: TWO sets of chips — 1st half (GW1-19) & 2nd half (GW20-38)
+                        # Each half gets its own BB, TC, FH, WC
                         raw_chips = team_data.get("chips", [])
                         active_chip = team_data.get("active_chip")  # e.g. "freehit"
                         chips_used_list = raw_chips
 
-                        # FPL chip name mapping
-                        chip_name_map = {"bboost": "BB", "3xc": "TC", "freehit": "FH", "wildcard": "WC"}
                         active_code = chip_name_map.get(active_chip, "") if active_chip else ""
+
+                        # Determine which half we're in
+                        current_gw = team_data.get("gw_summary", {}).get("event", 33)
+                        current_half = 2 if current_gw >= HALF_CUTOFF else 1
+
+                        # Only count chips used in the CURRENT half
                         used_set = set()
-                        wc_count = 0
+                        first_half_used = []
+                        second_half_used = []
                         for c in raw_chips:
                             name = c.get("name", "")
+                            gw = c.get("event", 0)
                             code = chip_name_map.get(name, name.upper())
-                            # Skip the currently active chip — it's in use this GW, not "used up"
-                            if active_chip and name == active_chip:
-                                continue
-                            if name == "wildcard":
-                                wc_count += 1
-                            used_set.add(code)
+                            half = 2 if gw >= HALF_CUTOFF else 1
+                            entry = {"name": name, "code": code, "gw": gw, "half": half}
+                            if half == 1:
+                                first_half_used.append(entry)
+                            else:
+                                second_half_used.append(entry)
 
-                        # FPL 25/26: 2 wildcards available (1 before GW20, 1 after)
-                        # Only mark WC as used if both have been used
+                            # Only mark as "used" if it's in the current half
+                            # AND it's not the currently active chip
+                            if half == current_half:
+                                if active_chip and name == active_chip:
+                                    continue  # active chip is in-use, not used up
+                                used_set.add(code)
+
+                        # All 4 chips available per half; check what's used in current half
                         chips_available = []
-                        if "BB" not in used_set:
-                            chips_available.append("BB")
-                        if "TC" not in used_set:
-                            chips_available.append("TC")
-                        if "FH" not in used_set:
-                            chips_available.append("FH")
-                        if wc_count < 2:
-                            chips_available.append("WC")
+                        for code in ["BB", "TC", "FH", "WC"]:
+                            if code not in used_set:
+                                chips_available.append(code)
                 except Exception:
                     pass
 
@@ -574,12 +586,15 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
                 bank=bank,
             )
 
-            # Add chip status info
+            # Add chip status info — only show current half
             result["user_chips_available"] = chips_available
             result["user_chips_used"] = [
-                {"name": c.get("name"), "code": {"bboost":"BB","3xc":"TC","freehit":"FH","wildcard":"WC"}.get(c.get("name",""),"?"), "gw": c.get("event")}
+                {"name": c.get("name"), "code": chip_name_map.get(c.get("name",""),"?"), "gw": c.get("event"),
+                 "half": 2 if c.get("event", 0) >= HALF_CUTOFF else 1}
                 for c in chips_used_list
             ]
+            result["current_half"] = current_half if settings.get("team_id") else 2
+            result["half_cutoff"] = HALF_CUTOFF
             result["all_used"] = len(chips_available) == 0
             self._json_response(result)
         except Exception as e:

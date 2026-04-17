@@ -1131,35 +1131,35 @@ function initSimulator() {
     }
   }
   // Populate chip dropdown with used/available status
+  // FPL 25/26: TWO sets of chips — 1st half (GW1-19) & 2nd half (GW20-38)
   const chipSel = document.getElementById('sim-chip-select');
   if (chipSel) {
     const chipsUsed = MY_TEAM_DATA.chips_used || [];
-    const activeChip = MY_TEAM_DATA.active_chip || null; // e.g. "freehit"
+    const activeChip = MY_TEAM_DATA.active_chip || null;
     const chipNameMap = {'bboost':'BB','3xc':'TC','freehit':'FH','wildcard':'WC'};
-    const reverseMap = {'BB':'bboost','TC':'3xc','FH':'freehit','WC':'wildcard'};
     const activeCode = activeChip ? (chipNameMap[activeChip] || activeChip.toUpperCase()) : null;
     const currentGW = DATA?.gameweek || 33;
+    const HALF_CUTOFF = 20;
+    const currentHalf = currentGW >= HALF_CUTOFF ? 2 : 1;
 
-    // Build a map of chip code -> event GW it was used in
-    const usedMap = {}; // code -> gw
-    let wcCount = 0;
+    // Only count chips used in the CURRENT half of the season
+    const usedInHalf = new Set();
     (Array.isArray(chipsUsed) ? chipsUsed : []).forEach(c => {
       const name = typeof c === 'object' ? c.name : c;
-      const gw = typeof c === 'object' ? c.event : null;
+      const gw = typeof c === 'object' ? (c.event || c.gw) : null;
       const code = chipNameMap[name] || name;
-      if (name === 'wildcard') wcCount++;
-      usedMap[code] = gw;
+      const half = (gw && gw >= HALF_CUTOFF) ? 2 : 1;
+      if (half === currentHalf) usedInHalf.add(code);
     });
 
     const allChips = [
-      {code:'WC', name:'Wildcard', used: wcCount >= 2},
-      {code:'FH', name:'Free Hit', used: 'FH' in usedMap},
-      {code:'BB', name:'Bench Boost', used: 'BB' in usedMap},
-      {code:'TC', name:'Triple Captain', used: 'TC' in usedMap},
+      {code:'WC', name:'Wildcard', used: usedInHalf.has('WC')},
+      {code:'FH', name:'Free Hit', used: usedInHalf.has('FH')},
+      {code:'BB', name:'Bench Boost', used: usedInHalf.has('BB')},
+      {code:'TC', name:'Triple Captain', used: usedInHalf.has('TC')},
     ];
 
     // If a chip is the active chip for the current GW, it's NOT "used up"
-    // — it's currently active and should be selectable
     allChips.forEach(c => {
       if (c.code === activeCode) {
         c.used = false;
@@ -1870,20 +1870,36 @@ function renderSeasonChips(data) {
   const userAvailable = data.user_chips_available || [];
   const userUsed = data.user_chips_used || [];
   const allUsed = data.all_used || false;
+  const currentHalf = data.current_half || 2;
+  const halfCutoff = data.half_cutoff || 20;
 
-  // Show chip status bar
-  let statusHtml = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">';
+  // Show chip status bar — only for CURRENT half
+  const halfLabel = currentHalf === 1 ? '1st Half (GW1-19)' : '2nd Half (GW20-38)';
+  let statusHtml = `<div style="font-size:11px;color:var(--text3);margin-bottom:8px;">Showing chips for: <strong style="color:var(--text1);">${halfLabel}</strong></div>`;
+  statusHtml += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">';
   const allChips = ['BB','TC','FH','WC'];
   allChips.forEach(chip => {
     const isAvail = userAvailable.includes(chip);
-    const usedEntry = userUsed.find(u => u.code === chip);
+    // Only show "Used GWx" for chips used in the current half
+    const usedEntry = userUsed.find(u => u.code === chip && u.half === currentHalf);
     if (isAvail) {
       statusHtml += `<div style="padding:6px 14px;border-radius:var(--radius-sm);background:var(--accent-dim);border:1px solid var(--accent);font-size:12px;"><strong style="color:var(--accent);">${chip}</strong> <span style="color:var(--text2);">Available</span></div>`;
     } else if (usedEntry) {
       statusHtml += `<div style="padding:6px 14px;border-radius:var(--radius-sm);background:var(--surface3);border:1px solid var(--border);font-size:12px;opacity:0.6;"><strong style="color:var(--text3);">${chip}</strong> <span style="color:var(--text3);">Used GW${usedEntry.gw}</span></div>`;
+    } else {
+      // Available (not in used list for this half)
+      statusHtml += `<div style="padding:6px 14px;border-radius:var(--radius-sm);background:var(--accent-dim);border:1px solid var(--accent);font-size:12px;"><strong style="color:var(--accent);">${chip}</strong> <span style="color:var(--text2);">Available</span></div>`;
     }
   });
   statusHtml += '</div>';
+
+  // Show first-half chips usage summary if in 2nd half (for reference)
+  const firstHalfUsed = userUsed.filter(u => u.half === 1);
+  if (currentHalf === 2 && firstHalfUsed.length > 0) {
+    statusHtml += '<div style="font-size:11px;color:var(--text3);margin-bottom:12px;opacity:0.6;">1st Half chips used: ';
+    statusHtml += firstHalfUsed.map(u => `${u.code} (GW${u.gw})`).join(', ');
+    statusHtml += '</div>';
+  }
 
   if (allUsed) {
     statusHtml += '<div style="background:var(--orange-dim);border:1px solid var(--orange);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px;font-size:13px;color:var(--orange);">All chips have been used this season. Below shows what WOULD have been optimal — useful for future seasons.</div>';
