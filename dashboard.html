@@ -82,20 +82,21 @@ h2 .dgw-alert { background:var(--dgw); color:#000; font-size:12px; padding:3px 1
 .chip-card.recommended .rec-label { position:absolute; top:-10px; left:16px; background:var(--accent); color:#000; font-size:10px; font-weight:700; padding:2px 10px; border-radius:8px; }
 
 /* Pitch view */
-.pitch { background:linear-gradient(to bottom,#1a472a,#1d5c36,#1a472a); border-radius:var(--radius); padding:30px 20px; margin-bottom:16px; position:relative; min-height:420px; }
-.pitch::before { content:''; position:absolute; top:50%; left:10%; right:10%; height:1px; background:rgba(255,255,255,.15); }
+.pitch { background:linear-gradient(180deg,#14592b 0%,#1a6b35 15%,#14592b 30%,#1a6b35 45%,#14592b 60%,#1a6b35 75%,#14592b 100%); border-radius:var(--radius); padding:30px 20px; position:relative; min-height:420px; overflow:hidden; }
+.pitch::before { content:''; position:absolute; top:50%; left:8%; right:8%; height:2px; background:rgba(255,255,255,.12); }
+.pitch::after { content:''; position:absolute; top:calc(50% - 40px); left:50%; transform:translateX(-50%); width:80px; height:80px; border:2px solid rgba(255,255,255,.08); border-radius:50%; }
 .pitch-row { display:flex; justify-content:center; gap:12px; margin:10px 0; flex-wrap:wrap; }
 .pitch-player { text-align:center; width:80px; }
-.pitch-player .shirt { width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px; margin:0 auto 4px; border:2px solid rgba(255,255,255,.2); position:relative; }
-.pitch-player .shirt.gkp { background:var(--gkp); color:#000; }
-.pitch-player .shirt.def { background:var(--def); color:#fff; }
-.pitch-player .shirt.mid { background:var(--mid); color:#fff; }
-.pitch-player .shirt.fwd { background:var(--fwd); color:#fff; }
-.pitch-player .shirt .captain-badge { position:absolute; top:-4px; right:-4px; background:var(--gold); color:#000; font-size:8px; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; }
-.pitch-player .shirt .dgw-dot { position:absolute; bottom:-2px; left:50%; transform:translateX(-50%); background:var(--dgw); width:8px; height:8px; border-radius:50%; }
-.pitch-player .shirt .injury-dot { position:absolute; top:-4px; left:-4px; background:var(--orange); width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:800; color:#000; }
-.pitch-player .name { font-size:10px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#fff; }
-.pitch-player .xpts { font-size:10px; color:rgba(255,255,255,.7); }
+.pitch-player .shirt { width:48px; height:48px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; margin:0 auto 4px; border:2px solid rgba(255,255,255,.15); position:relative; text-shadow:0 1px 2px rgba(0,0,0,.5); letter-spacing:0.5px; }
+.pitch-player .shirt.gkp { background:linear-gradient(135deg,#e6b800,#f0c040,#e6b800); color:#000; }
+.pitch-player .shirt.def { background:linear-gradient(135deg,#2a9d3e,#3bc55e,#2a9d3e); color:#fff; }
+.pitch-player .shirt.mid { background:linear-gradient(135deg,#2979b8,#42a5f5,#2979b8); color:#fff; }
+.pitch-player .shirt.fwd { background:linear-gradient(135deg,#d43b3b,#ff5252,#d43b3b); color:#fff; }
+.pitch-player .shirt .captain-badge { position:absolute; top:-5px; right:-5px; background:var(--gold); color:#000; font-size:8px; width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:900; border:2px solid rgba(0,0,0,.2); }
+.pitch-player .shirt .dgw-dot { position:absolute; bottom:-3px; left:50%; transform:translateX(-50%); background:var(--dgw); width:10px; height:10px; border-radius:50%; border:1px solid rgba(0,0,0,.3); }
+.pitch-player .shirt .injury-dot { position:absolute; top:-5px; left:-5px; background:var(--orange); width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:900; color:#000; border:2px solid rgba(0,0,0,.2); }
+.pitch-player .name { font-size:10px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.6); }
+.pitch-player .xpts { font-size:10px; color:#fff; background:rgba(0,0,0,.5); padding:2px 8px; border-radius:10px; display:inline-block; font-weight:600; backdrop-filter:blur(4px); }
 .pitch-player .fixture-info { font-size:9px; color:rgba(255,255,255,.5); }
 
 /* Table */
@@ -280,11 +281,33 @@ input:focus, select:focus { border-color:var(--accent); }
 .sim-queue-item .remove-btn:hover { opacity:1; }
 
 /* Simulator pitch player */
-.sim-pitch-player { text-align:center; width:72px; cursor:pointer; transition:var(--transition); }
-.sim-pitch-player:hover { transform:scale(1.08); }
-.sim-pitch-player.selling { opacity:0.4; }
-.sim-pitch-player.selling .shirt { border-color:var(--red) !important; box-shadow:0 0 12px rgba(255,82,82,.4); }
-.sim-pitch-player .sim-xp { font-size:9px; color:rgba(255,255,255,.6); background:rgba(0,0,0,.4); padding:1px 4px; border-radius:3px; display:inline-block; margin-top:1px; }
+.sim-pitch-player { text-align:center; width:80px; cursor:pointer; transition:all .2s ease; position:relative; }
+.sim-pitch-player:hover { transform:translateY(-4px); }
+.sim-pitch-player:hover .sim-shirt { box-shadow:0 4px 16px rgba(255,255,255,.2); }
+.sim-pitch-player.selling { }
+.sim-pitch-player.selling .sim-shirt { border-color:var(--red) !important; box-shadow:0 0 20px rgba(255,82,82,.5),0 0 40px rgba(255,82,82,.2); animation:sellPulse 1.5s infinite; }
+@keyframes sellPulse { 0%,100% { box-shadow:0 0 20px rgba(255,82,82,.5); } 50% { box-shadow:0 0 30px rgba(255,82,82,.7); } }
+.sim-shirt { width:52px; height:52px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; margin:0 auto 4px; border:2px solid rgba(255,255,255,.15); position:relative; letter-spacing:0.5px; text-shadow:0 1px 2px rgba(0,0,0,.5); }
+.sim-shirt.gkp { background:linear-gradient(135deg,#e6b800,#f0c040,#e6b800); color:#000; }
+.sim-shirt.def { background:linear-gradient(135deg,#2a9d3e,#3bc55e,#2a9d3e); color:#fff; }
+.sim-shirt.mid { background:linear-gradient(135deg,#2979b8,#42a5f5,#2979b8); color:#fff; }
+.sim-shirt.fwd { background:linear-gradient(135deg,#d43b3b,#ff5252,#d43b3b); color:#fff; }
+.sim-shirt .captain-badge { position:absolute; top:-5px; right:-5px; background:var(--gold); color:#000; font-size:8px; width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:900; border:2px solid rgba(0,0,0,.2); }
+.sim-shirt .dgw-dot { position:absolute; bottom:-3px; left:50%; transform:translateX(-50%); background:var(--dgw); width:10px; height:10px; border-radius:50%; border:1px solid rgba(0,0,0,.3); }
+.sim-shirt .injury-dot { position:absolute; top:-5px; left:-5px; background:var(--orange); width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:900; color:#000; border:2px solid rgba(0,0,0,.2); }
+.sim-pitch-player .name { font-size:10px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#fff; max-width:80px; text-shadow:0 1px 3px rgba(0,0,0,.6); }
+.sim-pitch-player .sim-xp { font-size:10px; color:#fff; background:rgba(0,0,0,.55); padding:2px 8px; border-radius:10px; display:inline-block; margin-top:2px; font-weight:600; backdrop-filter:blur(4px); }
+.sim-pitch-player .sim-xp.high { background:rgba(0,230,118,.3); color:var(--accent); }
+.sim-pitch-player .sim-xp.low { background:rgba(255,82,82,.3); color:var(--red); }
+
+/* Enhanced pitch background */
+.sim-pitch-bg { background:linear-gradient(180deg,#14592b 0%,#1a6b35 15%,#14592b 30%,#1a6b35 45%,#14592b 60%,#1a6b35 75%,#14592b 100%); border-radius:var(--radius); padding:30px 20px 20px; position:relative; overflow:hidden; min-height:380px; }
+.sim-pitch-bg::before { content:''; position:absolute; top:50%; left:8%; right:8%; height:2px; background:rgba(255,255,255,.12); }
+.sim-pitch-bg::after { content:''; position:absolute; top:calc(50% - 40px); left:50%; transform:translateX(-50%); width:80px; height:80px; border:2px solid rgba(255,255,255,.1); border-radius:50%; }
+
+/* Bench bar */
+.sim-bench-bar { padding:10px 16px; border-top:1px solid var(--border); background:var(--surface2); border-radius:0 0 var(--radius) var(--radius); display:flex; gap:16px; align-items:center; }
+.sim-bench-bar .bench-label { font-size:11px; color:var(--text3); font-weight:600; text-transform:uppercase; letter-spacing:1px; }
 
 /* Chip heatmap */
 .chip-heatmap-table { font-size:11px; border-collapse:collapse; width:100%; }
@@ -474,11 +497,8 @@ input:focus, select:focus { border-color:var(--accent); }
       <!-- FPL-style pitch view of current squad -->
       <div class="card" style="margin-bottom:16px;">
         <div class="card-header"><h3>Your Squad — Click player to sell</h3><span id="sim-squad-info" style="font-size:12px;color:var(--text3);"></span></div>
-        <div class="pitch" id="sim-pitch" style="min-height:360px;"><p style="color:rgba(255,255,255,.5);text-align:center;padding-top:40px;">Import your team first</p></div>
-        <div style="padding:8px 16px;border-top:1px solid var(--border);display:flex;gap:16px;font-size:11px;color:var(--text3);">
-          <span id="sim-bench-label">Bench:</span>
-          <div id="sim-bench-row" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
-        </div>
+        <div id="sim-pitch" style="min-height:360px;"><p style="color:rgba(255,255,255,.5);text-align:center;padding-top:40px;">Import your team first</p></div>
+        <div class="sim-bench-bar" id="sim-bench-row"></div>
       </div>
 
       <!-- Search & replacement panel (shows when player selected) -->
@@ -1125,32 +1145,37 @@ function renderSimPitch() {
     const isSelling = SIM_SELL_ID === p.player_id;
     const avail = p.availability || {};
     const isDoubtful = avail.status === 'doubtful';
+    const xp = p.predicted_points || 0;
+    const xpClass = xp >= 8 ? 'high' : xp < 3 ? 'low' : '';
     return `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" onclick="selectSellPlayer(${p.player_id})">
-      <div class="shirt ${posClass}" ${isDoubtful ? 'style="opacity:0.7;border-color:var(--orange);"' : ''}>
+      <div class="sim-shirt ${posClass}">
         ${p.name.substring(0,3).toUpperCase()}
         ${p.is_captain ? '<div class="captain-badge">C</div>' : ''}
         ${p.is_dgw ? '<div class="dgw-dot"></div>' : ''}
         ${isDoubtful ? '<div class="injury-dot">!</div>' : ''}
       </div>
       <div class="name">${p.name}</div>
-      <div class="sim-xp">${p.predicted_points} xPts</div>
+      <div class="sim-xp ${xpClass}">${xp} xPts</div>
     </div>`;
   }
 
-  document.getElementById('sim-pitch').innerHTML = `
-    <div class="pitch-row">${groups[4].map(simCard).join('')}</div>
-    <div class="pitch-row">${groups[3].map(simCard).join('')}</div>
-    <div class="pitch-row">${groups[2].map(simCard).join('')}</div>
-    <div class="pitch-row">${groups[1].map(simCard).join('')}</div>
-  `;
+  document.getElementById('sim-pitch').innerHTML = `<div class="sim-pitch-bg">
+    <div class="pitch-row" style="padding-top:8px;">${groups[4].map(simCard).join('')}</div>
+    <div class="pitch-row" style="margin:16px 0;">${groups[3].map(simCard).join('')}</div>
+    <div class="pitch-row" style="margin:16px 0;">${groups[2].map(simCard).join('')}</div>
+    <div class="pitch-row" style="padding-bottom:8px;">${groups[1].map(simCard).join('')}</div>
+  </div>`;
 
-  let benchHtml = '';
+  // Bench bar
+  let benchHtml = '<span class="bench-label">Bench</span>';
   bench.forEach(p => {
     const isSelling = SIM_SELL_ID === p.player_id;
-    benchHtml += `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" onclick="selectSellPlayer(${p.player_id})" style="transform:scale(0.85);">
-      <div class="shirt ${p.position.toLowerCase()}" style="width:36px;height:36px;font-size:10px;">${p.name.substring(0,3).toUpperCase()}</div>
+    const xp = p.predicted_points || 0;
+    const xpClass = xp >= 6 ? 'high' : xp < 2 ? 'low' : '';
+    benchHtml += `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" onclick="selectSellPlayer(${p.player_id})" style="width:68px;">
+      <div class="sim-shirt ${p.position.toLowerCase()}" style="width:40px;height:40px;font-size:9px;border-radius:10px;">${p.name.substring(0,3).toUpperCase()}</div>
       <div class="name" style="font-size:9px;">${p.name}</div>
-      <div class="sim-xp">${p.predicted_points}</div>
+      <div class="sim-xp ${xpClass}" style="font-size:9px;">${xp}</div>
     </div>`;
   });
   document.getElementById('sim-bench-row').innerHTML = benchHtml;
