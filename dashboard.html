@@ -757,7 +757,7 @@ function renderPitch(squad) {
     ).join('');
     return `<div class="pitch-player">
       <div class="shirt ${posClass}" ${isDoubtful ? 'style="opacity:0.7;border-color:var(--orange);"' : ''}>
-        ${p.name.substring(0,3).toUpperCase()}
+        ${p.team || '???'}
         ${isCap ? '<div class="captain-badge">C</div>' : isVice ? '<div class="captain-badge" style="background:var(--text3);">V</div>' : ''}
         ${p.is_dgw ? '<div class="dgw-dot"></div>' : ''}
         ${injuryDot}
@@ -1151,7 +1151,7 @@ function renderSimPitch() {
     const newStyle = isNew ? 'box-shadow:0 0 16px rgba(0,230,118,.5),0 0 30px rgba(0,230,118,.2);border-color:var(--accent);' : '';
     return `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" onclick="selectSellPlayer(${p.player_id})">
       <div class="sim-shirt ${posClass}" style="${newStyle}">
-        ${p.name.substring(0,3).toUpperCase()}
+        ${p.team || '???'}
         ${p.is_captain ? '<div class="captain-badge">C</div>' : ''}
         ${p.is_dgw ? '<div class="dgw-dot"></div>' : ''}
         ${isDoubtful ? '<div class="injury-dot">!</div>' : ''}
@@ -1176,7 +1176,7 @@ function renderSimPitch() {
     const xp = p.predicted_points || 0;
     const xpClass = xp >= 6 ? 'high' : xp < 2 ? 'low' : '';
     benchHtml += `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" onclick="selectSellPlayer(${p.player_id})" style="width:68px;">
-      <div class="sim-shirt ${p.position.toLowerCase()}" style="width:40px;height:40px;font-size:9px;border-radius:10px;">${p.name.substring(0,3).toUpperCase()}</div>
+      <div class="sim-shirt ${p.position.toLowerCase()}" style="width:40px;height:40px;font-size:9px;border-radius:10px;">${p.team || '???'}</div>
       <div class="name" style="font-size:9px;">${p.name}</div>
       <div class="sim-xp ${xpClass}" style="font-size:9px;">${xp}</div>
     </div>`;
