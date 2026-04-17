@@ -1134,30 +1134,59 @@ function initSimulator() {
   const chipSel = document.getElementById('sim-chip-select');
   if (chipSel) {
     const chipsUsed = MY_TEAM_DATA.chips_used || [];
+    const activeChip = MY_TEAM_DATA.active_chip || null; // e.g. "freehit"
     const chipNameMap = {'bboost':'BB','3xc':'TC','freehit':'FH','wildcard':'WC'};
-    const usedSet = new Set();
+    const reverseMap = {'BB':'bboost','TC':'3xc','FH':'freehit','WC':'wildcard'};
+    const activeCode = activeChip ? (chipNameMap[activeChip] || activeChip.toUpperCase()) : null;
+    const currentGW = DATA?.gameweek || 33;
+
+    // Build a map of chip code -> event GW it was used in
+    const usedMap = {}; // code -> gw
     let wcCount = 0;
     (Array.isArray(chipsUsed) ? chipsUsed : []).forEach(c => {
       const name = typeof c === 'object' ? c.name : c;
+      const gw = typeof c === 'object' ? c.event : null;
       const code = chipNameMap[name] || name;
       if (name === 'wildcard') wcCount++;
-      usedSet.add(code);
+      usedMap[code] = gw;
     });
+
     const allChips = [
       {code:'WC', name:'Wildcard', used: wcCount >= 2},
-      {code:'FH', name:'Free Hit', used: usedSet.has('FH')},
-      {code:'BB', name:'Bench Boost', used: usedSet.has('BB')},
-      {code:'TC', name:'Triple Captain', used: usedSet.has('TC')},
+      {code:'FH', name:'Free Hit', used: 'FH' in usedMap},
+      {code:'BB', name:'Bench Boost', used: 'BB' in usedMap},
+      {code:'TC', name:'Triple Captain', used: 'TC' in usedMap},
     ];
+
+    // If a chip is the active chip for the current GW, it's NOT "used up"
+    // — it's currently active and should be selectable
+    allChips.forEach(c => {
+      if (c.code === activeCode) {
+        c.used = false;
+        c.active = true;
+        c.activeGW = currentGW;
+      }
+    });
+
     chipSel.innerHTML = '<option value="">None</option>';
     allChips.forEach(c => {
       const opt = document.createElement('option');
       opt.value = c.code;
-      opt.textContent = c.used ? c.name + ' (Used)' : c.name;
+      if (c.active) {
+        opt.textContent = c.name + ' (Active GW' + c.activeGW + ')';
+      } else {
+        opt.textContent = c.used ? c.name + ' (Used)' : c.name;
+      }
       opt.disabled = c.used;
       if (c.used) opt.style.color = '#555';
       chipSel.appendChild(opt);
     });
+
+    // If target GW == current GW and there's an active chip, auto-select it
+    const targetGW = parseInt(document.getElementById('sim-gw-select')?.value) || currentGW;
+    if (targetGW === currentGW && activeCode) {
+      chipSel.value = activeCode;
+    }
   }
   renderSimPitch();
   SIM_CURRENT_GW = parseInt(gwSel?.value || DATA?.gameweek || 33);
@@ -1173,8 +1202,17 @@ async function onSimGWChange() {
   const chipSel = document.getElementById('sim-chip-select');
   const chip = chipSel?.value || '';
 
-  // Reset chip to None when changing GW
-  if (chipSel) chipSel.value = '';
+  // Reset chip — then auto-select if this is the active-chip GW
+  if (chipSel) {
+    chipSel.value = '';
+    const activeChip = MY_TEAM_DATA.active_chip || null;
+    const chipNameMap = {'bboost':'BB','3xc':'TC','freehit':'FH','wildcard':'WC'};
+    const activeCode = activeChip ? (chipNameMap[activeChip] || activeChip.toUpperCase()) : null;
+    const currentGW = DATA?.gameweek || 33;
+    if (newGW === currentGW && activeCode) {
+      chipSel.value = activeCode;
+    }
+  }
 
   // If moving away from a FH GW, revert squad to original
   if (SIM_FH_GW && newGW !== SIM_FH_GW) {

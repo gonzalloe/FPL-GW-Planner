@@ -531,15 +531,20 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
 
                         # Parse chips used — handle FPL's chip naming
                         raw_chips = team_data.get("chips", [])
+                        active_chip = team_data.get("active_chip")  # e.g. "freehit"
                         chips_used_list = raw_chips
 
                         # FPL chip name mapping
                         chip_name_map = {"bboost": "BB", "3xc": "TC", "freehit": "FH", "wildcard": "WC"}
+                        active_code = chip_name_map.get(active_chip, "") if active_chip else ""
                         used_set = set()
                         wc_count = 0
                         for c in raw_chips:
                             name = c.get("name", "")
                             code = chip_name_map.get(name, name.upper())
+                            # Skip the currently active chip — it's in use this GW, not "used up"
+                            if active_chip and name == active_chip:
+                                continue
                             if name == "wildcard":
                                 wc_count += 1
                             used_set.add(code)
