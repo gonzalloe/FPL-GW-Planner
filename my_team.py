@@ -147,6 +147,10 @@ def enrich_my_team(team_data: dict, player_map: dict, predictions: list) -> dict
             "predicted_points": pred.get("predicted_points", 0),
             "confidence": pred.get("confidence", 0),
             "fixture": pred.get("fixture", {}),
+            "fixtures": pred.get("fixtures", []),
+            "is_dgw": pred.get("is_dgw", False),
+            "num_fixtures": pred.get("num_fixtures", 0),
+            "team_last5_form": pred.get("team_last5_form", ""),
             "factors": pred.get("factors", {}),
             "availability": pred.get("availability", {}),
             # From picks

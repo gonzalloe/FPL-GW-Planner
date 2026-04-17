@@ -497,7 +497,7 @@ input:focus, select:focus { border-color:var(--accent); }
 
       <!-- FPL-style pitch view of current squad -->
       <div class="card" style="margin-bottom:16px;">
-        <div class="card-header"><h3>Your Squad — Click to sell · Drag to swap · Double-click for Captain</h3><span id="sim-squad-info" style="font-size:12px;color:var(--text3);"></span></div>
+        <div class="card-header"><h3>Your Squad — Click to sell · Drag to swap · Double-click for Captain</h3><div style="display:flex;gap:8px;align-items:center;"><button class="btn btn-sm" onclick="recommendBestXI()" title="Auto-pick best starting XI based on predicted points" style="font-size:11px;padding:4px 10px;">⚡ Best XI</button><span id="sim-squad-info" style="font-size:12px;color:var(--text3);"></span></div></div>
         <div id="sim-pitch" style="min-height:360px;"><p style="color:rgba(255,255,255,.5);text-align:center;padding-top:40px;">Import your team first</p></div>
         <div class="sim-bench-bar" id="sim-bench-row"></div>
       </div>
@@ -1143,14 +1143,24 @@ function initSimulator() {
     const currentHalf = currentGW >= HALF_CUTOFF ? 2 : 1;
 
     // Only count chips used in the CURRENT half of the season
+    // But chips used in the CURRENT GW are "active" (not yet locked), not "used up"
     const usedInHalf = new Set();
+    const activeInCurrentGW = new Set(); // chips activated this GW (can still change)
     (Array.isArray(chipsUsed) ? chipsUsed : []).forEach(c => {
       const name = typeof c === 'object' ? c.name : c;
       const gw = typeof c === 'object' ? (c.event || c.gw) : null;
       const code = chipNameMap[name] || name;
       const half = (gw && gw >= HALF_CUTOFF) ? 2 : 1;
-      if (half === currentHalf) usedInHalf.add(code);
+      // If this chip was used in the current GW, treat it as "active" not "used"
+      if (gw === currentGW) {
+        activeInCurrentGW.add(code);
+      } else if (half === currentHalf) {
+        usedInHalf.add(code);
+      }
     });
+
+    // Also check active_chip from FPL API (belt and suspenders)
+    if (activeCode) activeInCurrentGW.add(activeCode);
 
     const allChips = [
       {code:'WC', name:'Wildcard', used: usedInHalf.has('WC')},
@@ -1159,9 +1169,9 @@ function initSimulator() {
       {code:'TC', name:'Triple Captain', used: usedInHalf.has('TC')},
     ];
 
-    // If a chip is the active chip for the current GW, it's NOT "used up"
+    // Mark chips that are active in the current GW as selectable
     allChips.forEach(c => {
-      if (c.code === activeCode) {
+      if (activeInCurrentGW.has(c.code)) {
         c.used = false;
         c.active = true;
         c.activeGW = currentGW;
@@ -1312,6 +1322,12 @@ function renderSimPitch() {
     const xpClass = xp >= 8 ? 'high' : xp < 3 ? 'low' : '';
     const isNew = p.is_new;
     const newStyle = isNew ? 'box-shadow:0 0 16px rgba(0,230,118,.5),0 0 30px rgba(0,230,118,.2);border-color:var(--accent);' : '';
+    // Fixture info: opponent(venue) + xG + form
+    const fix = (p.fixtures || []).map(f => `${f.opponent}(${f.venue})`).join('+');
+    const fixXg = (p.fixtures || []).map(f => f.fixture_xg || 0);
+    const totalXg = fixXg.reduce((a,b)=>a+b,0).toFixed(1);
+    const formStr = (p.team_last5_form || '').split('').map(c =>
+      `<span class="form-${c}">${c}</span>`).join('');
     return `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" draggable="true"
       onclick="selectSellPlayer(${p.player_id})"
       ondblclick="event.stopPropagation();setCaptain(${p.player_id})"
@@ -1331,7 +1347,10 @@ function renderSimPitch() {
       </div>
       <div class="name" ${isNew ? 'style="color:var(--accent);"' : ''}>${p.name}</div>
       <div class="sim-xp ${xpClass}">${isCap ? displayXp + ' (C)' : xp + ' xPts'}</div>
+      ${fix ? `<div style="font-size:8px;color:rgba(255,255,255,.6);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px;">${fix}</div>` : ''}
+      ${fix ? `<div style="font-size:7px;color:rgba(255,255,255,.45);">xG:${totalXg} ${formStr}</div>` : ''}
     </div>`;
+  }
   }
 
   document.getElementById('sim-pitch').innerHTML = `<div class="sim-pitch-bg">
@@ -1523,6 +1542,68 @@ function setViceCaptain(pid) {
     target.is_vice_captain = true;
     target.is_captain = false;
   }
+  renderSimPitch();
+}
+
+function recommendBestXI() {
+  if (!MY_TEAM_DATA) return;
+  const all = [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])];
+  if (all.length < 15) return;
+
+  // Group by position
+  const byPos = {1:[], 2:[], 3:[], 4:[]};
+  all.forEach(p => { if (byPos[p.position_id]) byPos[p.position_id].push(p); });
+
+  // Sort each position by predicted_points descending
+  Object.values(byPos).forEach(arr => arr.sort((a,b) => (b.predicted_points||0) - (a.predicted_points||0)));
+
+  // FPL rules: 1 GKP, 3-5 DEF, 2-5 MID, 1-3 FWD, total = 11
+  // Try all valid formations and pick highest total xPts
+  const formations = [];
+  for (let d = 3; d <= 5; d++) {
+    for (let m = 2; m <= 5; m++) {
+      for (let f = 1; f <= 3; f++) {
+        if (1 + d + m + f === 11) formations.push([d, m, f]);
+      }
+    }
+  }
+
+  let bestXI = null, bestTotal = -1;
+  formations.forEach(([d, m, f]) => {
+    if (byPos[2].length < d || byPos[3].length < m || byPos[4].length < f) return;
+    const xi = [
+      byPos[1][0],
+      ...byPos[2].slice(0, d),
+      ...byPos[3].slice(0, m),
+      ...byPos[4].slice(0, f),
+    ];
+    const total = xi.reduce((s, p) => s + (p.predicted_points || 0), 0);
+    if (total > bestTotal) { bestTotal = total; bestXI = xi; }
+  });
+
+  if (!bestXI) return;
+
+  const xiIds = new Set(bestXI.map(p => p.player_id));
+  const newStarters = all.filter(p => xiIds.has(p.player_id));
+  const newBench = all.filter(p => !xiIds.has(p.player_id));
+
+  // Sort bench: GKP first, then by xPts desc
+  newBench.sort((a, b) => {
+    if (a.position_id === 1 && b.position_id !== 1) return -1;
+    if (a.position_id !== 1 && b.position_id === 1) return 1;
+    return (b.predicted_points || 0) - (a.predicted_points || 0);
+  });
+
+  // Preserve captain/VC; if captain is on bench, move to best starter
+  const capOnBench = newBench.find(p => p.is_captain);
+  if (capOnBench) {
+    capOnBench.is_captain = false;
+    const bestStarter = [...newStarters].sort((a,b) => (b.predicted_points||0) - (a.predicted_points||0))[0];
+    if (bestStarter) { newStarters.forEach(p => p.is_captain = false); bestStarter.is_captain = true; }
+  }
+
+  MY_TEAM_DATA.starters = newStarters;
+  MY_TEAM_DATA.bench = newBench;
   renderSimPitch();
 }
 

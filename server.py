@@ -546,6 +546,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
                         current_half = 2 if current_gw >= HALF_CUTOFF else 1
 
                         # Only count chips used in the CURRENT half
+                        # Chips used in the CURRENT GW are "active" (not locked yet)
                         used_set = set()
                         first_half_used = []
                         second_half_used = []
@@ -560,11 +561,14 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
                             else:
                                 second_half_used.append(entry)
 
+                            # Skip chips used in the current GW (they're active, not consumed)
+                            if gw == current_gw:
+                                continue
+                            # Skip the currently active chip (belt and suspenders)
+                            if active_chip and name == active_chip:
+                                continue
                             # Only mark as "used" if it's in the current half
-                            # AND it's not the currently active chip
                             if half == current_half:
-                                if active_chip and name == active_chip:
-                                    continue  # active chip is in-use, not used up
                                 used_set.add(code)
 
                         # All 4 chips available per half; check what's used in current half
