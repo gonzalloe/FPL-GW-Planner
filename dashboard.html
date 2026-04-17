@@ -543,6 +543,11 @@ input:focus, select:focus { border-color:var(--accent); }
         <h3 style="margin-bottom:12px;">📝 Planned Transfers <span id="sim-queue-count" style="color:var(--text3);font-size:12px;"></span></h3>
         <div id="sim-queue-list"><p style="color:var(--text3);font-size:12px;">Click a player on the pitch to sell, then pick a replacement.</p></div>
         <div id="sim-queue-summary" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);"></div>
+        <div id="sim-save-bar" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);text-align:center;">
+          <button class="best-xi-btn" onclick="saveSimChanges()" style="padding:8px 24px;font-size:13px;">💾 Save Changes</button>
+          <button class="btn btn-secondary" onclick="clearSimChanges()" style="margin-left:8px;font-size:12px;padding:6px 14px;">Clear All</button>
+          <span id="sim-save-status" style="margin-left:12px;font-size:11px;color:var(--accent);display:none;">✓ Saved</span>
+        </div>
       </div>
     </div>
 
@@ -1243,6 +1248,8 @@ function initSimulator() {
   const bank = MY_TEAM_DATA.gw_summary?.bank || 0;
   const budgetEl = document.getElementById('sim-budget-display');
   if (budgetEl) budgetEl.textContent = 'Bank: \u00A3' + bank + 'm';
+  // Restore any saved transfer state
+  if (TRANSFER_QUEUE.length === 0) loadSimState();
 }
 
 async function onSimGWChange() {
@@ -1958,6 +1965,64 @@ function renderTransferQueue() {
         ? `<div><span style="color:var(--red);">Hits: ${hits} (-${hits * 4} pts)</span></div>`
         : '<div style="color:var(--accent);">All FREE</div>'}
   </div>`;
+
+  // Show save bar when there are transfers
+  const saveBar = document.getElementById('sim-save-bar');
+  if (saveBar) saveBar.style.display = TRANSFER_QUEUE.length > 0 ? '' : 'none';
+}
+
+function saveSimChanges() {
+  const state = {
+    transfers: TRANSFER_QUEUE,
+    chip: document.getElementById('sim-chip-select')?.value || '',
+    gw: document.getElementById('sim-gw-select')?.value || '',
+    savedAt: new Date().toISOString(),
+  };
+  localStorage.setItem('fpl_sim_state', JSON.stringify(state));
+  const status = document.getElementById('sim-save-status');
+  if (status) {
+    status.style.display = 'inline';
+    status.textContent = '✓ Saved ' + new Date().toLocaleTimeString();
+    setTimeout(() => { status.style.display = 'none'; }, 3000);
+  }
+}
+
+function clearSimChanges() {
+  if (!confirm('Clear all planned transfers?')) return;
+  TRANSFER_QUEUE.length = 0;
+  localStorage.removeItem('fpl_sim_state');
+  // Revert squad to original
+  if (MY_TEAM_ORIGINAL) {
+    MY_TEAM_DATA.starters = JSON.parse(JSON.stringify(MY_TEAM_ORIGINAL.starters));
+    MY_TEAM_DATA.bench = JSON.parse(JSON.stringify(MY_TEAM_ORIGINAL.bench));
+  }
+  SIM_SELL_ID = null; SIM_BUY_ID = null;
+  renderSimPitch();
+  renderTransferQueue();
+  document.getElementById('sim-result').style.display = 'none';
+  const replacePanel = document.getElementById('sim-replace-panel');
+  if (replacePanel) replacePanel.style.display = 'none';
+}
+
+function loadSimState() {
+  try {
+    const raw = localStorage.getItem('fpl_sim_state');
+    if (!raw) return;
+    const state = JSON.parse(raw);
+    if (state.transfers?.length && MY_TEAM_DATA) {
+      // Re-apply saved transfers
+      state.transfers.forEach(t => {
+        TRANSFER_QUEUE.push(t);
+        applyTransferToSquadHelper(t);
+      });
+      if (state.chip) {
+        const chipSel = document.getElementById('sim-chip-select');
+        if (chipSel) chipSel.value = state.chip;
+      }
+      renderSimPitch();
+      renderTransferQueue();
+    }
+  } catch(e) { console.warn('Failed to load sim state:', e); }
 }
 
 async function loadFixtureTicker() {

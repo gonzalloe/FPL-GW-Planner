@@ -127,9 +127,9 @@ class SeasonChipPlanner:
         details = {}
 
         if chip == "BB":
-            score, reason, details = self._score_bb(gw, meta, predictions, gw_info)
+            score, reason, details = self._score_bb(gw, meta, predictions, gw_info, current_squad_ids)
         elif chip == "TC":
-            score, reason, details = self._score_tc(gw, meta, predictions)
+            score, reason, details = self._score_tc(gw, meta, predictions, current_squad_ids)
         elif chip == "FH":
             score, reason, details = self._score_fh(gw, meta, predictions, current_squad_ids)
         elif chip == "WC":
@@ -146,7 +146,7 @@ class SeasonChipPlanner:
             **details,
         }
 
-    def _score_bb(self, gw, meta, predictions, gw_info):
+    def _score_bb(self, gw, meta, predictions, gw_info, current_squad_ids=None):
         """Score Bench Boost for a GW. Best in large DGWs with strong bench."""
         score = 0
         reasons = []
@@ -158,12 +158,23 @@ class SeasonChipPlanner:
             score += min(40, dgw_count * 7)
             reasons.append(f"{dgw_count} DGW teams")
 
-            # Check bench quality if we have predictions
             if predictions:
-                optimizer = SquadOptimizer(predictions)
-                bb_squad = optimizer.optimize_squad(chip="bench_boost")
-                bench_xp = sum(p["predicted_points"] for p in bb_squad.get("bench", []))
-                bench_dgw = sum(1 for p in bb_squad.get("bench", []) if p.get("is_dgw"))
+                # If we have the user's actual squad, score their real bench
+                if current_squad_ids:
+                    pred_map = {p["player_id"]: p for p in predictions}
+                    squad_preds = [pred_map[pid] for pid in current_squad_ids if pid in pred_map]
+                    squad_preds.sort(key=lambda p: p["predicted_points"], reverse=True)
+                    # Best 11 start, rest are bench
+                    bench_preds = squad_preds[11:] if len(squad_preds) > 11 else []
+                    bench_xp = sum(p["predicted_points"] for p in bench_preds)
+                    bench_dgw = sum(1 for p in bench_preds if p.get("is_dgw"))
+                else:
+                    optimizer = SquadOptimizer(predictions)
+                    bb_squad = optimizer.optimize_squad(chip="bench_boost")
+                    bench_preds = bb_squad.get("bench", [])
+                    bench_xp = sum(p["predicted_points"] for p in bench_preds)
+                    bench_dgw = sum(1 for p in bench_preds if p.get("is_dgw"))
+
                 details["bench_xpts"] = round(bench_xp, 1)
                 details["bench_dgw_count"] = bench_dgw
 
@@ -178,7 +189,6 @@ class SeasonChipPlanner:
                     score += 20
                     reasons.append(f"{bench_dgw}/4 bench have DGW")
         else:
-            # Non-DGW BB is weak
             score += 5
             reasons.append("No DGW — BB less effective")
 
@@ -188,14 +198,21 @@ class SeasonChipPlanner:
 
         return score, " · ".join(reasons), details
 
-    def _score_tc(self, gw, meta, predictions):
+    def _score_tc(self, gw, meta, predictions, current_squad_ids=None):
         """Score Triple Captain for a GW. Best when premium has easy DGW."""
         score = 0
         reasons = []
         details = {}
 
         if predictions:
-            top = predictions[0]
+            # If we have the user's squad, find the best captain IN their squad
+            if current_squad_ids:
+                pred_map = {p["player_id"]: p for p in predictions}
+                squad_preds = [pred_map[pid] for pid in current_squad_ids if pid in pred_map]
+                squad_preds.sort(key=lambda p: p["predicted_points"], reverse=True)
+                top = squad_preds[0] if squad_preds else predictions[0]
+            else:
+                top = predictions[0]
             xp = top["predicted_points"]
             details["best_captain"] = top["name"]
             details["captain_xpts"] = round(xp, 1)
@@ -311,7 +328,7 @@ class SeasonChipPlanner:
         return score, " · ".join(reasons), details
 
     def _build_chip_sequence(self, best_gws, chips_available, gw_meta):
-        """Build a recommended chip deployment sequence avoiding conflicts."""
+        """Build a recommended chip deployment sequence — 1 chip per GW."""
         sequence = []
         used_gws = set()
 
@@ -324,10 +341,12 @@ class SeasonChipPlanner:
 
         for chip in sorted_chips:
             analysis = best_gws[chip]
-            # Find best available GW (not already used)
-            for candidate in analysis["top_3"]:
+            # Search ALL scores (sorted desc), not just top 3
+            all_sorted = sorted(analysis["all_scores"],
+                                key=lambda x: x["score"], reverse=True)
+            for candidate in all_sorted:
                 gw = candidate["gameweek"]
-                if gw not in used_gws:
+                if gw not in used_gws and candidate["score"] > 0:
                     sequence.append({
                         "chip": chip,
                         "gameweek": gw,
