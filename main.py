@@ -116,7 +116,7 @@ def main():
         "generated_at": datetime.now().isoformat(),
         "gameweek": gw,
         "gw_info": gw_info,
-        "predictions": predictions[:100],
+        "predictions": predictions,  # ALL players
         "squad": squad,
         "chip_analysis": chip_analysis,
         "top_picks": predictions[:30],

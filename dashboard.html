@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FPL Predictor v7 — AI Squad Optimizer</title>
+<title>FPL Predictor v9 — AI Squad Optimizer</title>
 <style>
 :root {
   --bg: #0a0e17; --bg2: #0f1520; --surface: #151c2c; --surface2: #1a2236; --surface3: #1f2940;
@@ -257,6 +257,52 @@ input:focus, select:focus { border-color:var(--accent); }
 /* Summary card for planner */
 .planner-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin-bottom:20px; }
 .planner-summary .stat-box .value { font-size:20px; }
+
+/* Sub-tabs */
+.mtab { display:none; } .mtab.active { display:block; }
+
+/* Transfer Simulator */
+.sim-player-card { padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:6px; cursor:pointer; transition:var(--transition); font-size:12px; }
+.sim-player-card:hover { background:var(--surface2); border-color:var(--accent); }
+.sim-player-card.selected { background:var(--accent-dim); border-color:var(--accent); }
+.sim-player-card .sim-name { font-weight:600; }
+.sim-player-card .sim-meta { color:var(--text3); font-size:11px; margin-top:2px; }
+.sim-player-card .sim-xpts { color:var(--accent); font-weight:700; float:right; }
+.sim-impact { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.sim-impact-card { background:var(--surface2); border-radius:var(--radius-sm); padding:12px; text-align:center; }
+.sim-impact-card .label { font-size:11px; color:var(--text3); text-transform:uppercase; }
+.sim-impact-card .val { font-size:22px; font-weight:700; margin:4px 0; }
+.sim-queue-item { display:flex; align-items:center; gap:12px; padding:10px; border-bottom:1px solid var(--border); font-size:12px; }
+.sim-queue-item .out { color:var(--red); flex:1; }
+.sim-queue-item .in { color:var(--accent); flex:1; }
+.sim-queue-item .gain { font-weight:700; }
+.sim-queue-item .remove-btn { color:var(--red); cursor:pointer; font-size:16px; opacity:0.6; }
+.sim-queue-item .remove-btn:hover { opacity:1; }
+
+/* Simulator pitch player */
+.sim-pitch-player { text-align:center; width:72px; cursor:pointer; transition:var(--transition); }
+.sim-pitch-player:hover { transform:scale(1.08); }
+.sim-pitch-player.selling { opacity:0.4; }
+.sim-pitch-player.selling .shirt { border-color:var(--red) !important; box-shadow:0 0 12px rgba(255,82,82,.4); }
+.sim-pitch-player .sim-xp { font-size:9px; color:rgba(255,255,255,.6); background:rgba(0,0,0,.4); padding:1px 4px; border-radius:3px; display:inline-block; margin-top:1px; }
+
+/* Chip heatmap */
+.chip-heatmap-table { font-size:11px; border-collapse:collapse; width:100%; }
+.chip-heatmap-table th { padding:6px 4px; text-align:center; background:var(--surface2); font-size:10px; color:var(--text3); position:sticky; top:0; }
+.chip-heatmap-table td { padding:4px; text-align:center; border:1px solid var(--border); min-width:36px; }
+.chip-heatmap-table td.team-label { text-align:left; font-weight:600; padding-left:8px; white-space:nowrap; min-width:40px; background:var(--surface); position:sticky; left:0; }
+.chip-heat-cell { border-radius:3px; padding:2px 4px; font-weight:600; font-size:10px; display:inline-block; min-width:28px; }
+
+/* Chip sequence timeline */
+.chip-timeline { display:flex; gap:0; overflow-x:auto; padding:12px 0; }
+.chip-tl-item { min-width:140px; padding:12px; border:1px solid var(--border); border-radius:var(--radius); margin-right:-1px; background:var(--surface); text-align:center; position:relative; }
+.chip-tl-item.active { border-color:var(--accent); box-shadow:0 0 10px rgba(0,230,118,.15); }
+.chip-tl-item .chip-tl-gw { font-size:12px; color:var(--text3); }
+.chip-tl-item .chip-tl-code { font-size:24px; font-weight:800; margin:4px 0; }
+.chip-tl-item .chip-tl-score { font-size:11px; }
+.chip-tl-item .chip-tl-reason { font-size:10px; color:var(--text3); margin-top:4px; }
+.chip-tl-connector { width:30px; display:flex; align-items:center; justify-content:center; color:var(--text3); font-size:16px; flex-shrink:0; }
+
 @keyframes loading { 0%{transform:translateX(-100%)} 50%{transform:translateX(100%)} 100%{transform:translateX(300%)} }
 </style>
 </head>
@@ -266,16 +312,19 @@ input:focus, select:focus { border-color:var(--accent); }
 <nav class="sidebar">
   <div class="sidebar-logo">
     <h1>FPL Predictor</h1>
-    <small>AI-Powered v8</small>
+    <small>AI-Powered v9</small>
   </div>
   <div class="nav-item active" data-page="overview">📊 Overview</div>
   <div class="nav-item" data-page="squad">⚽ Best Squad</div>
   <div class="nav-item" data-page="players">🏆 Players</div>
   <div class="nav-item" data-page="chips">🎯 Chip Strategy</div>
-  <div class="nav-item" data-page="myteam">👤 My Team</div>
-  <div class="nav-item" data-page="planner">📅 GW Planner</div>
+  <div class="nav-item" data-page="myteam">👤 My Team & Planner</div>
   <div style="border-top:1px solid var(--border);margin:12px 0;"></div>
   <div class="nav-item" data-page="chat" style="color:var(--accent);">🤖 AI Chat</div>
+  <div style="padding:12px 20px;font-size:10px;color:var(--text3);border-top:1px solid var(--border);margin-top:auto;">
+    <div id="refresh-status">Data: --</div>
+    <button class="btn btn-secondary" style="margin-top:6px;padding:4px 10px;font-size:10px;width:100%;" onclick="manualRefresh()">🔄 Refresh Data</button>
+  </div>
 </nav>
 
 <!-- Main content -->
@@ -307,11 +356,32 @@ input:focus, select:focus { border-color:var(--accent); }
   <div class="card"><h3 style="margin-bottom:12px;">Bench</h3><div class="tbl-wrap"><table id="tbl-bench"></table></div></div>
 </div>
 
-<!-- Chip Strategy -->
+<!-- Chip Strategy (Season-Wide) -->
 <div class="page" id="page-chips">
-  <h2>🎯 Chip Strategy — GW<span class="gw-num">--</span></h2>
+  <h2>🎯 Chip Strategy — Season Planner</h2>
+  <p style="color:var(--text3);font-size:13px;margin-bottom:16px;">Analyzes ALL remaining gameweeks to find the best time to use each chip. Considers DGWs, BGWs, fixture swings, and your squad.</p>
+
+  <!-- Current GW analysis -->
   <div id="chip-gw-info" class="card" style="margin-bottom:20px;"></div>
+
+  <!-- Season-wide: Recommended Chip Sequence -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="card-header"><h3>📅 Recommended Chip Schedule</h3>
+      <button class="btn btn-primary" onclick="loadSeasonChips()" id="chip-season-btn" style="font-size:12px;padding:6px 14px;">Analyze Season</button>
+    </div>
+    <div id="chip-sequence"><p style="color:var(--text3);font-size:13px;">Click "Analyze Season" to scan all remaining GWs for optimal chip deployment.</p></div>
+  </div>
+
+  <!-- Per-chip analysis cards -->
   <div class="chip-grid" id="chip-cards"></div>
+
+  <!-- Season heatmap -->
+  <div class="card" style="margin-top:20px;" id="chip-heatmap-card" style="display:none;">
+    <div class="card-header"><h3>🗓 Chip Score Heatmap (All GWs)</h3></div>
+    <div id="chip-heatmap" style="overflow-x:auto;"></div>
+  </div>
+
+  <!-- Guide -->
   <div class="card" style="margin-top:20px;">
     <h3 style="margin-bottom:12px;">Chip Usage Guide</h3>
     <div id="chip-guide" style="font-size:13px;color:var(--text2);line-height:1.8;"></div>
@@ -340,77 +410,140 @@ input:focus, select:focus { border-color:var(--accent); }
   <div id="players-count" style="text-align:center;padding:8px;font-size:12px;color:var(--text3);"></div>
 </div>
 
-<!-- My Team -->
+<!-- My Team & Planner (merged) -->
 <div class="page" id="page-myteam">
-  <h2>👤 My Team</h2>
+  <h2>👤 My Team & Transfer Planner</h2>
+
+  <!-- Team Import -->
   <div class="team-input">
     <input type="text" id="team-id-input" placeholder="Enter FPL Team ID...">
     <button class="btn btn-primary" onclick="loadMyTeam()">Import Team</button>
-  </div>
-  <div id="my-team-content"><p style="color:var(--text3);">Enter your FPL Team ID above. Find it at: fantasy.premierleague.com/entry/<strong>YOUR_ID</strong>/event/...</p></div>
-</div>
-
-<!-- GW Planner -->
-<div class="page" id="page-planner">
-  <h2>📅 GW Planner — Multi-Week Transfer Strategy</h2>
-  <p style="color:var(--text3);font-size:13px;margin-bottom:16px;">Plan your transfers across multiple gameweeks. The planner analyzes fixtures, predicts xPts, and recommends optimal transfers with multi-GW value consideration.</p>
-
-  <div class="planner-header">
-    <label style="font-size:13px;color:var(--text2);">Planning horizon:</label>
-    <select id="planner-horizon" onchange="loadGWPlanner()">
-      <option value="3">3 Gameweeks</option>
-      <option value="5" selected>5 Gameweeks</option>
-      <option value="8">8 Gameweeks</option>
-    </select>
-    <button class="btn btn-primary" onclick="loadGWPlanner()" id="planner-btn">Generate Plan</button>
-    <span id="planner-loading" style="display:none;color:var(--text3);font-size:12px;">
-      <span class="chat-spinner" style="width:14px;height:14px;border-width:2px;vertical-align:middle;margin-right:6px;"></span>
-      Analyzing fixtures & computing multi-GW predictions...
+    <span id="myteam-loading" style="display:none;color:var(--text3);font-size:12px;">
+      <span class="chat-spinner" style="width:14px;height:14px;border-width:2px;vertical-align:middle;margin-right:6px;"></span>Loading...
     </span>
   </div>
 
-  <!-- Summary -->
-  <div id="planner-summary" style="display:none;">
-    <div class="planner-summary" id="planner-summary-stats"></div>
+  <!-- Team Info + Tabs -->
+  <div id="myteam-content">
+    <p style="color:var(--text3);">Enter your FPL Team ID above. Find it at: fantasy.premierleague.com/entry/<strong>YOUR_ID</strong>/event/...</p>
   </div>
 
-  <!-- Timeline View -->
-  <div id="planner-timeline-wrap" style="display:none;">
-    <div class="card" style="margin-bottom:20px;">
-      <div class="card-header"><h3>📅 Transfer Timeline</h3><span id="planner-range" style="color:var(--text3);font-size:12px;"></span></div>
-      <div class="planner-timeline" id="planner-timeline"></div>
+  <!-- After team is loaded, these sections appear -->
+  <div id="myteam-loaded" style="display:none;">
+    <!-- Stats row -->
+    <div class="stats-row" id="myteam-stats"></div>
+
+    <!-- Sub-tabs -->
+    <div class="filters" style="margin-bottom:16px;">
+      <button class="filter-btn active" data-mtab="squad" onclick="switchMyTeamTab(this)">📋 My Squad</button>
+      <button class="filter-btn" data-mtab="simulator" onclick="switchMyTeamTab(this)">🔄 Transfer Simulator</button>
+      <button class="filter-btn" data-mtab="planner" onclick="switchMyTeamTab(this)">📅 GW Planner</button>
+      <button class="filter-btn" data-mtab="fixtures" onclick="switchMyTeamTab(this)">📊 Fixture Ticker</button>
     </div>
-  </div>
 
-  <!-- Fixture Ticker -->
-  <div id="planner-ticker-wrap" style="display:none;">
-    <div class="card" style="margin-bottom:20px;">
-      <div class="card-header"><h3>📊 Fixture Ticker — Team Difficulty</h3></div>
-      <div class="ticker-wrap"><table class="ticker-table" id="planner-ticker"></table></div>
+    <!-- Tab: My Squad -->
+    <div class="mtab active" id="mtab-squad">
+      <div class="card"><h3 style="margin-bottom:12px;">Starting XI</h3><div class="tbl-wrap"><table id="myteam-xi"></table></div></div>
+      <div class="card"><h3 style="margin-bottom:12px;">Bench</h3><div class="tbl-wrap"><table id="myteam-bench"></table></div></div>
+      <div class="card" id="myteam-suggestions" style="display:none;">
+        <h3 style="margin-bottom:12px;">💡 AI Transfer Suggestions</h3>
+        <div id="myteam-suggestions-list"></div>
+      </div>
     </div>
-  </div>
 
-  <!-- Fixture Rankings -->
-  <div id="planner-rankings-wrap" style="display:none;">
-    <div class="card">
-      <div class="card-header"><h3>🏆 Team Fixture Rankings</h3><span style="color:var(--text3);font-size:12px;">Ranked by average FDR (lower = easier)</span></div>
-      <div class="tbl-wrap"><table id="planner-rankings"></table></div>
+    <!-- Tab: Transfer Simulator -->
+    <div class="mtab" id="mtab-simulator" style="display:none;">
+      <!-- GW selector + chip toggle -->
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+          <label style="font-size:13px;color:var(--text2);">Target GW:</label>
+          <select id="sim-gw-select" onchange="onSimGWChange()" style="width:80px;"></select>
+          <label style="font-size:13px;color:var(--text2);margin-left:12px;">Chip:</label>
+          <select id="sim-chip-select" style="width:120px;">
+            <option value="">None</option>
+            <option value="WC">Wildcard</option>
+            <option value="FH">Free Hit</option>
+            <option value="BB">Bench Boost</option>
+            <option value="TC">Triple Captain</option>
+          </select>
+          <span style="font-size:12px;color:var(--text3);" id="sim-budget-display"></span>
+          <span style="font-size:12px;color:var(--text3);" id="sim-ft-display"></span>
+        </div>
+      </div>
+
+      <!-- FPL-style pitch view of current squad -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header"><h3>Your Squad — Click player to sell</h3><span id="sim-squad-info" style="font-size:12px;color:var(--text3);"></span></div>
+        <div class="pitch" id="sim-pitch" style="min-height:360px;"><p style="color:rgba(255,255,255,.5);text-align:center;padding-top:40px;">Import your team first</p></div>
+        <div style="padding:8px 16px;border-top:1px solid var(--border);display:flex;gap:16px;font-size:11px;color:var(--text3);">
+          <span id="sim-bench-label">Bench:</span>
+          <div id="sim-bench-row" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+        </div>
+      </div>
+
+      <!-- Search & replacement panel (shows when player selected) -->
+      <div class="card" id="sim-replace-panel" style="display:none;margin-bottom:16px;">
+        <div class="card-header">
+          <h3>🔄 Replace <span id="sim-sell-name" style="color:var(--red);"></span></h3>
+          <span id="sim-sell-info" style="font-size:12px;color:var(--text3);"></span>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <input type="text" id="sim-search" placeholder="Search player name or team..." oninput="searchReplacements()" style="flex:1;">
+          <select id="sim-pos-filter" onchange="searchReplacements()" style="width:80px;">
+            <option value="">All Pos</option><option>GKP</option><option>DEF</option><option>MID</option><option>FWD</option>
+          </select>
+        </div>
+        <div id="sim-buy-list" style="max-height:350px;overflow-y:auto;"></div>
+      </div>
+
+      <!-- Impact analysis -->
+      <div class="card" id="sim-result" style="display:none;margin-bottom:16px;">
+        <h3 style="margin-bottom:12px;">📊 Transfer Impact</h3>
+        <div id="sim-result-content"></div>
+      </div>
+
+      <!-- Transfer queue -->
+      <div class="card" id="sim-queue-card" style="margin-top:0;">
+        <h3 style="margin-bottom:12px;">📝 Planned Transfers <span id="sim-queue-count" style="color:var(--text3);font-size:12px;"></span></h3>
+        <div id="sim-queue-list"><p style="color:var(--text3);font-size:12px;">Click a player on the pitch to sell, then pick a replacement.</p></div>
+        <div id="sim-queue-summary" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);"></div>
+      </div>
     </div>
-  </div>
 
-  <!-- Detailed GW Breakdown -->
-  <div id="planner-detail-wrap" style="display:none;">
-    <div class="card">
-      <div class="card-header"><h3>📋 GW-by-GW Breakdown</h3></div>
-      <div id="planner-detail"></div>
+    <!-- Tab: GW Planner -->
+    <div class="mtab" id="mtab-planner" style="display:none;">
+      <div class="planner-header">
+        <label style="font-size:13px;color:var(--text2);">Planning horizon:</label>
+        <select id="planner-horizon" onchange="loadGWPlanner()">
+          <option value="3">3 Gameweeks</option>
+          <option value="5" selected>5 Gameweeks</option>
+          <option value="8">8 Gameweeks</option>
+        </select>
+        <button class="btn btn-primary" onclick="loadGWPlanner()" id="planner-btn">Generate Plan</button>
+        <span id="planner-loading" style="display:none;color:var(--text3);font-size:12px;">
+          <span class="chat-spinner" style="width:14px;height:14px;border-width:2px;vertical-align:middle;margin-right:6px;"></span>Analyzing...
+        </span>
+      </div>
+      <div id="planner-summary" style="display:none;"><div class="planner-summary" id="planner-summary-stats"></div></div>
+      <div id="planner-timeline-wrap" style="display:none;">
+        <div class="card" style="margin-bottom:20px;"><div class="card-header"><h3>📅 Transfer Timeline</h3><span id="planner-range" style="color:var(--text3);font-size:12px;"></span></div><div class="planner-timeline" id="planner-timeline"></div></div>
+      </div>
+      <div id="planner-detail-wrap" style="display:none;">
+        <div class="card"><div class="card-header"><h3>📋 GW-by-GW Breakdown</h3></div><div id="planner-detail"></div></div>
+      </div>
     </div>
-  </div>
 
-  <!-- No team message -->
-  <div id="planner-no-team" class="card">
-    <p style="color:var(--text3);text-align:center;padding:20px;">
-      Import your team first on the <strong style="color:var(--accent);cursor:pointer;" onclick="document.querySelector('[data-page=myteam]').click()">👤 My Team</strong> page, then come back here to plan your transfers.
-    </p>
+    <!-- Tab: Fixture Ticker -->
+    <div class="mtab" id="mtab-fixtures" style="display:none;">
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header"><h3>📊 Fixture Ticker</h3></div>
+        <div class="ticker-wrap"><table class="ticker-table" id="planner-ticker"></table></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3>🏆 Team Fixture Rankings</h3><span style="color:var(--text3);font-size:12px;">Ranked by average FDR (lower = easier)</span></div>
+        <div class="tbl-wrap"><table id="planner-rankings"></table></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -740,43 +873,39 @@ function confBar(val) {
 
 // ── Chip Strategy Page ──
 function renderChipPage(chips, gwInfo) {
-  // GW info card
   const dgwCount = Object.keys(gwInfo.dgw_teams || {}).length;
   document.getElementById('chip-gw-info').innerHTML = `
+    <h3 style="margin-bottom:8px;">Current GW${gwInfo.gameweek} Summary</h3>
     <div style="display:flex;gap:20px;flex-wrap:wrap;">
       <div><span style="color:var(--text3);font-size:12px;">Gameweek</span><br><strong style="font-size:20px;">${gwInfo.gameweek}</strong></div>
       <div><span style="color:var(--text3);font-size:12px;">Fixtures</span><br><strong style="font-size:20px;">${gwInfo.total_fixtures}</strong></div>
       <div><span style="color:var(--text3);font-size:12px;">Type</span><br><strong style="font-size:20px;color:${gwInfo.is_dgw ? 'var(--dgw)' : 'var(--text2)'};">${gwInfo.is_dgw ? 'DOUBLE GW' : 'Standard'}</strong></div>
       <div><span style="color:var(--text3);font-size:12px;">DGW Teams</span><br><strong style="font-size:20px;color:var(--dgw);">${dgwCount}</strong></div>
+      <div><span style="color:var(--text3);font-size:12px;">Best Chip (this GW)</span><br><strong style="font-size:20px;color:var(--accent);">${chips.best_chip ? chips.best_chip.code + ' (' + chips.best_chip.score + '/100)' : 'SAVE'}</strong></div>
     </div>
+    <p style="margin-top:12px;font-size:12px;color:var(--text3);">Click "Analyze Season" above to see the optimal chip deployment across ALL remaining GWs.</p>
   `;
 
-  // Chip cards
+  // Show current GW chip cards as default (will be replaced by season analysis)
   const recs = chips.recommendations || [];
-  const bestChip = chips.best_chip;
   let html = '';
   recs.forEach(rec => {
-    const isRec = bestChip && rec.chip === bestChip.chip && rec.score >= 50;
     const scoreColor = rec.score >= 70 ? 'var(--accent)' : rec.score >= 40 ? 'var(--orange)' : 'var(--text3)';
     const ringBg = rec.score >= 70 ? 'var(--accent-dim)' : rec.score >= 40 ? 'var(--orange-dim)' : 'var(--surface3)';
-    html += `<div class="chip-card ${isRec ? 'recommended' : ''}">
-      ${isRec ? '<div class="rec-label">★ RECOMMENDED</div>' : ''}
+    html += `<div class="chip-card ${rec.score >= 70 ? 'recommended' : ''}">
       <div class="chip-score"><div class="chip-score-ring" style="background:${ringBg};color:${scoreColor};">${rec.score}</div></div>
       <div class="chip-code">${rec.code}</div>
-      <div class="chip-name">${rec.name}</div>
-      <ul class="reasons">${rec.reasons.map(r => `<li>${r}</li>`).join('')}</ul>
-      ${rec.predicted_total ? `<div style="margin-top:8px;font-size:13px;color:var(--accent);font-weight:600;">Predicted: ${rec.predicted_total} pts</div>` : ''}
-      ${rec.captain_xp ? `<div style="margin-top:8px;font-size:13px;color:var(--gold);font-weight:600;">Captain: ${rec.captain} (${rec.captain_xp} xPts, +${rec.extra_points} from TC)</div>` : ''}
+      <div class="chip-name">${rec.name} (GW${gwInfo.gameweek})</div>
+      <ul class="reasons">${rec.reasons.map(r => '<li>' + r + '</li>').join('')}</ul>
     </div>`;
   });
   document.getElementById('chip-cards').innerHTML = html;
 
-  // Guide
   document.getElementById('chip-guide').innerHTML = `
-    <p><strong style="color:var(--dgw);">Bench Boost (BB):</strong> Best in a DGW when all 15 players are nailed starters with 2 fixtures. Combine with WC the week before for maximum impact.</p>
-    <p style="margin-top:8px;"><strong style="color:var(--gold);">Triple Captain (TC):</strong> Best on a DGW premium player (Haaland, Salah) with 2 easy fixtures and great form. The extra points from one elite DGW captain often exceed BB.</p>
-    <p style="margin-top:8px;"><strong style="color:var(--blue);">Free Hit (FH):</strong> Best for BGWs where many of your players blank, or a one-off DGW where you need maximum exposure without disrupting your squad.</p>
-    <p style="margin-top:8px;"><strong style="color:var(--purple);">Wildcard (WC):</strong> Use strategically 1 GW before a big DGW to build a squad loaded with DGW players, then activate BB the following week.</p>
+    <p><strong style="color:var(--dgw);">Bench Boost (BB):</strong> Best in a DGW when all 15 players are nailed starters. Combine with WC the week before.</p>
+    <p style="margin-top:8px;"><strong style="color:var(--gold);">Triple Captain (TC):</strong> Best on a DGW premium with 2 easy fixtures and great form.</p>
+    <p style="margin-top:8px;"><strong style="color:var(--blue);">Free Hit (FH):</strong> Best for BGWs where many players blank, or one-off DGW exposure.</p>
+    <p style="margin-top:8px;"><strong style="color:var(--purple);">Wildcard (WC):</strong> Use 1 GW before a big DGW to build optimal squad, then BB next week.</p>
   `;
 }
 
@@ -864,7 +993,8 @@ function filterPlayers(clickedBtn) {
   else { bannerEl.style.display = 'none'; }
 
   // Limit display
-  const maxShow = _playersMode === 'all' ? 100 : 50;
+  const hasSearch = !!search || pos || _playersStatusFilters.size > 0;
+  const maxShow = _playersMode === 'all' ? 200 : hasSearch ? 100 : 50;
   const shown = filtered.slice(0, maxShow);
   document.getElementById('tbl-players').innerHTML = playerTableHTML(shown);
   document.getElementById('players-count').textContent = `Showing ${shown.length} of ${filtered.length} players`;
@@ -882,42 +1012,487 @@ function toggleStatusFilter(btn) {
   filterPlayers();
 }
 
-// ── My Team ──
+// ── My Team (merged with planner + simulator) ──
+let MY_TEAM_DATA = null;
+let SIM_SELL_ID = null;
+let SIM_BUY_ID = null;
+let TRANSFER_QUEUE = [];
+
+function switchMyTeamTab(btn) {
+  document.querySelectorAll('#page-myteam .mtab').forEach(t => t.style.display = 'none');
+  document.querySelectorAll('#page-myteam [data-mtab]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const tab = document.getElementById('mtab-' + btn.dataset.mtab);
+  if (tab) { tab.style.display = 'block'; tab.classList.add('active'); }
+  if (btn.dataset.mtab === 'planner' && !PLANNER_DATA) loadGWPlanner();
+  if (btn.dataset.mtab === 'fixtures' && !document.getElementById('planner-ticker').innerHTML) loadFixtureTicker();
+  if (btn.dataset.mtab === 'simulator') initSimulator();
+}
+
 async function loadMyTeam() {
   const id = document.getElementById('team-id-input').value.trim();
   if (!id) return;
-  const container = document.getElementById('my-team-content');
-  container.innerHTML = '<div class="loading">Loading your team...</div>';
-  try {
-    const r = await fetch(`/api/my-team?id=${id}`);
-    const data = await r.json();
-    if (data.error) { container.innerHTML = `<div class="card"><p style="color:var(--red);">Error: ${data.error}</p></div>`; return; }
+  const content = document.getElementById('myteam-content');
+  const loaded = document.getElementById('myteam-loaded');
+  const loadingEl = document.getElementById('myteam-loading');
 
-    let html = `<div class="stats-row">
-      <div class="stat-box"><div class="label">Team</div><div class="value" style="font-size:14px;">${data.info?.name || 'Unknown'}</div></div>
-      <div class="stat-box"><div class="label">Overall Rank</div><div class="value" style="font-size:18px;">${(data.gw_summary?.overall_rank || '--').toLocaleString()}</div></div>
+  content.innerHTML = '';
+  loadingEl.style.display = '';
+
+  try {
+    const r = await fetch('/api/my-team?id=' + id);
+    const data = await r.json();
+    if (data.error) { content.innerHTML = '<div class="card"><p style="color:var(--red);">Error: ' + data.error + '</p></div>'; loadingEl.style.display = 'none'; return; }
+
+    MY_TEAM_DATA = data;
+    loadingEl.style.display = 'none';
+    content.style.display = 'none';
+    loaded.style.display = '';
+
+    // Stats
+    document.getElementById('myteam-stats').innerHTML = `
+      <div class="stat-box"><div class="label">Team</div><div class="value" style="font-size:14px;">${data.info?.name || '?'}</div></div>
+      <div class="stat-box"><div class="label">Overall Rank</div><div class="value" style="font-size:16px;">${(data.gw_summary?.overall_rank || '--').toLocaleString()}</div></div>
       <div class="stat-box"><div class="label">GW Points</div><div class="value">${data.gw_summary?.points || '--'}</div></div>
       <div class="stat-box"><div class="label">Total Points</div><div class="value">${data.gw_summary?.total_points || '--'}</div></div>
-    </div>`;
+      <div class="stat-box"><div class="label">Bank</div><div class="value">&pound;${data.gw_summary?.bank || 0}m</div></div>
+      <div class="stat-box"><div class="label">Squad Value</div><div class="value">&pound;${data.squad_value || '?'}m</div></div>
+    `;
 
-    if (data.starters?.length) {
-      html += '<div class="card"><h3 style="margin-bottom:12px;">Your Squad</h3><div class="tbl-wrap"><table>' + playerTableHTML(data.starters) + '</table></div></div>';
-    }
+    // Squad tables
+    if (data.starters?.length) document.getElementById('myteam-xi').innerHTML = playerTableHTML(data.starters);
+    if (data.bench?.length) document.getElementById('myteam-bench').innerHTML = playerTableHTML(data.bench);
+
+    // Transfer suggestions
     if (data.transfer_suggestions?.length) {
-      html += '<div class="card"><h3 style="margin-bottom:12px;">Suggested Transfers</h3>';
+      document.getElementById('myteam-suggestions').style.display = '';
+      let sugHtml = '';
       data.transfer_suggestions.forEach(t => {
-        html += `<div style="display:flex;align-items:center;gap:12px;padding:10px;border-bottom:1px solid var(--border);">
-          <div style="flex:1;text-align:right;"><strong style="color:var(--red);">${t.out.name}</strong><br><span style="font-size:11px;color:var(--text3);">${t.out.position} · £${t.out.price}m · ${t.out.predicted_points} xPts</span></div>
-          <div style="color:var(--accent);font-size:20px;">→</div>
-          <div style="flex:1;"><strong style="color:var(--accent);">${t.in.name}</strong>${t.in.is_dgw ? ' <span class="dgw-badge">DGW</span>' : ''}<br><span style="font-size:11px;color:var(--text3);">${t.in.position} · £${t.in.price}m · ${t.in.predicted_points} xPts</span></div>
+        sugHtml += `<div style="display:flex;align-items:center;gap:12px;padding:10px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="applyAISuggestion('${t.out.id}','${t.in.id}')">
+          <div style="flex:1;text-align:right;"><strong style="color:var(--red);">${t.out.name}</strong><br><span style="font-size:11px;color:var(--text3);">${t.out.position} &middot; &pound;${t.out.price}m &middot; ${t.out.predicted_points} xPts</span></div>
+          <div style="color:var(--accent);font-size:20px;">&rarr;</div>
+          <div style="flex:1;"><strong style="color:var(--accent);">${t.in.name}</strong><br><span style="font-size:11px;color:var(--text3);">${t.in.position} &middot; &pound;${t.in.price}m &middot; ${t.in.predicted_points} xPts</span></div>
           <div style="color:var(--accent);font-weight:700;">+${t.points_gain} pts</div>
         </div>`;
       });
-      html += '</div>';
+      document.getElementById('myteam-suggestions-list').innerHTML = sugHtml;
     }
-    container.innerHTML = html;
+
+    // Populate simulator sell list
+    renderSimSellList();
+
   } catch(e) {
-    container.innerHTML = `<div class="card"><p style="color:var(--red);">Error: ${e.message}</p></div>`;
+    content.innerHTML = '<div class="card"><p style="color:var(--red);">Error: ' + e.message + '</p></div>';
+    loadingEl.style.display = 'none';
+  }
+}
+
+function applyAISuggestion(outId, inId) {
+  document.querySelector('[data-mtab="simulator"]').click();
+  setTimeout(() => { selectSellPlayer(parseInt(outId)); searchReplacementById(parseInt(inId)); }, 300);
+}
+
+// ── Simulator: FPL-style pitch ──
+function initSimulator() {
+  if (!MY_TEAM_DATA) return;
+  const gwSel = document.getElementById('sim-gw-select');
+  if (gwSel && gwSel.options.length <= 1) {
+    const currentGW = DATA?.gameweek || 33;
+    gwSel.innerHTML = '';
+    for (let gw = currentGW; gw <= Math.min(currentGW + 5, 38); gw++) {
+      const opt = document.createElement('option');
+      opt.value = gw; opt.textContent = 'GW' + gw;
+      gwSel.appendChild(opt);
+    }
+  }
+  renderSimPitch();
+  const bank = MY_TEAM_DATA.gw_summary?.bank || 0;
+  const budgetEl = document.getElementById('sim-budget-display');
+  if (budgetEl) budgetEl.textContent = 'Bank: \u00A3' + bank + 'm';
+}
+
+function onSimGWChange() { renderSimPitch(); }
+
+function renderSimPitch() {
+  if (!MY_TEAM_DATA) return;
+  const starters = MY_TEAM_DATA.starters || [];
+  const bench = MY_TEAM_DATA.bench || [];
+  const groups = {1:[], 2:[], 3:[], 4:[]};
+  starters.forEach(p => { if (groups[p.position_id]) groups[p.position_id].push(p); });
+
+  function simCard(p) {
+    const posClass = p.position.toLowerCase();
+    const isSelling = SIM_SELL_ID === p.player_id;
+    const avail = p.availability || {};
+    const isDoubtful = avail.status === 'doubtful';
+    return `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" onclick="selectSellPlayer(${p.player_id})">
+      <div class="shirt ${posClass}" ${isDoubtful ? 'style="opacity:0.7;border-color:var(--orange);"' : ''}>
+        ${p.name.substring(0,3).toUpperCase()}
+        ${p.is_captain ? '<div class="captain-badge">C</div>' : ''}
+        ${p.is_dgw ? '<div class="dgw-dot"></div>' : ''}
+        ${isDoubtful ? '<div class="injury-dot">!</div>' : ''}
+      </div>
+      <div class="name">${p.name}</div>
+      <div class="sim-xp">${p.predicted_points} xPts</div>
+    </div>`;
+  }
+
+  document.getElementById('sim-pitch').innerHTML = `
+    <div class="pitch-row">${groups[4].map(simCard).join('')}</div>
+    <div class="pitch-row">${groups[3].map(simCard).join('')}</div>
+    <div class="pitch-row">${groups[2].map(simCard).join('')}</div>
+    <div class="pitch-row">${groups[1].map(simCard).join('')}</div>
+  `;
+
+  let benchHtml = '';
+  bench.forEach(p => {
+    const isSelling = SIM_SELL_ID === p.player_id;
+    benchHtml += `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" onclick="selectSellPlayer(${p.player_id})" style="transform:scale(0.85);">
+      <div class="shirt ${p.position.toLowerCase()}" style="width:36px;height:36px;font-size:10px;">${p.name.substring(0,3).toUpperCase()}</div>
+      <div class="name" style="font-size:9px;">${p.name}</div>
+      <div class="sim-xp">${p.predicted_points}</div>
+    </div>`;
+  });
+  document.getElementById('sim-bench-row').innerHTML = benchHtml;
+  document.getElementById('sim-squad-info').textContent = 'XI: ' + starters.reduce((s,p) => s + (p.predicted_points||0), 0).toFixed(1) + ' xPts';
+}
+
+function selectSellPlayer(pid) {
+  SIM_SELL_ID = pid; SIM_BUY_ID = null;
+  renderSimPitch();
+  document.getElementById('sim-result').style.display = 'none';
+  document.getElementById('sim-replace-panel').style.display = '';
+  const all = [...(MY_TEAM_DATA?.starters || []), ...(MY_TEAM_DATA?.bench || [])];
+  const p = all.find(x => x.player_id === pid);
+  if (p) {
+    document.getElementById('sim-sell-name').textContent = p.name;
+    document.getElementById('sim-sell-info').textContent = p.position + ' \u00B7 ' + p.team + ' \u00B7 \u00A3' + p.price + 'm \u00B7 ' + p.predicted_points + ' xPts';
+    document.getElementById('sim-pos-filter').value = p.position;
+  }
+  searchReplacements();
+}
+
+let _searchTimeout = null;
+function searchReplacements() {
+  clearTimeout(_searchTimeout);
+  _searchTimeout = setTimeout(async () => {
+    const query = document.getElementById('sim-search').value.trim();
+    const pos = document.getElementById('sim-pos-filter').value;
+    // Allow search with just position filter (when sell player auto-sets it)
+    if (!query && !pos && !SIM_SELL_ID) {
+      document.getElementById('sim-buy-list').innerHTML = '<p style="color:var(--text3);font-size:12px;padding:8px;">Select a player to sell, or type a name / select a position to search...</p>';
+      return;
+    }
+    // Calculate budget (sell price + bank) for affordability indicator
+    let budget = null;
+    if (SIM_SELL_ID && MY_TEAM_DATA) {
+      const all = [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])];
+      const sellP = all.find(x => x.player_id === SIM_SELL_ID);
+      const bank = MY_TEAM_DATA.gw_summary?.bank || 0;
+      if (sellP) budget = sellP.price + bank;
+    }
+    try {
+      let url = '/api/search-players?q=' + encodeURIComponent(query || '');
+      if (pos) url += '&pos=' + pos;
+      // Don't filter by price — show all, indicate affordability in UI
+      const r = await fetch(url);
+      const data = await r.json();
+      renderBuyList(data.players || [], budget);
+    } catch(e) {
+      document.getElementById('sim-buy-list').innerHTML = '<p style="color:var(--red);font-size:12px;">Search error: ' + e.message + '</p>';
+    }
+  }, 300);
+}
+
+async function searchReplacementById(inId) {
+  try {
+    const r = await fetch('/api/search-players?q=');
+    const data = await r.json();
+    const player = (data.players || []).find(p => p.player_id === inId);
+    if (player) {
+      renderBuyList([player]);
+      selectBuyPlayer(inId);
+    }
+  } catch(e) {}
+}
+
+function renderBuyList(players, budget) {
+  if (!players.length) {
+    document.getElementById('sim-buy-list').innerHTML = '<p style="color:var(--text3);font-size:12px;padding:8px;">No matching players found. Try a different search or clear the position filter.</p>';
+    return;
+  }
+  const squadIds = new Set();
+  if (MY_TEAM_DATA) {
+    [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])].forEach(p => squadIds.add(p.player_id));
+  }
+  if (SIM_SELL_ID) squadIds.delete(SIM_SELL_ID);
+  const filtered = players.filter(p => !squadIds.has(p.player_id));
+
+  let html = '';
+  filtered.forEach(p => {
+    const selected = SIM_BUY_ID === p.player_id;
+    const avail = p.availability || {};
+    const flag = avail.status === 'doubtful' ? ` <span style="color:var(--orange);">\u26A0${avail.chance||''}%</span>` : '';
+    const tier = p.starter_quality?.tier || '?';
+    const canAfford = budget == null || p.price <= budget;
+    const affordStyle = canAfford ? '' : 'opacity:0.55;';
+    const affordBadge = !canAfford ? `<span style="color:var(--red);font-size:10px;"> (need +\u00A3${(p.price - budget).toFixed(1)}m)</span>` : '';
+    html += `<div class="sim-player-card ${selected ? 'selected' : ''}" onclick="selectBuyPlayer(${p.player_id})" style="${affordStyle}">
+      <span class="sim-xpts">${p.predicted_points} xPts</span>
+      <div class="sim-name">${p.name}${flag} ${p.is_dgw ? '<span class="dgw-badge" style="font-size:8px;">DGW</span>' : ''}${affordBadge}</div>
+      <div class="sim-meta"><span class="pos-badge pos-${p.position}">${p.position}</span> ${p.team} &middot; \u00A3${p.price}m &middot; ${tier} &middot; Form: ${p.form}</div>
+      <div class="sim-meta">${renderFixtures(p.fixtures)}</div>
+    </div>`;
+  });
+  document.getElementById('sim-buy-list').innerHTML = html || '<p style="color:var(--text3);font-size:12px;padding:8px;">No available players.</p>';
+}
+
+async function selectBuyPlayer(pid) {
+  SIM_BUY_ID = pid;
+  const buyCards = document.querySelectorAll('#sim-buy-list .sim-player-card');
+  buyCards.forEach(c => c.classList.remove('selected'));
+  const card = document.querySelector('#sim-buy-list .sim-player-card[onclick*="' + pid + '"]');
+  if (card) card.classList.add('selected');
+
+  if (!SIM_SELL_ID || !SIM_BUY_ID) return;
+
+  // Run simulation
+  const resultDiv = document.getElementById('sim-result');
+  const contentDiv = document.getElementById('sim-result-content');
+  resultDiv.style.display = '';
+  contentDiv.innerHTML = '<div class="loading">Simulating transfer...</div>';
+
+  try {
+    const squadIds = [];
+    if (MY_TEAM_DATA) {
+      [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])].forEach(p => squadIds.push(p.player_id));
+    }
+    const targetGW = document.getElementById('sim-gw-select')?.value;
+    const r = await fetch('/api/simulate-transfer', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ squad_ids: squadIds, out_id: SIM_SELL_ID, in_id: SIM_BUY_ID, gw: targetGW ? parseInt(targetGW) : undefined })
+    });
+    const data = await r.json();
+    if (data.error) { contentDiv.innerHTML = '<p style="color:var(--red);">Error: ' + data.error + '</p>'; return; }
+
+    const impact = data.impact || {};
+    const gain = impact.this_gw_gain || 0;
+    const gainColor = gain >= 0 ? 'var(--accent)' : 'var(--red)';
+
+    let html = `<div class="sim-impact">
+      <div class="sim-impact-card"><div class="label">This GW Gain</div><div class="val" style="color:${gainColor};">${gain >= 0 ? '+' : ''}${gain}</div></div>
+      <div class="sim-impact-card"><div class="label">XI xPts After</div><div class="val" style="color:var(--blue);">${impact.xi_xpts_after}</div><div style="font-size:11px;color:var(--text3);">was ${impact.xi_xpts_before} (${impact.xi_gain >= 0 ? '+' : ''}${impact.xi_gain})</div></div>
+      <div class="sim-impact-card"><div class="label">Multi-GW Value</div><div class="val" style="color:var(--blue);">${data.total_multi_gw_gain >= 0 ? '+' : ''}${data.total_multi_gw_gain}</div><div style="font-size:11px;color:var(--text3);">Next 4 GWs</div></div>
+      <div class="sim-impact-card"><div class="label">Price Change</div><div class="val">${impact.price_delta >= 0 ? '+' : ''}&pound;${impact.price_delta}m</div></div>
+    </div>`;
+
+    // Multi-GW breakdown
+    if (data.multi_gw?.length) {
+      html += `<div style="margin-top:12px;"><h4 style="font-size:13px;margin-bottom:6px;">GW-by-GW Projection</h4><table style="font-size:12px;width:100%;"><thead><tr><th>GW</th><th>${data.in_player?.name || '?'} (IN)</th><th>${data.out_player?.name || '?'} (OUT)</th><th>Gain</th></tr></thead><tbody>`;
+      data.multi_gw.forEach(g => {
+        const gc = g.gain >= 0 ? 'var(--accent)' : 'var(--red)';
+        html += `<tr><td>GW${g.gw}</td><td style="color:var(--accent);">${g.in_xpts}</td><td style="color:var(--red);">${g.out_xpts}</td><td style="color:${gc};font-weight:600;">${g.gain >= 0 ? '+' : ''}${g.gain}</td></tr>`;
+      });
+      html += '</tbody></table></div>';
+    }
+
+    window._lastSimData = data;
+
+    // Add to queue button
+    html += `<div style="margin-top:12px;text-align:center;">
+      <button class="btn btn-primary" onclick="addToTransferQueue(window._lastSimData)">
+        \u2713 Add to Transfer Plan
+      </button>
+    </div>`;
+
+    contentDiv.innerHTML = html;
+  } catch(e) {
+    contentDiv.innerHTML = '<p style="color:var(--red);">Simulation error: ' + e.message + '</p>';
+  }
+}
+
+function addToTransferQueue(simData) {
+  TRANSFER_QUEUE.push({
+    out_id: simData.out_player.player_id, out_name: simData.out_player.name,
+    out_team: simData.out_player.team, out_price: simData.out_player.price,
+    in_id: simData.in_player.player_id, in_name: simData.in_player.name,
+    in_team: simData.in_player.team, in_price: simData.in_player.price,
+    gain: simData.impact.this_gw_gain, multi_gw_gain: simData.total_multi_gw_gain,
+  });
+  SIM_SELL_ID = null; SIM_BUY_ID = null;
+  document.getElementById('sim-result').style.display = 'none';
+  const replacePanel = document.getElementById('sim-replace-panel');
+  if (replacePanel) replacePanel.style.display = 'none';
+  renderSimPitch();
+  renderTransferQueue();
+}
+
+function removeFromQueue(idx) {
+  TRANSFER_QUEUE.splice(idx, 1);
+  renderTransferQueue();
+  renderSimSellList();
+}
+
+function renderTransferQueue() {
+  const list = document.getElementById('sim-queue-list');
+  const summary = document.getElementById('sim-queue-summary');
+  const count = document.getElementById('sim-queue-count');
+
+  if (!TRANSFER_QUEUE.length) {
+    list.innerHTML = '<p style="color:var(--text3);font-size:12px;">No transfers planned yet.</p>';
+    summary.style.display = 'none';
+    count.textContent = '';
+    return;
+  }
+
+  count.textContent = '(' + TRANSFER_QUEUE.length + ' transfer' + (TRANSFER_QUEUE.length > 1 ? 's' : '') + ')';
+
+  let html = '';
+  TRANSFER_QUEUE.forEach((t, i) => {
+    const gainColor = t.gain >= 0 ? 'var(--accent)' : 'var(--red)';
+    html += `<div class="sim-queue-item">
+      <div class="out"><strong>${t.out_name}</strong><br><span style="font-size:10px;">${t.out_team} &middot; &pound;${t.out_price}m</span></div>
+      <div style="color:var(--accent);font-size:16px;">&rarr;</div>
+      <div class="in"><strong>${t.in_name}</strong><br><span style="font-size:10px;">${t.in_team} &middot; &pound;${t.in_price}m</span></div>
+      <div class="gain" style="color:${gainColor};">${t.gain >= 0 ? '+' : ''}${t.gain}</div>
+      <div class="remove-btn" onclick="removeFromQueue(${i})" title="Remove">\u2715</div>
+    </div>`;
+  });
+  list.innerHTML = html;
+
+  // Summary
+  const totalGain = TRANSFER_QUEUE.reduce((s, t) => s + t.gain, 0);
+  const totalMultiGW = TRANSFER_QUEUE.reduce((s, t) => s + (t.multi_gw_gain || 0), 0);
+  const totalCost = TRANSFER_QUEUE.reduce((s, t) => s + t.in_price - t.out_price, 0);
+  const freeTransfers = 1; // Estimate
+  const hits = Math.max(0, TRANSFER_QUEUE.length - freeTransfers);
+
+  summary.style.display = '';
+  summary.innerHTML = `<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12px;">
+    <div><span style="color:var(--text3);">This GW gain:</span> <strong style="color:${totalGain >= 0 ? 'var(--accent)' : 'var(--red)'};">${totalGain >= 0 ? '+' : ''}${totalGain.toFixed(1)} xPts</strong></div>
+    <div><span style="color:var(--text3);">Multi-GW value:</span> <strong style="color:var(--blue);">${totalMultiGW >= 0 ? '+' : ''}${totalMultiGW.toFixed(1)}</strong></div>
+    <div><span style="color:var(--text3);">Net cost:</span> <strong>&pound;${totalCost.toFixed(1)}m</strong></div>
+    ${hits > 0 ? `<div><span style="color:var(--red);">Hits: ${hits} (-${hits * 4} pts)</span></div>` : '<div style="color:var(--accent);">All FREE</div>'}
+  </div>`;
+}
+
+async function loadFixtureTicker() {
+  try {
+    const r = await fetch('/api/fixture-ticker');
+    const data = await r.json();
+    if (data.error) return;
+    renderPlannerTicker({fixture_ticker: data.teams, gw_plans: Array.from({length: data.to_gw - data.from_gw + 1}, (_, i) => ({gameweek: data.from_gw + i}))});
+    // Also load rankings
+    const r2 = await fetch('/api/fixture-rankings?gws=5');
+    const rankings = await r2.json();
+    if (!rankings.error) renderPlannerRankings({fixture_ticker: data.teams, gw_plans: Array.from({length: 5}, (_, i) => ({gameweek: data.from_gw + i}))});
+  } catch(e) {}
+}
+
+// Refresh functions
+async function manualRefresh() {
+  try {
+    await fetch('/api/refresh');
+    updateRefreshStatus();
+    setTimeout(() => { location.reload(); }, 3000);
+  } catch(e) {}
+}
+
+async function updateRefreshStatus() {
+  try {
+    const r = await fetch('/api/refresh-status');
+    const s = await r.json();
+    const el = document.getElementById('refresh-status');
+    if (el && s.seconds_ago != null) {
+      const mins = Math.floor(s.seconds_ago / 60);
+      const hrs = Math.floor(mins / 60);
+      el.textContent = hrs > 0 ? `Updated ${hrs}h ${mins % 60}m ago` : `Updated ${mins}m ago`;
+    }
+  } catch(e) {}
+}
+setInterval(updateRefreshStatus, 60000);
+
+// ── Season-wide Chip Analysis ──
+async function loadSeasonChips() {
+  const btn = document.getElementById('chip-season-btn');
+  const seqDiv = document.getElementById('chip-sequence');
+  if (btn) { btn.disabled = true; btn.textContent = 'Analyzing...'; }
+  seqDiv.innerHTML = '<div class="loading">Scanning all remaining GWs...</div>';
+  try {
+    const r = await fetch('/api/season-chips');
+    const data = await r.json();
+    if (data.error) { seqDiv.innerHTML = '<p style="color:var(--red);">Error: ' + data.error + '</p>'; return; }
+    renderSeasonChips(data);
+  } catch(e) {
+    seqDiv.innerHTML = '<p style="color:var(--red);">Error: ' + e.message + '</p>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Analyze Season'; }
+  }
+}
+
+function renderSeasonChips(data) {
+  const seq = data.recommended_sequence || [];
+  const analysis = data.chip_analysis || {};
+
+  // Recommended sequence timeline
+  let seqHtml = '<div class="chip-timeline">';
+  seq.forEach((s, i) => {
+    const sc = s.score >= 70 ? 'var(--accent)' : s.score >= 40 ? 'var(--orange)' : 'var(--text3)';
+    seqHtml += `<div class="chip-tl-item ${s.score >= 70 ? 'active' : ''}">
+      <div class="chip-tl-gw">GW${s.gameweek} ${s.is_dgw ? '<span class="dgw-badge" style="font-size:8px;">DGW</span>' : ''}</div>
+      <div class="chip-tl-code" style="color:${sc};">${s.chip}</div>
+      <div class="chip-tl-score" style="color:${sc};">${s.score}/100</div>
+      <div class="chip-tl-reason">${s.reason}</div>
+    </div>`;
+    if (i < seq.length - 1) seqHtml += '<div class="chip-tl-connector">\u2192</div>';
+  });
+  seqHtml += '</div>';
+  document.getElementById('chip-sequence').innerHTML = seqHtml || '<p style="color:var(--text3);">No chips available.</p>';
+
+  // Per-chip cards with best GW + alternatives
+  let cardsHtml = '';
+  Object.entries(analysis).forEach(([chip, info]) => {
+    const bs = info.best_score;
+    const sc = bs >= 70 ? 'var(--accent)' : bs >= 40 ? 'var(--orange)' : 'var(--text3)';
+    const ringBg = bs >= 70 ? 'var(--accent-dim)' : bs >= 40 ? 'var(--orange-dim)' : 'var(--surface3)';
+    cardsHtml += `<div class="chip-card ${bs >= 70 ? 'recommended' : ''}">
+      ${bs >= 70 ? '<div class="rec-label">\u2605 BEST GW</div>' : ''}
+      <div class="chip-score"><div class="chip-score-ring" style="background:${ringBg};color:${sc};">${bs}</div></div>
+      <div class="chip-code">${chip}</div>
+      <div class="chip-name">Best: GW${info.best_gw}</div>
+      <p style="font-size:12px;color:var(--text2);margin-top:4px;">${info.best_reason}</p>`;
+    if (info.top_3?.length > 1) {
+      cardsHtml += '<div style="margin-top:8px;font-size:11px;color:var(--text3);">Alternatives:</div><ul style="font-size:11px;color:var(--text2);margin:4px 0;padding-left:16px;">';
+      info.top_3.slice(1).forEach(alt => { cardsHtml += '<li>GW' + alt.gameweek + ': ' + alt.score + '/100 \u2014 ' + alt.reason + '</li>'; });
+      cardsHtml += '</ul>';
+    }
+    cardsHtml += '</div>';
+  });
+  document.getElementById('chip-cards').innerHTML = cardsHtml;
+
+  // Heatmap
+  const chips = Object.keys(analysis);
+  if (chips.length) {
+    const allScores = analysis[chips[0]]?.all_scores || [];
+    if (allScores.length) {
+      const hmCard = document.getElementById('chip-heatmap-card');
+      if (hmCard) hmCard.style.display = '';
+      let html = '<table class="chip-heatmap-table"><thead><tr><th>Chip</th>';
+      allScores.forEach(s => { html += '<th>GW' + s.gameweek + (s.is_dgw ? '*' : '') + '</th>'; });
+      html += '</tr></thead><tbody>';
+      chips.forEach(chip => {
+        html += '<tr><td class="team-label">' + chip + '</td>';
+        (analysis[chip].all_scores || []).forEach(s => {
+          const bg = s.score >= 70 ? 'rgba(0,230,118,.3)' : s.score >= 50 ? 'rgba(255,167,38,.25)' : s.score >= 30 ? 'rgba(255,167,38,.1)' : 'transparent';
+          const cl = s.score >= 70 ? 'var(--accent)' : s.score >= 50 ? 'var(--orange)' : s.score >= 20 ? 'var(--text3)' : 'var(--surface3)';
+          html += '<td><span class="chip-heat-cell" style="background:' + bg + ';color:' + cl + ';" title="GW' + s.gameweek + ': ' + s.reason + '">' + s.score + '</span></td>';
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      document.getElementById('chip-heatmap').innerHTML = html;
+    }
   }
 }
 
@@ -1022,7 +1597,6 @@ async function loadGWPlanner() {
   const horizon = document.getElementById('planner-horizon').value;
   const btn = document.getElementById('planner-btn');
   const loading = document.getElementById('planner-loading');
-  const noTeam = document.getElementById('planner-no-team');
 
   // Check if team ID is saved
   let teamId = document.getElementById('team-id-input')?.value?.trim();
@@ -1034,13 +1608,12 @@ async function loadGWPlanner() {
     } catch(e) {}
   }
   if (!teamId) {
-    noTeam.style.display = '';
+    alert('Import your team first on the My Squad tab.');
     return;
   }
-  noTeam.style.display = 'none';
 
   btn.disabled = true;
-  loading.style.display = '';
+  if (loading) loading.style.display = '';
   btn.textContent = 'Generating...';
 
   try {
@@ -1056,7 +1629,7 @@ async function loadGWPlanner() {
     alert('Error loading planner: ' + e.message);
   } finally {
     btn.disabled = false;
-    loading.style.display = 'none';
+    if (loading) loading.style.display = 'none';
     btn.textContent = 'Generate Plan';
   }
 }
@@ -1065,9 +1638,10 @@ function renderPlanner(data) {
   const summary = data.summary || {};
   const gwPlans = data.gw_plans || [];
 
-  // Show all sections
-  ['planner-summary','planner-timeline-wrap','planner-ticker-wrap','planner-rankings-wrap','planner-detail-wrap'].forEach(id => {
-    document.getElementById(id).style.display = '';
+  // Show planner sections (within mtab-planner)
+  ['planner-summary','planner-timeline-wrap','planner-detail-wrap'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = '';
   });
 
   // Range
@@ -1085,12 +1659,6 @@ function renderPlanner(data) {
 
   // Timeline
   renderPlannerTimeline(gwPlans);
-
-  // Fixture ticker
-  renderPlannerTicker(data);
-
-  // Fixture rankings
-  renderPlannerRankings(data);
 
   // Detailed breakdown
   renderPlannerDetail(gwPlans);
@@ -1287,25 +1855,10 @@ function renderPlannerDetail(gwPlans) {
   document.getElementById('planner-detail').innerHTML = html;
 }
 
-// Auto-load planner when switching to planner page (if team ID exists)
-document.querySelector('[data-page="planner"]')?.addEventListener('click', () => {
-  if (!PLANNER_DATA) {
-    // Try auto-loading if team ID exists
-    const input = document.getElementById('team-id-input');
-    if (input && input.value.trim()) {
-      loadGWPlanner();
-    } else {
-      // Check settings
-      fetch('/api/settings').then(r => r.json()).then(s => {
-        if (s.team_id) loadGWPlanner();
-      }).catch(() => {});
-    }
-  }
-});
-
 // ── Init ──
 loadSettings();
 loadData();
+updateRefreshStatus();
 </script>
 </body>
 </html>

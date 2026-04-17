@@ -1,6 +1,6 @@
 """
-FPL Predictor - Web Server (v4)
-Serves dashboard with DGW-aware predictions, chip strategy, AI chat, and API endpoints.
+FPL Predictor - Web Server (v6)
+Auto-refresh, transfer simulator, merged My Team + GW Planner.
 """
 import json
 import http.server
@@ -12,6 +12,7 @@ import time
 import threading
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -19,6 +20,9 @@ PORT = 8888
 BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 SETTINGS_FILE = BASE_DIR / "user_settings.json"
+REFRESH_INTERVAL = 3 * 3600  # 3 hours in seconds
+_last_refresh = 0
+_refresh_lock = threading.Lock()
 
 
 def _load_settings():
@@ -57,7 +61,7 @@ def _run_predictions(gw=None):
         "generated_at": datetime.now().isoformat(),
         "gameweek": target_gw,
         "gw_info": gw_info,
-        "predictions": predictions[:100],
+        "predictions": predictions,  # ALL players — needed for full team search & transfer sim
         "squad": squad,
         "bb_squad": bb_squad,
         "chip_analysis": chip_analysis,
@@ -82,6 +86,41 @@ def _run_predictions(gw=None):
     filename.write_text(json.dumps(output, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
 
     return output
+
+
+def _refresh_data():
+    """Refresh all cached data: clear cache, re-fetch from FPL API, re-run predictions."""
+    global _last_refresh
+    with _refresh_lock:
+        try:
+            import shutil
+            cache_dir = BASE_DIR / "cache"
+            if cache_dir.exists():
+                for f in cache_dir.glob("*.json"):
+                    try:
+                        f.unlink()
+                    except Exception:
+                        pass
+            print(f"  [REFRESH] {datetime.now().strftime('%H:%M:%S')} — Clearing cache and re-fetching data...")
+            _run_predictions()
+            _last_refresh = time.time()
+            print(f"  [REFRESH] {datetime.now().strftime('%H:%M:%S')} — Data refreshed successfully.")
+        except Exception as e:
+            print(f"  [REFRESH] ERROR: {e}")
+
+
+def _auto_refresh_loop():
+    """Background thread: refreshes data every REFRESH_INTERVAL seconds."""
+    global _last_refresh
+    while True:
+        try:
+            elapsed = time.time() - _last_refresh
+            if elapsed >= REFRESH_INTERVAL:
+                _refresh_data()
+            time.sleep(60)  # Check every minute
+        except Exception as e:
+            print(f"  [AUTO-REFRESH] Error: {e}")
+            time.sleep(300)
 
 
 class FPLHandler(http.server.SimpleHTTPRequestHandler):
@@ -131,6 +170,26 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/fixture-rankings":
             num_gws = int(params.get("gws", [5])[0])
             self._serve_fixture_rankings(num_gws)
+            return
+        if path == "/api/refresh":
+            self._manual_refresh()
+            return
+        if path == "/api/refresh-status":
+            self._json_response({
+                "last_refresh": datetime.fromtimestamp(_last_refresh).isoformat() if _last_refresh else None,
+                "seconds_ago": int(time.time() - _last_refresh) if _last_refresh else None,
+                "interval_hours": REFRESH_INTERVAL / 3600,
+                "next_refresh_in": max(0, REFRESH_INTERVAL - (time.time() - _last_refresh)) if _last_refresh else 0,
+            })
+            return
+        if path == "/api/search-players":
+            query = params.get("q", [""])[0]
+            pos = params.get("pos", [None])[0]
+            max_price = params.get("max_price", [None])[0]
+            self._search_players(query, pos, float(max_price) if max_price else None)
+            return
+        if path == "/api/season-chips":
+            self._serve_season_chips()
             return
 
         if path == "/" or path == "":
@@ -206,6 +265,10 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
 
         if path == "/api/chat":
             self._handle_chat_post()
+            return
+
+        if path == "/api/simulate-transfer":
+            self._handle_simulate_transfer()
             return
 
         self._json_response({"error": "Not found"}, 404)
@@ -436,6 +499,195 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             import traceback
             self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
 
+    def _manual_refresh(self):
+        """Trigger manual data refresh."""
+        try:
+            threading.Thread(target=_refresh_data, daemon=True).start()
+            self._json_response({"ok": True, "message": "Refresh started in background"})
+        except Exception as e:
+            self._json_response({"error": str(e)}, 500)
+
+    def _serve_season_chips(self):
+        """Season-wide chip analysis — scan all remaining GWs."""
+        try:
+            from chip_planner import SeasonChipPlanner
+
+            # Get user's chips and squad if available
+            settings = _load_settings()
+            squad_ids = None
+            chips_available = ["BB", "TC", "FH", "WC"]
+            bank = 0.0
+
+            if settings.get("team_id"):
+                try:
+                    from my_team import fetch_my_team
+                    team_data = fetch_my_team(settings["team_id"])
+                    if not team_data.get("error"):
+                        picks = team_data.get("picks", [])
+                        squad_ids = [p.get("element") for p in picks]
+                        bank = team_data.get("gw_summary", {}).get("bank", 0)
+                        # Determine used chips
+                        chips_used = {c.get("name") for c in team_data.get("chips", [])}
+                        chip_map = {"bboost": "BB", "3xc": "TC", "freehit": "FH", "wildcard": "WC"}
+                        chips_available = [code for name, code in chip_map.items() if name not in chips_used]
+                except Exception:
+                    pass
+
+            planner = SeasonChipPlanner()
+            result = planner.analyze_season(
+                chips_available=chips_available,
+                current_squad_ids=squad_ids,
+                bank=bank,
+            )
+            self._json_response(result)
+        except Exception as e:
+            import traceback
+            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+
+    def _search_players(self, query, pos_filter=None, max_price=None):
+        """Search players for transfer simulator — returns matching players with predictions."""
+        try:
+            files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
+            if not files:
+                self._json_response({"players": []})
+                return
+            data = json.loads(files[0].read_text(encoding="utf-8"))
+            predictions = data.get("predictions", [])
+
+            query_lower = query.lower().strip() if query else ""
+            results = []
+            for p in predictions:
+                # Filter by search query (if provided)
+                if query_lower and not (
+                    query_lower in p.get("name", "").lower() or
+                    query_lower in p.get("full_name", "").lower() or
+                    query_lower in p.get("team", "").lower() or
+                    query_lower in p.get("team_name", "").lower()
+                ):
+                    continue
+                # Filter by position
+                if pos_filter and p.get("position") != pos_filter:
+                    continue
+                # Filter by price
+                if max_price and p.get("price", 99) > max_price:
+                    continue
+                # Skip players with 0 xPts (completely inactive)
+                if p.get("predicted_points", 0) <= 0 and p.get("minutes", 0) == 0:
+                    continue
+                results.append({
+                    "player_id": p["player_id"],
+                    "name": p["name"],
+                    "full_name": p.get("full_name", ""),
+                    "team": p["team"],
+                    "position": p["position"],
+                    "price": p.get("price", 0),
+                    "predicted_points": p.get("predicted_points", 0),
+                    "raw_xpts": p.get("raw_xpts", 0),
+                    "form": p.get("form", 0),
+                    "is_dgw": p.get("is_dgw", False),
+                    "num_fixtures": p.get("num_fixtures", 0),
+                    "fixtures": p.get("fixtures", []),
+                    "starter_quality": p.get("starter_quality", {}),
+                    "availability": p.get("availability", {}),
+                    "selected_by_percent": p.get("selected_by_percent", "0"),
+                    "news": p.get("news", ""),
+                    "team_last5_form": p.get("team_last5_form", ""),
+                    "team_season_wr": p.get("team_season_wr", 0),
+                })
+                if len(results) >= 50:
+                    break
+
+            self._json_response({"players": results, "total": len(results)})
+        except Exception as e:
+            self._json_response({"error": str(e)}, 500)
+
+    def _handle_simulate_transfer(self):
+        """Simulate a transfer: given current squad + proposed in/out, return impact analysis."""
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        try:
+            data = json.loads(body)
+            squad_ids = data.get("squad_ids", [])
+            out_id = data.get("out_id")
+            in_id = data.get("in_id")
+            target_gw = data.get("gw")
+
+            if not squad_ids or not out_id or not in_id:
+                self._json_response({"error": "Missing squad_ids, out_id, or in_id"}, 400)
+                return
+
+            from prediction_engine import PredictionEngine
+            engine = PredictionEngine()
+            gw = target_gw or engine.next_gw
+
+            # Get predictions for both players
+            pred_map = {p["player_id"]: p for p in engine.predict_all(gw)}
+            out_pred = pred_map.get(out_id, {})
+            in_pred = pred_map.get(in_id, {})
+
+            # Calculate current squad XI xPts
+            current_preds = [pred_map.get(pid, {}) for pid in squad_ids]
+            current_xi = sorted(current_preds, key=lambda x: x.get("predicted_points", 0), reverse=True)[:11]
+            current_xpts = sum(p.get("predicted_points", 0) for p in current_xi)
+
+            # Calculate post-transfer squad XI xPts
+            new_squad_ids = [pid for pid in squad_ids if pid != out_id] + [in_id]
+            new_preds = [pred_map.get(pid, {}) for pid in new_squad_ids]
+            new_xi = sorted(new_preds, key=lambda x: x.get("predicted_points", 0), reverse=True)[:11]
+            new_xpts = sum(p.get("predicted_points", 0) for p in new_xi)
+
+            # Multi-GW impact (look 3 GWs ahead)
+            multi_gw = []
+            for future_gw in range(gw, min(gw + 4, 39)):
+                future_preds = {p["player_id"]: p for p in engine.predict_all(future_gw)}
+                in_future = future_preds.get(in_id, {}).get("predicted_points", 0)
+                out_future = future_preds.get(out_id, {}).get("predicted_points", 0)
+                multi_gw.append({
+                    "gw": future_gw,
+                    "in_xpts": round(in_future, 2),
+                    "out_xpts": round(out_future, 2),
+                    "gain": round(in_future - out_future, 2),
+                })
+
+            total_multi_gw_gain = sum(g["gain"] for g in multi_gw)
+
+            self._json_response({
+                "gameweek": gw,
+                "out_player": {
+                    "player_id": out_id,
+                    "name": out_pred.get("name", "?"),
+                    "team": out_pred.get("team", "?"),
+                    "position": out_pred.get("position", "?"),
+                    "price": out_pred.get("price", 0),
+                    "predicted_points": out_pred.get("predicted_points", 0),
+                    "fixtures": out_pred.get("fixtures", []),
+                },
+                "in_player": {
+                    "player_id": in_id,
+                    "name": in_pred.get("name", "?"),
+                    "team": in_pred.get("team", "?"),
+                    "position": in_pred.get("position", "?"),
+                    "price": in_pred.get("price", 0),
+                    "predicted_points": in_pred.get("predicted_points", 0),
+                    "fixtures": in_pred.get("fixtures", []),
+                    "is_dgw": in_pred.get("is_dgw", False),
+                    "starter_quality": in_pred.get("starter_quality", {}),
+                    "form": in_pred.get("form", 0),
+                },
+                "impact": {
+                    "this_gw_gain": round(in_pred.get("predicted_points", 0) - out_pred.get("predicted_points", 0), 2),
+                    "xi_xpts_before": round(current_xpts, 1),
+                    "xi_xpts_after": round(new_xpts, 1),
+                    "xi_gain": round(new_xpts - current_xpts, 1),
+                    "price_delta": round(in_pred.get("price", 0) - out_pred.get("price", 0), 1),
+                },
+                "multi_gw": multi_gw,
+                "total_multi_gw_gain": round(total_multi_gw_gain, 2),
+            })
+        except Exception as e:
+            import traceback
+            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+
     def _json_response(self, data, code=200):
         body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(code)
@@ -451,16 +703,33 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def serve(port: int = PORT, open_browser: bool = True):
-    print(f"\n{'='*50}")
-    print(f"  FPL Predictor Server v5 (GW Planner)")
-    print(f"{'='*50}")
+    global _last_refresh
+
+    print(f"\n{'='*55}")
+    print(f"  FPL Predictor Server v6 (Auto-Refresh + Simulator)")
+    print(f"{'='*55}")
     print(f"\n  Dashboard:        http://localhost:{port}")
     print(f"  API:              http://localhost:{port}/api/predictions")
-    print(f"  GW Planner:       http://localhost:{port}/api/gw-planner?id=TEAM_ID")
-    print(f"  Fixture Ticker:   http://localhost:{port}/api/fixture-ticker")
-    print(f"  Fixture Rankings: http://localhost:{port}/api/fixture-rankings?gws=5")
+    print(f"  Simulate:         POST http://localhost:{port}/api/simulate-transfer")
+    print(f"  Search Players:   http://localhost:{port}/api/search-players?q=haaland")
+    print(f"  Refresh:          http://localhost:{port}/api/refresh")
+    print(f"  Refresh Status:   http://localhost:{port}/api/refresh-status")
+    print(f"  Auto-refresh:     Every {REFRESH_INTERVAL//3600} hours")
     print(f"  AI Chat:          POST http://localhost:{port}/api/chat")
     print(f"\n  Press Ctrl+C to stop\n")
+
+    # Mark initial data as "fresh" if predictions exist
+    files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
+    if files:
+        _last_refresh = files[0].stat().st_mtime
+        print(f"  [INFO] Using cached predictions from {datetime.fromtimestamp(_last_refresh).strftime('%Y-%m-%d %H:%M')}")
+    else:
+        print(f"  [INFO] No cached predictions — will generate on first request")
+
+    # Start auto-refresh background thread
+    refresh_thread = threading.Thread(target=_auto_refresh_loop, daemon=True)
+    refresh_thread.start()
+    print(f"  [INFO] Auto-refresh thread started (every {REFRESH_INTERVAL//3600}h)")
 
     socketserver.TCPServer.allow_reuse_address = True
 
