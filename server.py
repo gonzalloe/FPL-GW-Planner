@@ -20,7 +20,7 @@ PORT = 8888
 BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 SETTINGS_FILE = BASE_DIR / "user_settings.json"
-REFRESH_INTERVAL = 3 * 3600  # 3 hours in seconds
+REFRESH_INTERVAL = 2 * 3600  # 2 hours in seconds
 _last_refresh = 0
 _refresh_lock = threading.Lock()
 
