@@ -487,7 +487,7 @@ input:focus, select:focus { border-color:var(--accent); }
           <label style="font-size:13px;color:var(--text2);">Target GW:</label>
           <select id="sim-gw-select" onchange="onSimGWChange()" style="width:80px;"></select>
           <label style="font-size:13px;color:var(--text2);margin-left:12px;">Chip:</label>
-          <select id="sim-chip-select" style="width:120px;">
+          <select id="sim-chip-select" onchange="onChipChange()" style="width:120px;">
             <option value="">None</option>
             <option value="WC">Wildcard</option>
             <option value="FH">Free Hit</option>
@@ -1039,9 +1039,12 @@ function toggleStatusFilter(btn) {
 
 // ── My Team (merged with planner + simulator) ──
 let MY_TEAM_DATA = null;
+let MY_TEAM_ORIGINAL = null; // Pristine copy for FH revert
 let SIM_SELL_ID = null;
 let SIM_BUY_ID = null;
 let TRANSFER_QUEUE = [];
+let SIM_CURRENT_GW = null; // Currently selected GW in simulator
+let SIM_FH_GW = null; // GW where Free Hit was applied (squad reverts after)
 
 function switchMyTeamTab(btn) {
   document.querySelectorAll('#page-myteam .mtab').forEach(t => t.style.display = 'none');
@@ -1070,6 +1073,7 @@ async function loadMyTeam() {
     if (data.error) { content.innerHTML = '<div class="card"><p style="color:var(--red);">Error: ' + data.error + '</p></div>'; loadingEl.style.display = 'none'; return; }
 
     MY_TEAM_DATA = data;
+    MY_TEAM_ORIGINAL = JSON.parse(JSON.stringify(data)); // Deep copy for FH revert
     loadingEl.style.display = 'none';
     content.style.display = 'none';
     loaded.style.display = '';
@@ -1131,12 +1135,99 @@ function initSimulator() {
     }
   }
   renderSimPitch();
+  SIM_CURRENT_GW = parseInt(gwSel?.value || DATA?.gameweek || 33);
   const bank = MY_TEAM_DATA.gw_summary?.bank || 0;
   const budgetEl = document.getElementById('sim-budget-display');
   if (budgetEl) budgetEl.textContent = 'Bank: \u00A3' + bank + 'm';
 }
 
-function onSimGWChange() { renderSimPitch(); }
+async function onSimGWChange() {
+  if (!MY_TEAM_DATA) return;
+  const gwSel = document.getElementById('sim-gw-select');
+  const newGW = parseInt(gwSel.value);
+  const chipSel = document.getElementById('sim-chip-select');
+  const chip = chipSel?.value || '';
+
+  // If moving away from a FH GW, revert squad to original
+  if (SIM_FH_GW && newGW !== SIM_FH_GW) {
+    MY_TEAM_DATA.starters = JSON.parse(JSON.stringify(MY_TEAM_ORIGINAL.starters));
+    MY_TEAM_DATA.bench = JSON.parse(JSON.stringify(MY_TEAM_ORIGINAL.bench));
+    // Re-apply non-FH transfers (transfers made in other GWs)
+    TRANSFER_QUEUE.forEach(t => {
+      if (t.gw === SIM_FH_GW) return; // Skip FH-GW transfers
+      applyTransferToSquadHelper(t);
+    });
+    SIM_FH_GW = null;
+    chipSel.value = '';
+  }
+
+  SIM_CURRENT_GW = newGW;
+
+  // Fetch fresh predictions for this GW
+  const allPicks = [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])];
+  const ids = allPicks.map(p => p.player_id).join(',');
+
+  try {
+    const r = await fetch(`/api/squad-predictions?gw=${newGW}&ids=${ids}`);
+    const data = await r.json();
+    if (data.predictions) {
+      const predMap = {};
+      data.predictions.forEach(p => { predMap[p.player_id] = p; });
+
+      // Update each player's xPts and fixtures for the new GW
+      ['starters', 'bench'].forEach(key => {
+        (MY_TEAM_DATA[key] || []).forEach((p, i) => {
+          const fresh = predMap[p.player_id];
+          if (fresh) {
+            MY_TEAM_DATA[key][i].predicted_points = fresh.predicted_points;
+            MY_TEAM_DATA[key][i].raw_xpts = fresh.raw_xpts;
+            MY_TEAM_DATA[key][i].fixtures = fresh.fixtures;
+            MY_TEAM_DATA[key][i].is_dgw = fresh.is_dgw;
+            MY_TEAM_DATA[key][i].num_fixtures = fresh.num_fixtures;
+            MY_TEAM_DATA[key][i].availability = fresh.availability;
+            MY_TEAM_DATA[key][i].news = fresh.news;
+          }
+        });
+      });
+    }
+  } catch(e) {
+    console.warn('Failed to fetch GW predictions:', e);
+  }
+
+  renderSimPitch();
+}
+
+function applyTransferToSquad(t) {
+
+function onChipChange() {
+  const chip = document.getElementById('sim-chip-select')?.value || '';
+  const gw = parseInt(document.getElementById('sim-gw-select')?.value || 0);
+  if (chip === 'FH') {
+    SIM_FH_GW = gw;
+  } else if (SIM_FH_GW === gw) {
+    SIM_FH_GW = null;
+  }
+}
+
+function applyTransferToSquadHelper(t) {
+  // Helper: apply a single transfer to MY_TEAM_DATA
+  ['starters', 'bench'].forEach(key => {
+    const idx = (MY_TEAM_DATA[key] || []).findIndex(p => p.player_id === t.out_id);
+    if (idx >= 0 && t.in_player_full) {
+      const old = MY_TEAM_DATA[key][idx];
+      MY_TEAM_DATA[key][idx] = {
+        ...t.in_player_full,
+        player_id: t.in_id,
+        name: t.in_name,
+        team: t.in_team,
+        price: t.in_price,
+        is_starter: old.is_starter,
+        position_in_squad: old.position_in_squad,
+        is_new: true,
+      };
+    }
+  });
+}
 
 function renderSimPitch() {
   if (!MY_TEAM_DATA) return;
@@ -1490,14 +1581,17 @@ async function selectBuyPlayer(pid) {
 function addToTransferQueue(simData) {
   const outPlayer = simData.out_player;
   const inPlayer = simData.in_player;
+  const targetGW = simData.gameweek || SIM_CURRENT_GW;
 
   TRANSFER_QUEUE.push({
     out_id: outPlayer.player_id, out_name: outPlayer.name,
     out_team: outPlayer.team, out_price: outPlayer.price,
+    out_position_id: outPlayer.position_id || ({'GKP':1,'DEF':2,'MID':3,'FWD':4}[outPlayer.position] || 0),
     in_id: inPlayer.player_id, in_name: inPlayer.name,
     in_team: inPlayer.team, in_price: inPlayer.price,
-    in_player_full: inPlayer, // Store full data for pitch rendering
+    in_player_full: inPlayer,
     gain: simData.impact.this_gw_gain, multi_gw_gain: simData.total_multi_gw_gain,
+    gw: targetGW,
   });
 
   // Apply transfer to MY_TEAM_DATA so the pitch updates

@@ -191,6 +191,9 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/season-chips":
             self._serve_season_chips()
             return
+        if path == "/api/squad-predictions":
+            self._serve_squad_predictions(params)
+            return
 
         if path == "/" or path == "":
             self.path = "/dashboard.html"
@@ -511,13 +514,10 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         """Season-wide chip analysis — scan all remaining GWs."""
         try:
             from chip_planner import SeasonChipPlanner
-
-            # Get user's chips and squad if available
             settings = _load_settings()
             squad_ids = None
             chips_available = ["BB", "TC", "FH", "WC"]
             bank = 0.0
-
             if settings.get("team_id"):
                 try:
                     from my_team import fetch_my_team
@@ -526,13 +526,11 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
                         picks = team_data.get("picks", [])
                         squad_ids = [p.get("element") for p in picks]
                         bank = team_data.get("gw_summary", {}).get("bank", 0)
-                        # Determine used chips
                         chips_used = {c.get("name") for c in team_data.get("chips", [])}
                         chip_map = {"bboost": "BB", "3xc": "TC", "freehit": "FH", "wildcard": "WC"}
                         chips_available = [code for name, code in chip_map.items() if name not in chips_used]
                 except Exception:
                     pass
-
             planner = SeasonChipPlanner()
             result = planner.analyze_season(
                 chips_available=chips_available,
@@ -540,6 +538,48 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
                 bank=bank,
             )
             self._json_response(result)
+        except Exception as e:
+            import traceback
+            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+
+    def _serve_squad_predictions(self, params):
+        """Return predictions for specific player IDs at a target GW."""
+        try:
+            gw = int(params.get("gw", [0])[0])
+            ids_str = params.get("ids", [""])[0]
+            if not gw or not ids_str:
+                self._json_response({"error": "Need ?gw=X&ids=1,2,3"}, 400)
+                return
+            player_ids = [int(x) for x in ids_str.split(",") if x.strip()]
+            from prediction_engine import PredictionEngine
+            engine = PredictionEngine()
+            all_preds = engine.predict_all(gw)
+            pred_map = {p["player_id"]: p for p in all_preds}
+            results = []
+            for pid in player_ids:
+                pred = pred_map.get(pid)
+                if pred:
+                    results.append({
+                        "player_id": pid,
+                        "name": pred.get("name", "?"),
+                        "team": pred.get("team", "?"),
+                        "position": pred.get("position", "?"),
+                        "position_id": pred.get("position_id", 0),
+                        "price": pred.get("price", 0),
+                        "predicted_points": pred.get("predicted_points", 0),
+                        "raw_xpts": pred.get("raw_xpts", 0),
+                        "form": pred.get("form", 0),
+                        "is_dgw": pred.get("is_dgw", False),
+                        "num_fixtures": pred.get("num_fixtures", 0),
+                        "fixtures": pred.get("fixtures", []),
+                        "starter_quality": pred.get("starter_quality", {}),
+                        "availability": pred.get("availability", {}),
+                        "news": pred.get("news", ""),
+                        "team_last5_form": pred.get("team_last5_form", ""),
+                    })
+                else:
+                    results.append({"player_id": pid, "name": "?", "predicted_points": 0, "fixtures": []})
+            self._json_response({"gameweek": gw, "predictions": results})
         except Exception as e:
             import traceback
             self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
