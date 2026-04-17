@@ -1729,7 +1729,7 @@ function renderBuyList(players, budget) {
     const canAfford = budget == null || p.price <= budget;
     const affordStyle = canAfford ? '' : 'opacity:0.55;';
     const affordBadge = !canAfford ? `<span style="color:var(--red);font-size:10px;"> (need +\u00A3${(p.price - budget).toFixed(1)}m)</span>` : '';
-    html += `<div class="sim-player-card ${selected ? 'selected' : ''}" onclick="selectBuyPlayer(${p.player_id})" style="${affordStyle}">
+    html += `<div class="sim-player-card ${selected ? 'selected' : ''}" onclick="selectBuyPlayer(${p.player_id})" ondblclick="quickBuyPlayer(${p.player_id})" style="${affordStyle}cursor:pointer;" title="Click to preview · Double-click to buy">
       <span class="sim-xpts">${p.predicted_points} xPts</span>
       <div class="sim-name">${p.name}${flag} ${p.is_dgw ? '<span class="dgw-badge" style="font-size:8px;">DGW</span>' : ''}${affordBadge}</div>
       <div class="sim-meta"><span class="pos-badge pos-${p.position}">${p.position}</span> ${p.team} &middot; \u00A3${p.price}m &middot; ${tier} &middot; Form: ${p.form}</div>
@@ -1802,6 +1802,26 @@ async function selectBuyPlayer(pid) {
   } catch(e) {
     contentDiv.innerHTML = '<p style="color:var(--red);">Simulation error: ' + e.message + '</p>';
   }
+}
+
+async function quickBuyPlayer(pid) {
+  if (!SIM_SELL_ID) return;
+  SIM_BUY_ID = pid;
+  try {
+    const squadIds = [];
+    if (MY_TEAM_DATA) {
+      [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])].forEach(p => squadIds.push(p.player_id));
+    }
+    const targetGW = document.getElementById('sim-gw-select')?.value;
+    const r = await fetch('/api/simulate-transfer', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ squad_ids: squadIds, out_id: SIM_SELL_ID, in_id: pid, gw: targetGW ? parseInt(targetGW) : undefined })
+    });
+    const data = await r.json();
+    if (data.error) return;
+    addToTransferQueue(data);
+  } catch(e) {}
 }
 
 function addToTransferQueue(simData) {
