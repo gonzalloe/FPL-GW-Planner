@@ -294,7 +294,10 @@ class PredictionEngine:
                 for tid, cnt in dgw.items()
             },
             "bgw_teams": {
-                tid: self.teams.get(tid, {}).get("name", "???")
+                tid: {
+                    "name": self.teams.get(tid, {}).get("name", "???"),
+                    "short_name": self.teams.get(tid, {}).get("short_name", "???"),
+                }
                 for tid in bgw
             },
         }

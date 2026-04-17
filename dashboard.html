@@ -34,6 +34,14 @@ body { font-family:'Inter',-apple-system,'Segoe UI',sans-serif; background:var(-
 h2 { font-size:20px; margin-bottom:16px; display:flex; align-items:center; gap:10px; }
 h2 .dgw-alert { background:var(--dgw); color:#000; font-size:12px; padding:3px 10px; border-radius:12px; font-weight:700; }
 
+/* GW Hero header */
+.gw-hero { background:linear-gradient(135deg,var(--surface) 0%,var(--surface2) 100%); border:1px solid var(--border); border-radius:var(--radius); padding:20px 24px; margin-bottom:16px; }
+.gw-hero-main { display:flex; align-items:center; gap:12px; margin-bottom:4px; }
+.gw-alert-item { display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:var(--radius-sm); font-size:12px; margin-top:8px; }
+.gw-alert-dgw { background:rgba(255,167,38,.1); border:1px solid rgba(255,167,38,.3); }
+.gw-alert-bgw { background:rgba(255,82,82,.08); border:1px solid rgba(255,82,82,.25); }
+.gw-alert-normal { background:rgba(0,230,118,.06); border:1px solid rgba(0,230,118,.2); }
+
 /* Cards */
 .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:16px; }
 .card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
@@ -365,10 +373,12 @@ input:focus, select:focus { border-color:var(--accent); }
 
 <!-- Overview -->
 <div class="page active" id="page-overview">
-  <h2>GW<span id="gw-num">--</span> Overview <span id="dgw-alert-badge"></span></h2>
-  <div id="dgw-banner" style="display:none;background:var(--dgw-dim);border:1px solid var(--dgw);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;">
-    <strong style="color:var(--dgw)">⚡ DOUBLE GAMEWEEK</strong>
-    <span id="dgw-teams-text" style="color:var(--text2);font-size:13px;margin-left:8px;"></span>
+  <div id="gw-hero" class="gw-hero">
+    <div class="gw-hero-main">
+      <h2 style="margin:0;font-size:24px;font-weight:800;">GW <span id="gw-num" style="font-size:32px;">--</span> Overview</h2>
+      <span id="dgw-alert-badge"></span>
+    </div>
+    <div id="gw-alerts"></div>
   </div>
   <div class="stats-row" id="overview-stats"></div>
   <div class="card">
@@ -696,22 +706,47 @@ function render() {
   document.getElementById('gw-num').textContent = gw;
   document.querySelectorAll('.gw-num').forEach(el => el.textContent = gw);
 
-  // DGW banner
+  // DGW / BGW alerts
+  const alertsEl = document.getElementById('gw-alerts');
+  let alertsHtml = '';
+
   if (gwInfo.is_dgw) {
     document.getElementById('dgw-alert-badge').innerHTML = '<span class="dgw-alert">DOUBLE GW</span>';
-    document.getElementById('dgw-banner').style.display = 'block';
-    const teams = Object.values(gwInfo.dgw_teams || {}).map(t => t.short_name || t.name).join(', ');
-    document.getElementById('dgw-teams-text').textContent = `${Object.keys(gwInfo.dgw_teams).length} teams play twice: ${teams}`;
+    const dgwTeams = Object.values(gwInfo.dgw_teams || {});
+    const dgwNames = dgwTeams.map(t => t.short_name || t.name).join(', ');
+    alertsHtml += `<div class="gw-alert-item gw-alert-dgw">
+      <span style="font-size:16px;">⚡</span>
+      <div><strong style="color:var(--dgw);">Double Gameweek</strong> — ${dgwTeams.length} teams play twice: <span style="color:var(--text2);">${dgwNames}</span></div>
+    </div>`;
     // Add DGW badge to players nav
     const playersNav = document.querySelector('[data-page="players"]');
     if (playersNav) {
       playersNav.querySelector('.badge')?.remove();
       const badge = document.createElement('span');
       badge.className = 'badge';
-      badge.textContent = Object.keys(gwInfo.dgw_teams).length + ' DGW';
+      badge.textContent = dgwTeams.length + ' DGW';
       playersNav.appendChild(badge);
     }
   }
+
+  const bgwTeamsRaw = Object.values(gwInfo.bgw_teams || {});
+  const bgwTeams = bgwTeamsRaw.map(t => typeof t === 'object' ? (t.short_name || t.name) : t);
+  if (bgwTeams.length > 0) {
+    const bgwNames = bgwTeams.join(', ');
+    alertsHtml += `<div class="gw-alert-item gw-alert-bgw">
+      <span style="font-size:16px;">🚫</span>
+      <div><strong style="color:var(--red);">Blank Gameweek</strong> — ${bgwTeams.length} team${bgwTeams.length > 1 ? 's' : ''} not playing: <span style="color:var(--text2);">${bgwNames}</span></div>
+    </div>`;
+  }
+
+  if (!gwInfo.is_dgw && bgwTeams.length === 0) {
+    alertsHtml += `<div class="gw-alert-item gw-alert-normal">
+      <span style="font-size:16px;">✅</span>
+      <div style="color:var(--text2);">Standard gameweek — all 20 teams playing, no doubles</div>
+    </div>`;
+  }
+
+  alertsEl.innerHTML = alertsHtml;
 
   try { renderOverviewStats(squad, gwInfo, chips); } catch(e) { console.error('renderOverviewStats:', e); }
   try { renderPitch(squad); } catch(e) { console.error('renderPitch:', e); }
