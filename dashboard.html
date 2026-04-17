@@ -544,7 +544,7 @@ input:focus, select:focus { border-color:var(--accent); }
         <div id="sim-queue-list"><p style="color:var(--text3);font-size:12px;">Click a player on the pitch to sell, then pick a replacement.</p></div>
         <div id="sim-queue-summary" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);"></div>
         <div id="sim-save-bar" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);text-align:center;">
-          <button class="best-xi-btn" onclick="saveSimChanges()" style="padding:8px 24px;font-size:13px;">💾 Save Changes</button>
+          <button onclick="saveSimChanges()" style="background:linear-gradient(135deg,#42a5f5,#1e88e5);color:#fff;border:none;padding:8px 24px;border-radius:20px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(66,165,245,.3);transition:all .25s ease;letter-spacing:0.3px;" onmouseover="this.style.boxShadow='0 4px 16px rgba(66,165,245,.45)';this.style.transform='translateY(-1px)'" onmouseout="this.style.boxShadow='0 2px 8px rgba(66,165,245,.3)';this.style.transform=''">💾 Save Changes</button>
           <button class="btn btn-secondary" onclick="clearSimChanges()" style="margin-left:8px;font-size:12px;padding:6px 14px;">Clear All</button>
           <span id="sim-save-status" style="margin-left:12px;font-size:11px;color:var(--accent);display:none;">✓ Saved</span>
         </div>
