@@ -517,7 +517,9 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             settings = _load_settings()
             squad_ids = None
             chips_available = ["BB", "TC", "FH", "WC"]
+            chips_used_list = []
             bank = 0.0
+
             if settings.get("team_id"):
                 try:
                     from my_team import fetch_my_team
@@ -526,17 +528,54 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
                         picks = team_data.get("picks", [])
                         squad_ids = [p.get("element") for p in picks]
                         bank = team_data.get("gw_summary", {}).get("bank", 0)
-                        chips_used = {c.get("name") for c in team_data.get("chips", [])}
-                        chip_map = {"bboost": "BB", "3xc": "TC", "freehit": "FH", "wildcard": "WC"}
-                        chips_available = [code for name, code in chip_map.items() if name not in chips_used]
+
+                        # Parse chips used — handle FPL's chip naming
+                        raw_chips = team_data.get("chips", [])
+                        chips_used_list = raw_chips
+
+                        # FPL chip name mapping
+                        chip_name_map = {"bboost": "BB", "3xc": "TC", "freehit": "FH", "wildcard": "WC"}
+                        used_set = set()
+                        wc_count = 0
+                        for c in raw_chips:
+                            name = c.get("name", "")
+                            code = chip_name_map.get(name, name.upper())
+                            if name == "wildcard":
+                                wc_count += 1
+                            used_set.add(code)
+
+                        # FPL 25/26: 2 wildcards available (1 before GW20, 1 after)
+                        # Only mark WC as used if both have been used
+                        chips_available = []
+                        if "BB" not in used_set:
+                            chips_available.append("BB")
+                        if "TC" not in used_set:
+                            chips_available.append("TC")
+                        if "FH" not in used_set:
+                            chips_available.append("FH")
+                        if wc_count < 2:
+                            chips_available.append("WC")
                 except Exception:
                     pass
+
             planner = SeasonChipPlanner()
+
+            # Always analyze all 4 chips for educational value
+            # even if user has none left — show what WOULD be optimal
+            all_chips = ["BB", "TC", "FH", "WC"]
             result = planner.analyze_season(
-                chips_available=chips_available,
+                chips_available=all_chips,
                 current_squad_ids=squad_ids,
                 bank=bank,
             )
+
+            # Add chip status info
+            result["user_chips_available"] = chips_available
+            result["user_chips_used"] = [
+                {"name": c.get("name"), "code": {"bboost":"BB","3xc":"TC","freehit":"FH","wildcard":"WC"}.get(c.get("name",""),"?"), "gw": c.get("event")}
+                for c in chips_used_list
+            ]
+            result["all_used"] = len(chips_available) == 0
             self._json_response(result)
         except Exception as e:
             import traceback

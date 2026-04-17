@@ -1764,9 +1764,30 @@ async function loadSeasonChips() {
 function renderSeasonChips(data) {
   const seq = data.recommended_sequence || [];
   const analysis = data.chip_analysis || {};
+  const userAvailable = data.user_chips_available || [];
+  const userUsed = data.user_chips_used || [];
+  const allUsed = data.all_used || false;
+
+  // Show chip status bar
+  let statusHtml = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">';
+  const allChips = ['BB','TC','FH','WC'];
+  allChips.forEach(chip => {
+    const isAvail = userAvailable.includes(chip);
+    const usedEntry = userUsed.find(u => u.code === chip);
+    if (isAvail) {
+      statusHtml += `<div style="padding:6px 14px;border-radius:var(--radius-sm);background:var(--accent-dim);border:1px solid var(--accent);font-size:12px;"><strong style="color:var(--accent);">${chip}</strong> <span style="color:var(--text2);">Available</span></div>`;
+    } else if (usedEntry) {
+      statusHtml += `<div style="padding:6px 14px;border-radius:var(--radius-sm);background:var(--surface3);border:1px solid var(--border);font-size:12px;opacity:0.6;"><strong style="color:var(--text3);">${chip}</strong> <span style="color:var(--text3);">Used GW${usedEntry.gw}</span></div>`;
+    }
+  });
+  statusHtml += '</div>';
+
+  if (allUsed) {
+    statusHtml += '<div style="background:var(--orange-dim);border:1px solid var(--orange);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px;font-size:13px;color:var(--orange);">All chips have been used this season. Below shows what WOULD have been optimal — useful for future seasons.</div>';
+  }
 
   // Recommended sequence timeline
-  let seqHtml = '<div class="chip-timeline">';
+  let seqHtml = statusHtml + '<div class="chip-timeline">';
   seq.forEach((s, i) => {
     const sc = s.score >= 70 ? 'var(--accent)' : s.score >= 40 ? 'var(--orange)' : 'var(--text3)';
     seqHtml += `<div class="chip-tl-item ${s.score >= 70 ? 'active' : ''}">
