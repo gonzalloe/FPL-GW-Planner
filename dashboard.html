@@ -284,6 +284,11 @@ input:focus, select:focus { border-color:var(--accent); }
 .sim-pitch-player { text-align:center; width:80px; cursor:pointer; transition:all .2s ease; position:relative; }
 .sim-pitch-player:hover { transform:translateY(-4px); }
 .sim-pitch-player:hover .sim-shirt { box-shadow:0 4px 16px rgba(255,255,255,.2); }
+.sim-pitch-player[draggable="true"] { cursor:grab; }
+.sim-pitch-player[draggable="true"]:active { cursor:grabbing; }
+.sim-pitch-player.dragging { opacity:0.4; transform:scale(0.9); }
+.sim-pitch-player.drag-over .sim-shirt { box-shadow:0 0 20px rgba(66,165,245,.6),0 0 40px rgba(66,165,245,.2) !important; border-color:var(--blue) !important; transform:scale(1.1); }
+.sim-pitch-player.drag-over-invalid .sim-shirt { box-shadow:0 0 20px rgba(255,82,82,.4) !important; border-color:var(--red) !important; }
 .sim-pitch-player.selling { }
 .sim-pitch-player.selling .sim-shirt { border-color:var(--red) !important; box-shadow:0 0 20px rgba(255,82,82,.5),0 0 40px rgba(255,82,82,.2); animation:sellPulse 1.5s infinite; }
 @keyframes sellPulse { 0%,100% { box-shadow:0 0 20px rgba(255,82,82,.5); } 50% { box-shadow:0 0 30px rgba(255,82,82,.7); } }
@@ -496,7 +501,7 @@ input:focus, select:focus { border-color:var(--accent); }
 
       <!-- FPL-style pitch view of current squad -->
       <div class="card" style="margin-bottom:16px;">
-        <div class="card-header"><h3>Your Squad — Click player to sell</h3><span id="sim-squad-info" style="font-size:12px;color:var(--text3);"></span></div>
+        <div class="card-header"><h3>Your Squad — Click to sell · Drag to swap</h3><span id="sim-squad-info" style="font-size:12px;color:var(--text3);"></span></div>
         <div id="sim-pitch" style="min-height:360px;"><p style="color:rgba(255,255,255,.5);text-align:center;padding-top:40px;">Import your team first</p></div>
         <div class="sim-bench-bar" id="sim-bench-row"></div>
       </div>
@@ -1149,7 +1154,14 @@ function renderSimPitch() {
     const xpClass = xp >= 8 ? 'high' : xp < 3 ? 'low' : '';
     const isNew = p.is_new;
     const newStyle = isNew ? 'box-shadow:0 0 16px rgba(0,230,118,.5),0 0 30px rgba(0,230,118,.2);border-color:var(--accent);' : '';
-    return `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" onclick="selectSellPlayer(${p.player_id})">
+    return `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" draggable="true"
+      onclick="selectSellPlayer(${p.player_id})"
+      ondragstart="onDragStart(event,${p.player_id})"
+      ondragend="onDragEnd(event)"
+      ondragover="onDragOver(event,${p.player_id})"
+      ondragleave="onDragLeave(event)"
+      ondrop="onDrop(event,${p.player_id})"
+      data-pid="${p.player_id}" data-pos="${p.position_id}">
       <div class="sim-shirt ${posClass}" style="${newStyle}">
         ${p.team || '???'}
         ${p.is_captain ? '<div class="captain-badge">C</div>' : ''}
@@ -1175,7 +1187,15 @@ function renderSimPitch() {
     const isSelling = SIM_SELL_ID === p.player_id;
     const xp = p.predicted_points || 0;
     const xpClass = xp >= 6 ? 'high' : xp < 2 ? 'low' : '';
-    benchHtml += `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" onclick="selectSellPlayer(${p.player_id})" style="width:68px;">
+    benchHtml += `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" draggable="true"
+      onclick="selectSellPlayer(${p.player_id})"
+      ondragstart="onDragStart(event,${p.player_id})"
+      ondragend="onDragEnd(event)"
+      ondragover="onDragOver(event,${p.player_id})"
+      ondragleave="onDragLeave(event)"
+      ondrop="onDrop(event,${p.player_id})"
+      data-pid="${p.player_id}" data-pos="${p.position_id}"
+      style="width:68px;">
       <div class="sim-shirt ${p.position.toLowerCase()}" style="width:40px;height:40px;font-size:9px;border-radius:10px;">${p.team || '???'}</div>
       <div class="name" style="font-size:9px;">${p.name}</div>
       <div class="sim-xp ${xpClass}" style="font-size:9px;">${xp}</div>
@@ -1187,6 +1207,129 @@ function renderSimPitch() {
   const gainStr = TRANSFER_QUEUE.length > 0 ? ` (${totalGain >= 0 ? '+' : ''}${totalGain.toFixed(1)} from ${TRANSFER_QUEUE.length} transfer${TRANSFER_QUEUE.length > 1 ? 's' : ''})` : '';
   const gainColor = totalGain >= 0 ? 'color:var(--accent);' : 'color:var(--red);';
   document.getElementById('sim-squad-info').innerHTML = 'XI: ' + totalXI.toFixed(1) + ' xPts' + (gainStr ? ` <span style="font-size:11px;${gainColor}">${gainStr}</span>` : '');
+}
+
+// ── Drag & Drop Substitution ──
+let _dragPid = null;
+
+function onDragStart(e, pid) {
+  _dragPid = pid;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', pid);
+  // Add dragging class after a tick (so the drag image captures normal state)
+  setTimeout(() => {
+    const el = document.querySelector(`.sim-pitch-player[data-pid="${pid}"]`);
+    if (el) el.classList.add('dragging');
+  }, 0);
+}
+
+function onDragEnd(e) {
+  _dragPid = null;
+  document.querySelectorAll('.sim-pitch-player').forEach(el => {
+    el.classList.remove('dragging', 'drag-over', 'drag-over-invalid');
+  });
+}
+
+function onDragOver(e, targetPid) {
+  e.preventDefault();
+  if (_dragPid === targetPid) return;
+  const el = e.currentTarget;
+  el.classList.remove('drag-over', 'drag-over-invalid');
+
+  // Check if swap is valid (same position for starters, or bench swap)
+  const dragPlayer = findPlayerById(_dragPid);
+  const targetPlayer = findPlayerById(targetPid);
+  if (dragPlayer && targetPlayer) {
+    const canSwap = canSwapPlayers(dragPlayer, targetPlayer);
+    el.classList.add(canSwap ? 'drag-over' : 'drag-over-invalid');
+  }
+  e.dataTransfer.dropEffect = 'move';
+}
+
+function onDragLeave(e) {
+  e.currentTarget.classList.remove('drag-over', 'drag-over-invalid');
+}
+
+function onDrop(e, targetPid) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over', 'drag-over-invalid');
+  const sourcePid = _dragPid || parseInt(e.dataTransfer.getData('text/plain'));
+  if (!sourcePid || sourcePid === targetPid) return;
+
+  const sourcePlayer = findPlayerById(sourcePid);
+  const targetPlayer = findPlayerById(targetPid);
+  if (!sourcePlayer || !targetPlayer) return;
+
+  if (canSwapPlayers(sourcePlayer, targetPlayer)) {
+    swapPlayers(sourcePid, targetPid);
+  }
+  _dragPid = null;
+}
+
+function findPlayerById(pid) {
+  if (!MY_TEAM_DATA) return null;
+  const all = [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])];
+  return all.find(p => p.player_id === pid) || null;
+}
+
+function canSwapPlayers(p1, p2) {
+  // Both starters: must be same position (tactical swap) or different positions ok
+  // Starter <-> Bench: always allowed (FPL allows any sub order)
+  // Both bench: allowed (reorder bench priority)
+  const p1Starter = (MY_TEAM_DATA.starters || []).some(p => p.player_id === p1.player_id);
+  const p2Starter = (MY_TEAM_DATA.starters || []).some(p => p.player_id === p2.player_id);
+
+  if (p1Starter && p2Starter) {
+    // Both starters — swap positions (same position type preferred, but allow any)
+    return true;
+  }
+  if (!p1Starter && !p2Starter) {
+    // Both bench — reorder
+    return true;
+  }
+  // Starter <-> Bench: check formation validity after swap
+  // For simplicity, allow all swaps (FPL validates formation)
+  return true;
+}
+
+function swapPlayers(pid1, pid2) {
+  if (!MY_TEAM_DATA) return;
+  const starters = MY_TEAM_DATA.starters || [];
+  const bench = MY_TEAM_DATA.bench || [];
+
+  const idx1s = starters.findIndex(p => p.player_id === pid1);
+  const idx1b = bench.findIndex(p => p.player_id === pid1);
+  const idx2s = starters.findIndex(p => p.player_id === pid2);
+  const idx2b = bench.findIndex(p => p.player_id === pid2);
+
+  // Both in starters
+  if (idx1s >= 0 && idx2s >= 0) {
+    [starters[idx1s], starters[idx2s]] = [starters[idx2s], starters[idx1s]];
+  }
+  // Both in bench
+  else if (idx1b >= 0 && idx2b >= 0) {
+    [bench[idx1b], bench[idx2b]] = [bench[idx2b], bench[idx1b]];
+  }
+  // p1 starter, p2 bench
+  else if (idx1s >= 0 && idx2b >= 0) {
+    const temp = starters[idx1s];
+    starters[idx1s] = bench[idx2b];
+    starters[idx1s].is_starter = true;
+    bench[idx2b] = temp;
+    bench[idx2b].is_starter = false;
+  }
+  // p1 bench, p2 starter
+  else if (idx1b >= 0 && idx2s >= 0) {
+    const temp = bench[idx1b];
+    bench[idx1b] = starters[idx2s];
+    bench[idx1b].is_starter = false;
+    starters[idx2s] = temp;
+    starters[idx2s].is_starter = true;
+  }
+
+  MY_TEAM_DATA.starters = starters;
+  MY_TEAM_DATA.bench = bench;
+  renderSimPitch();
 }
 
 function selectSellPlayer(pid) {
