@@ -1286,6 +1286,8 @@ function onChipChange() {
   } else if (SIM_FH_GW === gw) {
     SIM_FH_GW = null;
   }
+  // Re-render transfer queue to update hit calculation
+  renderTransferQueue();
 }
 
 function applyTransferToSquadHelper(t) {
@@ -1884,15 +1886,22 @@ function renderTransferQueue() {
   const totalGain = TRANSFER_QUEUE.reduce((s, t) => s + t.gain, 0);
   const totalMultiGW = TRANSFER_QUEUE.reduce((s, t) => s + (t.multi_gw_gain || 0), 0);
   const totalCost = TRANSFER_QUEUE.reduce((s, t) => s + t.in_price - t.out_price, 0);
-  const freeTransfers = 1; // Estimate
+  const activeChip = document.getElementById('sim-chip-select')?.value || '';
+  const unlimitedFreeTransfers = (activeChip === 'FH' || activeChip === 'WC');
+  const freeTransfers = unlimitedFreeTransfers ? TRANSFER_QUEUE.length : 1;
   const hits = Math.max(0, TRANSFER_QUEUE.length - freeTransfers);
+  const chipLabel = activeChip === 'FH' ? 'Free Hit' : activeChip === 'WC' ? 'Wildcard' : '';
 
   summary.style.display = '';
   summary.innerHTML = `<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12px;">
     <div><span style="color:var(--text3);">This GW gain:</span> <strong style="color:${totalGain >= 0 ? 'var(--accent)' : 'var(--red)'};">${totalGain >= 0 ? '+' : ''}${totalGain.toFixed(1)} xPts</strong></div>
     <div><span style="color:var(--text3);">Multi-GW value:</span> <strong style="color:var(--blue);">${totalMultiGW >= 0 ? '+' : ''}${totalMultiGW.toFixed(1)}</strong></div>
     <div><span style="color:var(--text3);">Net cost:</span> <strong>&pound;${totalCost.toFixed(1)}m</strong></div>
-    ${hits > 0 ? `<div><span style="color:var(--red);">Hits: ${hits} (-${hits * 4} pts)</span></div>` : '<div style="color:var(--accent);">All FREE</div>'}
+    ${unlimitedFreeTransfers
+      ? `<div style="color:var(--accent);font-weight:600;">🎯 ${chipLabel} active — all transfers FREE</div>`
+      : hits > 0
+        ? `<div><span style="color:var(--red);">Hits: ${hits} (-${hits * 4} pts)</span></div>`
+        : '<div style="color:var(--accent);">All FREE</div>'}
   </div>`;
 }
 
