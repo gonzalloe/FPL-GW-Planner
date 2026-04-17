@@ -489,10 +489,6 @@ input:focus, select:focus { border-color:var(--accent); }
           <label style="font-size:13px;color:var(--text2);margin-left:12px;">Chip:</label>
           <select id="sim-chip-select" onchange="onChipChange()" style="width:120px;">
             <option value="">None</option>
-            <option value="WC">Wildcard</option>
-            <option value="FH">Free Hit</option>
-            <option value="BB">Bench Boost</option>
-            <option value="TC">Triple Captain</option>
           </select>
           <span style="font-size:12px;color:var(--text3);" id="sim-budget-display"></span>
           <span style="font-size:12px;color:var(--text3);" id="sim-ft-display"></span>
@@ -501,7 +497,7 @@ input:focus, select:focus { border-color:var(--accent); }
 
       <!-- FPL-style pitch view of current squad -->
       <div class="card" style="margin-bottom:16px;">
-        <div class="card-header"><h3>Your Squad — Click to sell · Drag to swap</h3><span id="sim-squad-info" style="font-size:12px;color:var(--text3);"></span></div>
+        <div class="card-header"><h3>Your Squad — Click to sell · Drag to swap · Double-click for Captain</h3><span id="sim-squad-info" style="font-size:12px;color:var(--text3);"></span></div>
         <div id="sim-pitch" style="min-height:360px;"><p style="color:rgba(255,255,255,.5);text-align:center;padding-top:40px;">Import your team first</p></div>
         <div class="sim-bench-bar" id="sim-bench-row"></div>
       </div>
@@ -1134,6 +1130,35 @@ function initSimulator() {
       gwSel.appendChild(opt);
     }
   }
+  // Populate chip dropdown with used/available status
+  const chipSel = document.getElementById('sim-chip-select');
+  if (chipSel) {
+    const chipsUsed = MY_TEAM_DATA.chips_used || [];
+    const chipNameMap = {'bboost':'BB','3xc':'TC','freehit':'FH','wildcard':'WC'};
+    const usedSet = new Set();
+    let wcCount = 0;
+    (Array.isArray(chipsUsed) ? chipsUsed : []).forEach(c => {
+      const name = typeof c === 'object' ? c.name : c;
+      const code = chipNameMap[name] || name;
+      if (name === 'wildcard') wcCount++;
+      usedSet.add(code);
+    });
+    const allChips = [
+      {code:'WC', name:'Wildcard', used: wcCount >= 2},
+      {code:'FH', name:'Free Hit', used: usedSet.has('FH')},
+      {code:'BB', name:'Bench Boost', used: usedSet.has('BB')},
+      {code:'TC', name:'Triple Captain', used: usedSet.has('TC')},
+    ];
+    chipSel.innerHTML = '<option value="">None</option>';
+    allChips.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.code;
+      opt.textContent = c.used ? c.name + ' (Used)' : c.name;
+      opt.disabled = c.used;
+      if (c.used) opt.style.color = '#555';
+      chipSel.appendChild(opt);
+    });
+  }
   renderSimPitch();
   SIM_CURRENT_GW = parseInt(gwSel?.value || DATA?.gameweek || 33);
   const bank = MY_TEAM_DATA.gw_summary?.bank || 0;
@@ -1147,6 +1172,9 @@ async function onSimGWChange() {
   const newGW = parseInt(gwSel.value);
   const chipSel = document.getElementById('sim-chip-select');
   const chip = chipSel?.value || '';
+
+  // Reset chip to None when changing GW
+  if (chipSel) chipSel.value = '';
 
   // If moving away from a FH GW, revert squad to original
   if (SIM_FH_GW && newGW !== SIM_FH_GW) {
@@ -1242,11 +1270,16 @@ function renderSimPitch() {
     const avail = p.availability || {};
     const isDoubtful = avail.status === 'doubtful';
     const xp = p.predicted_points || 0;
+    const isCap = p.is_captain;
+    const isVC = p.is_vice_captain;
+    const displayXp = isCap ? (xp * 2).toFixed(1) : xp;
     const xpClass = xp >= 8 ? 'high' : xp < 3 ? 'low' : '';
     const isNew = p.is_new;
     const newStyle = isNew ? 'box-shadow:0 0 16px rgba(0,230,118,.5),0 0 30px rgba(0,230,118,.2);border-color:var(--accent);' : '';
     return `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" draggable="true"
       onclick="selectSellPlayer(${p.player_id})"
+      ondblclick="event.stopPropagation();setCaptain(${p.player_id})"
+      oncontextmenu="event.preventDefault();setViceCaptain(${p.player_id})"
       ondragstart="onDragStart(event,${p.player_id})"
       ondragend="onDragEnd(event)"
       ondragover="onDragOver(event,${p.player_id})"
@@ -1255,13 +1288,13 @@ function renderSimPitch() {
       data-pid="${p.player_id}" data-pos="${p.position_id}">
       <div class="sim-shirt ${posClass}" style="${newStyle}">
         ${p.team || '???'}
-        ${p.is_captain ? '<div class="captain-badge">C</div>' : ''}
+        ${isCap ? '<div class="captain-badge">C</div>' : isVC ? '<div class="captain-badge" style="background:var(--text3);">V</div>' : ''}
         ${p.is_dgw ? '<div class="dgw-dot"></div>' : ''}
         ${isDoubtful ? '<div class="injury-dot">!</div>' : ''}
         ${isNew ? '<div style="position:absolute;bottom:-3px;right:-3px;background:var(--accent);color:#000;font-size:7px;padding:1px 3px;border-radius:3px;font-weight:800;">NEW</div>' : ''}
       </div>
       <div class="name" ${isNew ? 'style="color:var(--accent);"' : ''}>${p.name}</div>
-      <div class="sim-xp ${xpClass}">${xp} xPts</div>
+      <div class="sim-xp ${xpClass}">${isCap ? displayXp + ' (C)' : xp + ' xPts'}</div>
     </div>`;
   }
 
@@ -1293,11 +1326,13 @@ function renderSimPitch() {
     </div>`;
   });
   document.getElementById('sim-bench-row').innerHTML = benchHtml;
-  const totalXI = starters.reduce((s,p) => s + (p.predicted_points||0), 0);
+  const totalXI = starters.reduce((s,p) => s + (p.predicted_points||0) * (p.is_captain ? 2 : 1), 0);
+  const capName = starters.find(p => p.is_captain)?.name || 'None';
+  const vcName = starters.find(p => p.is_vice_captain)?.name || bench.find(p => p.is_vice_captain)?.name || 'None';
   const totalGain = TRANSFER_QUEUE.reduce((s,t) => s + (t.gain || 0), 0);
   const gainStr = TRANSFER_QUEUE.length > 0 ? ` (${totalGain >= 0 ? '+' : ''}${totalGain.toFixed(1)} from ${TRANSFER_QUEUE.length} transfer${TRANSFER_QUEUE.length > 1 ? 's' : ''})` : '';
   const gainColor = totalGain >= 0 ? 'color:var(--accent);' : 'color:var(--red);';
-  document.getElementById('sim-squad-info').innerHTML = 'XI: ' + totalXI.toFixed(1) + ' xPts' + (gainStr ? ` <span style="font-size:11px;${gainColor}">${gainStr}</span>` : '');
+  document.getElementById('sim-squad-info').innerHTML = `XI: ${totalXI.toFixed(1)} xPts (C: ${capName})` + (gainStr ? ` <span style="font-size:11px;${gainColor}">${gainStr}</span>` : '');
 }
 
 // ── Drag & Drop Substitution ──
@@ -1420,6 +1455,38 @@ function swapPlayers(pid1, pid2) {
 
   MY_TEAM_DATA.starters = starters;
   MY_TEAM_DATA.bench = bench;
+  renderSimPitch();
+}
+
+function setCaptain(pid) {
+  if (!MY_TEAM_DATA) return;
+  const allPicks = [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])];
+  // Clear old captain, set new
+  allPicks.forEach(p => {
+    if (p.is_captain && p.player_id !== pid) {
+      // Demote old captain to regular or VC
+      p.is_captain = false;
+    }
+  });
+  const target = allPicks.find(p => p.player_id === pid);
+  if (target) {
+    target.is_captain = true;
+    target.is_vice_captain = false;
+  }
+  renderSimPitch();
+}
+
+function setViceCaptain(pid) {
+  if (!MY_TEAM_DATA) return;
+  const allPicks = [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])];
+  allPicks.forEach(p => {
+    if (p.is_vice_captain && p.player_id !== pid) p.is_vice_captain = false;
+  });
+  const target = allPicks.find(p => p.player_id === pid);
+  if (target) {
+    target.is_vice_captain = true;
+    target.is_captain = false;
+  }
   renderSimPitch();
 }
 
