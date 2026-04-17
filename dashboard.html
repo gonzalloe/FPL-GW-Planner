@@ -1147,14 +1147,17 @@ function renderSimPitch() {
     const isDoubtful = avail.status === 'doubtful';
     const xp = p.predicted_points || 0;
     const xpClass = xp >= 8 ? 'high' : xp < 3 ? 'low' : '';
+    const isNew = p.is_new;
+    const newStyle = isNew ? 'box-shadow:0 0 16px rgba(0,230,118,.5),0 0 30px rgba(0,230,118,.2);border-color:var(--accent);' : '';
     return `<div class="sim-pitch-player ${isSelling ? 'selling' : ''}" onclick="selectSellPlayer(${p.player_id})">
-      <div class="sim-shirt ${posClass}">
+      <div class="sim-shirt ${posClass}" style="${newStyle}">
         ${p.name.substring(0,3).toUpperCase()}
         ${p.is_captain ? '<div class="captain-badge">C</div>' : ''}
         ${p.is_dgw ? '<div class="dgw-dot"></div>' : ''}
         ${isDoubtful ? '<div class="injury-dot">!</div>' : ''}
+        ${isNew ? '<div style="position:absolute;bottom:-3px;right:-3px;background:var(--accent);color:#000;font-size:7px;padding:1px 3px;border-radius:3px;font-weight:800;">NEW</div>' : ''}
       </div>
-      <div class="name">${p.name}</div>
+      <div class="name" ${isNew ? 'style="color:var(--accent);"' : ''}>${p.name}</div>
       <div class="sim-xp ${xpClass}">${xp} xPts</div>
     </div>`;
   }
@@ -1179,7 +1182,11 @@ function renderSimPitch() {
     </div>`;
   });
   document.getElementById('sim-bench-row').innerHTML = benchHtml;
-  document.getElementById('sim-squad-info').textContent = 'XI: ' + starters.reduce((s,p) => s + (p.predicted_points||0), 0).toFixed(1) + ' xPts';
+  const totalXI = starters.reduce((s,p) => s + (p.predicted_points||0), 0);
+  const totalGain = TRANSFER_QUEUE.reduce((s,t) => s + (t.gain || 0), 0);
+  const gainStr = TRANSFER_QUEUE.length > 0 ? ` (${totalGain >= 0 ? '+' : ''}${totalGain.toFixed(1)} from ${TRANSFER_QUEUE.length} transfer${TRANSFER_QUEUE.length > 1 ? 's' : ''})` : '';
+  const gainColor = totalGain >= 0 ? 'color:var(--accent);' : 'color:var(--red);';
+  document.getElementById('sim-squad-info').innerHTML = 'XI: ' + totalXI.toFixed(1) + ' xPts' + (gainStr ? ` <span style="font-size:11px;${gainColor}">${gainStr}</span>` : '');
 }
 
 function selectSellPlayer(pid) {
@@ -1338,13 +1345,74 @@ async function selectBuyPlayer(pid) {
 }
 
 function addToTransferQueue(simData) {
+  const outPlayer = simData.out_player;
+  const inPlayer = simData.in_player;
+
   TRANSFER_QUEUE.push({
-    out_id: simData.out_player.player_id, out_name: simData.out_player.name,
-    out_team: simData.out_player.team, out_price: simData.out_player.price,
-    in_id: simData.in_player.player_id, in_name: simData.in_player.name,
-    in_team: simData.in_player.team, in_price: simData.in_player.price,
+    out_id: outPlayer.player_id, out_name: outPlayer.name,
+    out_team: outPlayer.team, out_price: outPlayer.price,
+    in_id: inPlayer.player_id, in_name: inPlayer.name,
+    in_team: inPlayer.team, in_price: inPlayer.price,
+    in_player_full: inPlayer, // Store full data for pitch rendering
     gain: simData.impact.this_gw_gain, multi_gw_gain: simData.total_multi_gw_gain,
   });
+
+  // Apply transfer to MY_TEAM_DATA so the pitch updates
+  if (MY_TEAM_DATA) {
+    const newPlayer = {
+      player_id: inPlayer.player_id,
+      name: inPlayer.name,
+      full_name: inPlayer.name,
+      team: inPlayer.team,
+      team_name: inPlayer.team,
+      position: inPlayer.position,
+      position_id: outPlayer.position_id || ({'GKP':1,'DEF':2,'MID':3,'FWD':4}[inPlayer.position] || 0),
+      price: inPlayer.price,
+      predicted_points: inPlayer.predicted_points || 0,
+      form: inPlayer.form || 0,
+      is_dgw: inPlayer.is_dgw || false,
+      is_captain: false,
+      is_vice_captain: false,
+      starter_quality: inPlayer.starter_quality || {},
+      availability: inPlayer.availability || {status:'available'},
+      fixtures: inPlayer.fixtures || [],
+      news: '',
+      is_new: true, // Flag to highlight new signings on pitch
+    };
+
+    // Find and replace in starters or bench
+    let replaced = false;
+    ['starters','bench'].forEach(key => {
+      if (!MY_TEAM_DATA[key]) return;
+      const idx = MY_TEAM_DATA[key].findIndex(p => p.player_id === outPlayer.player_id);
+      if (idx >= 0) {
+        // Preserve position-in-squad info from the outgoing player
+        newPlayer.is_starter = MY_TEAM_DATA[key][idx].is_starter;
+        newPlayer.multiplier = MY_TEAM_DATA[key][idx].multiplier;
+        newPlayer.position_in_squad = MY_TEAM_DATA[key][idx].position_in_squad;
+        MY_TEAM_DATA[key][idx] = newPlayer;
+        replaced = true;
+      }
+    });
+
+    // Update bank
+    if (MY_TEAM_DATA.gw_summary) {
+      MY_TEAM_DATA.gw_summary.bank = (MY_TEAM_DATA.gw_summary.bank || 0) + outPlayer.price - inPlayer.price;
+    }
+
+    // Recalculate squad value and predicted points
+    const allPicks = [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])];
+    MY_TEAM_DATA.squad_value = Math.round(allPicks.reduce((s, p) => s + (p.price || 0), 0) * 10) / 10;
+    MY_TEAM_DATA.predicted_points = Math.round(
+      (MY_TEAM_DATA.starters || []).reduce((s, p) => s + (p.predicted_points || 0) * (p.is_captain ? 2 : 1), 0) * 10
+    ) / 10;
+
+    // Update stats display
+    const bank = MY_TEAM_DATA.gw_summary?.bank || 0;
+    const budgetEl = document.getElementById('sim-budget-display');
+    if (budgetEl) budgetEl.textContent = 'Bank: \u00A3' + bank.toFixed(1) + 'm';
+  }
+
   SIM_SELL_ID = null; SIM_BUY_ID = null;
   document.getElementById('sim-result').style.display = 'none';
   const replacePanel = document.getElementById('sim-replace-panel');
