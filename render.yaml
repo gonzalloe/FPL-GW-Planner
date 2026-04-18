@@ -2,12 +2,9 @@ services:
   - type: web
     name: fpl-predictor
     runtime: python
-    rootDir: fpl-predictor
     buildCommand: pip install -r requirements.txt
     startCommand: python server.py --no-browser
     envVars:
-      - key: PORT
-        value: 8888
       - key: PYTHON_VERSION
         value: "3.12.0"
     plan: free
