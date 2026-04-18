@@ -362,6 +362,7 @@ input:focus, select:focus { border-color:var(--accent); }
   <div class="nav-item" data-page="myteam">👤 My Team & Planner</div>
   <div style="border-top:1px solid var(--border);margin:12px 0;"></div>
   <div class="nav-item" data-page="chat" style="color:var(--accent);">🤖 AI Chat</div>
+  <div class="nav-item" data-page="admin" id="nav-admin" style="display:none;color:var(--gold);">🛡️ Admin</div>
   <div style="padding:12px 20px;font-size:10px;color:var(--text3);border-top:1px solid var(--border);margin-top:auto;">
     <div id="refresh-status">Data: --</div>
     <button class="btn btn-secondary" style="margin-top:6px;padding:4px 10px;font-size:10px;width:100%;" onclick="manualRefresh()">🔄 Refresh Data</button>
@@ -624,6 +625,37 @@ input:focus, select:focus { border-color:var(--accent); }
   🤖
 </div>
 
+<!-- Admin Dashboard (admin only) -->
+<div class="page" id="page-admin" style="display:none;">
+  <h2>🛡️ Admin Dashboard</h2>
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-header"><h3>User Management</h3><button class="btn btn-primary" onclick="loadAdminUsers()" style="font-size:12px;padding:6px 14px;">Refresh</button></div>
+    <div id="admin-stats" style="display:flex;gap:16px;margin-bottom:12px;font-size:13px;color:var(--text2);"></div>
+    <div class="tbl-wrap"><table id="admin-users-table"></table></div>
+  </div>
+  <div class="card">
+    <h3 style="margin-bottom:12px;">Quick Actions</h3>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:250px;">
+        <label style="font-size:12px;color:var(--text3);display:block;margin-bottom:4px;">Upgrade user to Premium</label>
+        <div style="display:flex;gap:6px;">
+          <input type="email" id="admin-upgrade-email" placeholder="user@email.com" style="flex:1;">
+          <select id="admin-upgrade-months" style="width:80px;"><option value="1">1 mo</option><option value="3">3 mo</option><option value="6">6 mo</option><option value="12">1 year</option><option value="999">Forever</option></select>
+          <button class="btn btn-primary" onclick="adminSetPlan()" style="font-size:12px;">Upgrade</button>
+        </div>
+      </div>
+      <div style="flex:1;min-width:250px;">
+        <label style="font-size:12px;color:var(--text3);display:block;margin-bottom:4px;">Downgrade / Remove user</label>
+        <div style="display:flex;gap:6px;">
+          <input type="email" id="admin-action-email" placeholder="user@email.com" style="flex:1;">
+          <button class="btn btn-secondary" onclick="adminDowngrade()" style="font-size:12px;">→ Free</button>
+          <button onclick="adminDeleteUser()" style="font-size:12px;padding:6px 12px;border-radius:6px;background:var(--red);color:#fff;border:none;cursor:pointer;">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 </div><!-- /main -->
 
 <!-- Auth Modal (Login/Register) -->
@@ -772,8 +804,13 @@ function onAuthSuccess() {
     sidebar.appendChild(bar);
   }
   // Show premium banner for free users
-  if (AUTH_USER.plan !== 'premium') {
+  if (AUTH_USER.plan !== 'premium' && AUTH_USER.plan !== 'admin') {
     document.getElementById('premium-banner').style.display = '';
+  }
+  // Show admin nav for admin users
+  if (AUTH_USER.plan === 'admin' || AUTH_USER.limits?.is_admin) {
+    const adminNav = document.getElementById('nav-admin');
+    if (adminNav) adminNav.style.display = '';
   }
 }
 
@@ -795,6 +832,100 @@ async function upgradeToPremium() {
   } catch(e) { alert('Connection error'); }
 }
 
+// ── Admin Functions ──
+async function loadAdminUsers() {
+  try {
+    const r = await fetch('/api/admin/users', {method: 'POST', headers: authHeaders()});
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+
+    const users = d.users || [];
+    const stats = document.getElementById('admin-stats');
+    const free = users.filter(u => u.plan === 'free').length;
+    const premium = users.filter(u => u.plan === 'premium').length;
+    const admin = users.filter(u => u.plan === 'admin').length;
+    stats.innerHTML = `<span>Total: <strong>${d.total}</strong></span>
+      <span style="color:var(--text3);">Free: ${free}</span>
+      <span style="color:var(--accent);">Premium: ${premium}</span>
+      <span style="color:var(--gold);">Admin: ${admin}</span>`;
+
+    let html = '<thead><tr><th>Email</th><th>Name</th><th>Plan</th><th>Expires</th><th>Team ID</th><th>Created</th><th>Actions</th></tr></thead><tbody>';
+    users.forEach(u => {
+      const planColor = u.plan === 'admin' ? 'var(--gold)' : u.plan === 'premium' ? 'var(--accent)' : 'var(--text3)';
+      const expires = u.plan_expires ? new Date(u.plan_expires).toLocaleDateString() : '-';
+      const created = u.created_at ? new Date(u.created_at).toLocaleDateString() : '-';
+      html += `<tr>
+        <td style="font-size:11px;">${u.email}</td>
+        <td>${u.name || '-'}</td>
+        <td><span style="color:${planColor};font-weight:600;">${u.plan.toUpperCase()}</span></td>
+        <td style="font-size:11px;">${expires}</td>
+        <td>${u.team_id || '-'}</td>
+        <td style="font-size:11px;">${created}</td>
+        <td>
+          ${u.plan !== 'admin' ? `<button onclick="adminQuickUpgrade('${u.email}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--accent);color:#000;border:none;cursor:pointer;">→PRO</button>
+          <button onclick="adminQuickFree('${u.email}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--surface3);color:var(--text2);border:1px solid var(--border);cursor:pointer;">→Free</button>
+          <button onclick="adminQuickDelete('${u.email}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--red);color:#fff;border:none;cursor:pointer;">Del</button>` : '<span style="font-size:10px;color:var(--gold);">Owner</span>'}
+        </td>
+      </tr>`;
+    });
+    html += '</tbody>';
+    document.getElementById('admin-users-table').innerHTML = html;
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function adminSetPlan() {
+  const email = document.getElementById('admin-upgrade-email').value.trim();
+  const months = parseInt(document.getElementById('admin-upgrade-months').value);
+  if (!email) { alert('Enter email'); return; }
+  try {
+    const r = await fetch('/api/admin/set-plan', {method:'POST', headers:authHeaders(), body:JSON.stringify({email, plan:'premium', months})});
+    const d = await r.json();
+    alert(d.ok ? 'Upgraded!' : (d.error || 'Failed'));
+    if (d.ok) loadAdminUsers();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function adminDowngrade() {
+  const email = document.getElementById('admin-action-email').value.trim();
+  if (!email) { alert('Enter email'); return; }
+  try {
+    const r = await fetch('/api/admin/set-plan', {method:'POST', headers:authHeaders(), body:JSON.stringify({email, plan:'free'})});
+    const d = await r.json();
+    alert(d.ok ? 'Downgraded to Free' : (d.error || 'Failed'));
+    if (d.ok) loadAdminUsers();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function adminDeleteUser() {
+  const email = document.getElementById('admin-action-email').value.trim();
+  if (!email || !confirm('Delete user ' + email + '?')) return;
+  try {
+    const r = await fetch('/api/admin/delete-user', {method:'POST', headers:authHeaders(), body:JSON.stringify({email})});
+    const d = await r.json();
+    alert(d.ok ? 'Deleted' : (d.error || 'Failed'));
+    if (d.ok) loadAdminUsers();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function adminQuickUpgrade(email) {
+  const r = await fetch('/api/admin/set-plan', {method:'POST', headers:authHeaders(), body:JSON.stringify({email, plan:'premium', months:999})});
+  const d = await r.json();
+  if (d.ok) loadAdminUsers();
+}
+
+async function adminQuickFree(email) {
+  const r = await fetch('/api/admin/set-plan', {method:'POST', headers:authHeaders(), body:JSON.stringify({email, plan:'free'})});
+  const d = await r.json();
+  if (d.ok) loadAdminUsers();
+}
+
+async function adminQuickDelete(email) {
+  if (!confirm('Delete ' + email + '?')) return;
+  const r = await fetch('/api/admin/delete-user', {method:'POST', headers:authHeaders(), body:JSON.stringify({email})});
+  const d = await r.json();
+  if (d.ok) loadAdminUsers();
+}
+
 // Check auth on page load
 checkAuth();
 
@@ -809,6 +940,8 @@ document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.add('active');
     const page = document.getElementById('page-' + el.dataset.page);
     if (page) page.classList.add('active');
+    // Auto-load admin data
+    if (el.dataset.page === 'admin') loadAdminUsers();
   });
 });
 

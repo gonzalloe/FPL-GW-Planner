@@ -912,12 +912,16 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
                 self._json_response({"error": "Missing squad_ids, out_id, or in_id"}, 400)
                 return
 
-            from prediction_engine import PredictionEngine
-            engine = PredictionEngine()
-            gw = target_gw or engine.next_gw
+            # Use cached predictions for current GW (fast) instead of running predict_all
+            files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
+            if files:
+                cached = json.loads(files[0].read_text(encoding="utf-8"))
+                pred_map = {p["player_id"]: p for p in cached.get("predictions", [])}
+            else:
+                from prediction_engine import PredictionEngine
+                engine = PredictionEngine()
+                pred_map = {p["player_id"]: p for p in engine.predict_all(target_gw)}
 
-            # Get predictions for both players
-            pred_map = {p["player_id"]: p for p in engine.predict_all(gw)}
             out_pred = pred_map.get(out_id, {})
             in_pred = pred_map.get(in_id, {})
 
@@ -932,12 +936,24 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             new_xi = sorted(new_preds, key=lambda x: x.get("predicted_points", 0), reverse=True)[:11]
             new_xpts = sum(p.get("predicted_points", 0) for p in new_xi)
 
-            # Multi-GW impact (look 3 GWs ahead)
+            # Multi-GW impact — only predict the 2 relevant players for future GWs (fast)
             multi_gw = []
+            from prediction_engine import PredictionEngine
+            engine = PredictionEngine()
+            gw = target_gw or engine.next_gw
+
             for future_gw in range(gw, min(gw + 4, 39)):
-                future_preds = {p["player_id"]: p for p in engine.predict_all(future_gw)}
-                in_future = future_preds.get(in_id, {}).get("predicted_points", 0)
-                out_future = future_preds.get(out_id, {}).get("predicted_points", 0)
+                if future_gw == gw:
+                    # Current GW — use cached data
+                    in_future = in_pred.get("predicted_points", 0)
+                    out_future = out_pred.get("predicted_points", 0)
+                else:
+                    # Future GWs — only predict the 2 players, not all 600+
+                    in_future_pred = engine.predict_player(in_id, future_gw)
+                    out_future_pred = engine.predict_player(out_id, future_gw)
+                    in_future = in_future_pred.get("predicted_points", 0)
+                    out_future = out_future_pred.get("predicted_points", 0)
+
                 multi_gw.append({
                     "gw": future_gw,
                     "in_xpts": round(in_future, 2),
