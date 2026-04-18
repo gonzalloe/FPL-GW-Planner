@@ -76,12 +76,19 @@ PLANS = {
 
 SESSION_TTL = 30 * 24 * 3600  # 30 days
 
+# Rate limiting: track failed login attempts per email
+_login_attempts = {}  # {email: {"count": int, "lockout_until": float}}
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_SECONDS = 300  # 5 minutes
+
 
 def _hash_password(password: str, salt: str = None) -> tuple:
-    """Hash password with salt using SHA-256."""
+    """Hash password with PBKDF2-SHA256 (600k iterations). Resistant to brute-force."""
     if salt is None:
         salt = secrets.token_hex(16)
-    hashed = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+    hashed = hashlib.pbkdf2_hmac(
+        'sha256', password.encode(), salt.encode(), iterations=600_000
+    ).hex()
     return hashed, salt
 
 
@@ -144,8 +151,15 @@ def register(email: str, password: str, name: str = "") -> dict:
 
 
 def login(email: str, password: str) -> dict:
-    """Login. Returns {ok, token, user} or {error}."""
+    """Login with rate limiting. Returns {ok, token, user} or {error}."""
     email = email.strip().lower()
+
+    # Rate limiting check
+    attempt = _login_attempts.get(email, {"count": 0, "lockout_until": 0})
+    if time.time() < attempt.get("lockout_until", 0):
+        remaining = int(attempt["lockout_until"] - time.time())
+        return {"error": f"Too many failed attempts. Try again in {remaining}s."}
+
     users = _load_users()
     user = users.get(email)
     if not user:
@@ -153,7 +167,16 @@ def login(email: str, password: str) -> dict:
 
     hashed, _ = _hash_password(password, user["salt"])
     if hashed != user["password_hash"]:
+        # Track failed attempt
+        attempt["count"] = attempt.get("count", 0) + 1
+        if attempt["count"] >= MAX_LOGIN_ATTEMPTS:
+            attempt["lockout_until"] = time.time() + LOCKOUT_SECONDS
+            attempt["count"] = 0
+        _login_attempts[email] = attempt
         return {"error": "Incorrect password"}
+
+    # Login successful — reset rate limit
+    _login_attempts.pop(email, None)
 
     # Check subscription expiry
     _check_plan_expiry(user)

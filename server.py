@@ -245,10 +245,9 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
 
         except Exception as e:
             import traceback
+            traceback.print_exc()
             self._json_response({
-                "error": str(e),
-                "trace": traceback.format_exc(),
-                "answer": f"Sorry, something went wrong: {str(e)}",
+                "answer": "Sorry, something went wrong. Please try again.",
                 "suggestions": ["Who should I captain?", "Best DGW players?"]
             }, 200)  # Still 200 so the chat UI can display it
 
@@ -395,14 +394,18 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             import stripe
             stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
             webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+
+            if not webhook_secret:
+                # No webhook secret configured — reject all webhooks for security
+                self._json_response({"error": "Webhook not configured"}, 403)
+                return
+
             length = int(self.headers.get("Content-Length", 0))
             payload = self.rfile.read(length)
             sig = self.headers.get("Stripe-Signature", "")
 
-            if webhook_secret:
-                event = stripe.Webhook.construct_event(payload, sig, webhook_secret)
-            else:
-                event = json.loads(payload)
+            # Always verify signature when webhook secret is set
+            event = stripe.Webhook.construct_event(payload, sig, webhook_secret)
 
             if event.get("type") == "checkout.session.completed":
                 session = event["data"]["object"]
@@ -456,30 +459,59 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         self._json_response(result)
 
     def _setup_initial_accounts(self):
-        """One-time setup: create admin + owner accounts. Only works if no users exist yet."""
+        """One-time setup: create initial accounts. Protected by SETUP_KEY env var."""
         from auth import register, _load_users, _save_users
         from datetime import datetime, timedelta
+
+        # Security: require a setup key from env var (prevents unauthorized access)
+        setup_key = os.environ.get("SETUP_KEY", "")
+        provided_key = parse_qs(urlparse(self.path).query).get("key", [""])[0]
+        if not setup_key or provided_key != setup_key:
+            self._json_response({"error": "Invalid or missing setup key. Set SETUP_KEY env var and pass ?key=YOUR_KEY"}, 403)
+            return
+
         users = _load_users()
         if users:
-            self._json_response({"error": "Accounts already exist. Delete data/users.json to reset."})
+            self._json_response({"error": "Accounts already exist."})
             return
+
+        # Read credentials from env vars (never hardcoded)
+        admin_email = os.environ.get("ADMIN_EMAIL", "admin@fplpredictor.com")
+        admin_pass = os.environ.get("ADMIN_PASSWORD", "")
+        cc_email = os.environ.get("CC_EMAIL", "")
+        cc_pass = os.environ.get("CC_PASSWORD", "")
+        cc2_email = os.environ.get("CC2_EMAIL", "")
+        cc2_pass = os.environ.get("CC2_PASSWORD", "")
+
+        if not admin_pass:
+            self._json_response({"error": "Set ADMIN_PASSWORD env var"}, 400)
+            return
+
         far = (datetime.now() + timedelta(days=365 * 99)).isoformat()
-        r1 = register("admin@fplpredictor.com", "FPL@dm1n2026!", "Admin")
-        r2 = register("cc@fplpredictor.com", "CC@fpl2026!", "CC")
-        r3 = register("cc2@fplpredictor.com", "CC2@fpl2026!", "CC Alt")
+        created = []
+
+        register(admin_email, admin_pass, "Admin")
         users = _load_users()
-        users["admin@fplpredictor.com"]["plan"] = "admin"
-        users["admin@fplpredictor.com"]["plan_expires"] = far
-        users["cc@fplpredictor.com"]["plan"] = "premium"
-        users["cc@fplpredictor.com"]["plan_expires"] = far
-        users["cc2@fplpredictor.com"]["plan"] = "premium"
-        users["cc2@fplpredictor.com"]["plan_expires"] = far
+        users[admin_email]["plan"] = "admin"
+        users[admin_email]["plan_expires"] = far
+        created.append({"email": admin_email, "plan": "admin"})
+
+        if cc_email and cc_pass:
+            register(cc_email, cc_pass, "CC")
+            users = _load_users()
+            users[cc_email]["plan"] = "premium"
+            users[cc_email]["plan_expires"] = far
+            created.append({"email": cc_email, "plan": "premium"})
+
+        if cc2_email and cc2_pass:
+            register(cc2_email, cc2_pass, "CC Alt")
+            users = _load_users()
+            users[cc2_email]["plan"] = "premium"
+            users[cc2_email]["plan_expires"] = far
+            created.append({"email": cc2_email, "plan": "premium"})
+
         _save_users(users)
-        self._json_response({"ok": True, "message": "3 accounts created: admin + cc + cc2", "accounts": [
-            {"email": "admin@fplpredictor.com", "plan": "admin"},
-            {"email": "cc@fplpredictor.com", "plan": "premium"},
-            {"email": "cc2@fplpredictor.com", "plan": "premium"},
-        ]})
+        self._json_response({"ok": True, "message": f"{len(created)} accounts created", "accounts": created})
 
     def _serve_latest_predictions(self):
         files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
@@ -551,7 +583,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response(data)
         except Exception as e:
             import traceback
-            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+            traceback.print_exc(); self._json_response({"error": "Internal server error"}, 500)
 
     def _list_files(self):
         files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
@@ -605,7 +637,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response({"error": "Invalid team ID"}, 400)
         except Exception as e:
             import traceback
-            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+            traceback.print_exc(); self._json_response({"error": "Internal server error"}, 500)
 
     def _serve_news(self):
         try:
@@ -700,7 +732,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             })
         except Exception as e:
             import traceback
-            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+            traceback.print_exc(); self._json_response({"error": "Internal server error"}, 500)
 
     def _serve_settings(self):
         self._json_response(_load_settings())
@@ -724,7 +756,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response(plan)
         except Exception as e:
             import traceback
-            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+            traceback.print_exc(); self._json_response({"error": "Internal server error"}, 500)
 
     def _serve_fixture_ticker(self):
         """Return fixture ticker for all 20 teams."""
@@ -739,7 +771,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             })
         except Exception as e:
             import traceback
-            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+            traceback.print_exc(); self._json_response({"error": "Internal server error"}, 500)
 
     def _serve_fixture_rankings(self, num_gws):
         """Rank teams by fixture difficulty over next N GWs."""
@@ -754,7 +786,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             })
         except Exception as e:
             import traceback
-            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+            traceback.print_exc(); self._json_response({"error": "Internal server error"}, 500)
 
     def _manual_refresh(self):
         """Trigger manual data refresh."""
@@ -857,7 +889,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response(result)
         except Exception as e:
             import traceback
-            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+            traceback.print_exc(); self._json_response({"error": "Internal server error"}, 500)
 
     def _serve_squad_predictions(self, params):
         """Return predictions for specific player IDs at a target GW."""
@@ -899,7 +931,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response({"gameweek": gw, "predictions": results})
         except Exception as e:
             import traceback
-            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+            traceback.print_exc(); self._json_response({"error": "Internal server error"}, 500)
 
     def _search_players(self, query, pos_filter=None, max_price=None):
         """Search players for transfer simulator — returns matching players with predictions."""
@@ -1059,7 +1091,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             })
         except Exception as e:
             import traceback
-            self._json_response({"error": str(e), "trace": traceback.format_exc()}, 500)
+            traceback.print_exc(); self._json_response({"error": "Internal server error"}, 500)
 
     def _json_response(self, data, code=200):
         body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
