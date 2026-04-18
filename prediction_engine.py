@@ -133,8 +133,15 @@ class PredictionEngine:
         num_fixtures = len(all_fixtures)
         is_dgw = num_fixtures >= 2
 
-        # ── Starter quality (DGW-aware) ──
-        starter = self._assess_starter_quality(p, num_fixtures)
+        # ── Teammate injury boost ──
+        team_id = p.get("team", 0)
+        pos_id = p.get("position_id", 0)
+        injury_ctx = getattr(self, '_team_injury_context', {}).get((team_id, pos_id), {})
+        teammates_out = injury_ctx.get("out", 0)
+        out_minutes = injury_ctx.get("out_minutes", 0)
+
+        # ── Starter quality (DGW-aware, injury-aware) ──
+        starter = self._assess_starter_quality(p, num_fixtures, teammates_out, out_minutes)
 
         # ── Per-fixture xPts ──
         total_raw = 0.0
@@ -203,9 +210,8 @@ class PredictionEngine:
         total_raw = min(total_raw, max_pts)
         total_adj = min(total_adj, max_pts)
 
-        confidence = self._calc_confidence(p, all_fixtures, starter, availability)
+        confidence = self._calc_confidence(p, all_fixtures, starter, availability, teammates_out)
 
-        team_id = p.get("team", 0)
         ts = self.team_stats.get(team_id, {})
 
         return {
@@ -253,6 +259,24 @@ class PredictionEngine:
 
         self.dgw_teams = get_dgw_teams(target_gw, self.fixtures)
         self.bgw_teams = get_bgw_teams(target_gw, self.fixtures, self.bootstrap)
+
+        # ── Build team injury context ──
+        # Count unavailable players per team+position to boost replacements
+        self._team_injury_context = {}  # {(team_id, pos_id): {"out": count, "out_names": [...]}}
+        for pid, p in self.players.items():
+            status = p.get("status", "a")
+            chance = p.get("chance_of_playing_next_round")
+            is_out = status in ("i", "u", "s", "n") or (chance is not None and chance == 0)
+            is_doubtful_low = status == "d" and chance is not None and chance <= 25
+            if is_out or is_doubtful_low:
+                team_id = p.get("team", 0)
+                pos_id = p.get("position_id", 0)
+                key = (team_id, pos_id)
+                if key not in self._team_injury_context:
+                    self._team_injury_context[key] = {"out": 0, "out_names": [], "out_minutes": 0}
+                self._team_injury_context[key]["out"] += 1
+                self._team_injury_context[key]["out_names"].append(p.get("web_name", "?"))
+                self._team_injury_context[key]["out_minutes"] += int(p.get("minutes", 0))
 
         results = []
         for pid, p in self.players.items():
@@ -507,9 +531,10 @@ class PredictionEngine:
     #  Starter Quality (DGW-aware)
     # ══════════════════════════════════════════════════════════
 
-    def _assess_starter_quality(self, p: dict, num_fixtures: int = 1) -> dict:
+    def _assess_starter_quality(self, p: dict, num_fixtures: int = 1,
+                                teammates_out: int = 0, out_minutes: int = 0) -> dict:
         """
-        Assess how nailed a player is, with DGW-specific adjustments.
+        Assess how nailed a player is, with DGW-specific and injury-aware adjustments.
 
         Tiers:
           nailed   : Start rate ≥75%, avg mins ≥65 → plays both DGW matches
@@ -518,9 +543,8 @@ class PredictionEngine:
           fringe   : avg mins ≥8 → occasional cameo
           bench_warmer: rarely plays
 
-        For DGW we add:
-          dgw_both_start_prob: probability of starting BOTH matches
-          dgw_effective_matches: expected number of matches played (0-2)
+        Injury boost: if teammates in same position are out, lower-tier players
+        get promoted (e.g., fringe → rotation, rotation → regular).
         """
         total_minutes = int(p.get("minutes", 0))
         starts = int(p.get("starts", 0))
@@ -555,6 +579,30 @@ class PredictionEngine:
         if mins_volatility > 0.6 and tier in ("regular", "rotation"):
             multiplier *= 0.90  # Volatile minutes = less reliable
 
+        # ── Teammate injury boost ──
+        # If teammates in the same position are injured/out, this player is more
+        # likely to start. Promote their tier and boost xMins accordingly.
+        injury_boost = False
+        if teammates_out >= 1:
+            # Significant boost: out_minutes means the injured player was a starter
+            injured_was_starter = out_minutes > gws_played * 30  # avg >30 mins/gw
+            if tier == "bench_warmer" and (teammates_out >= 2 or injured_was_starter):
+                tier = "fringe"
+                multiplier = max(multiplier, 0.50)
+                injury_boost = True
+            elif tier == "fringe" and injured_was_starter:
+                tier = "rotation"
+                multiplier = max(multiplier, 0.75)
+                injury_boost = True
+            elif tier == "rotation" and injured_was_starter:
+                tier = "regular"
+                multiplier = max(multiplier, 0.92)
+                injury_boost = True
+            elif tier == "regular" and teammates_out >= 2:
+                tier = "nailed"
+                multiplier = max(multiplier, 1.0)
+                injury_boost = True
+
         # ── DGW-specific: probability of starting both matches ──
         if num_fixtures >= 2:
             if tier == "nailed":
@@ -587,6 +635,8 @@ class PredictionEngine:
             "mins_volatility": round(mins_volatility, 2),
             "dgw_both_start_prob": round(dgw_both_prob, 2) if dgw_both_prob is not None else None,
             "dgw_effective_matches": round(dgw_effective, 2),
+            "injury_boost": injury_boost,
+            "teammates_out": teammates_out,
         }
 
     def _calc_minutes_volatility(self, p: dict) -> float:
@@ -951,7 +1001,8 @@ class PredictionEngine:
     # ══════════════════════════════════════════════════════════
 
     def _calc_confidence(self, p: dict, fixtures: list,
-                         starter: dict, availability: dict) -> float:
+                         starter: dict, availability: dict,
+                         teammates_out: int = 0) -> float:
         score = 0.50
         tier = starter["tier"]
         tier_bonus = {"nailed": 0.25, "regular": 0.15, "rotation": 0.0,
@@ -972,6 +1023,12 @@ class PredictionEngine:
             score -= 0.10
         elif vol < 0.25:
             score += 0.05
+
+        # Teammate injury boost → more likely to play → higher confidence
+        if teammates_out >= 2:
+            score += 0.15
+        elif teammates_out >= 1 and starter.get("injury_boost"):
+            score += 0.10
 
         # Availability
         if availability["status"] == "available":
