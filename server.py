@@ -16,7 +16,7 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-PORT = 8888
+PORT = int(os.environ.get("PORT", 8888))
 BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 SETTINGS_FILE = BASE_DIR / "user_settings.json"
@@ -839,7 +839,7 @@ def serve(port: int = PORT, open_browser: bool = True):
     class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         daemon_threads = True
 
-    with ThreadedTCPServer(("", port), FPLHandler) as httpd:
+    with ThreadedTCPServer(("0.0.0.0", port), FPLHandler) as httpd:
         if open_browser:
             webbrowser.open(f"http://localhost:{port}")
         try:

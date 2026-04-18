@@ -1,25 +1,6 @@
-# Cache
-cache/
 __pycache__/
 *.pyc
-
-# Output
+cache/
 output/
-
-# Settings
+*.json.bak
 user_settings.json
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-
-# Debug/test scripts
-debug_*.py
-check_*.py
-test_*.py
-time_test.py
-server.log

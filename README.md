@@ -116,6 +116,10 @@ The engine uses a **Poisson-based probabilistic model** inspired by FPL Review, 
 - **xG delta regression**: Overperformers dampened (0.78-0.92x), underperformers boosted (1.05-1.10x)
 - **DGW-aware starter tiers**: Probability of starting BOTH matches (nailed=88%, rotation=25%)
 - **Availability rules**: ≥75% chance → full xPts (just flagged), <75% → discounted
+- **Teammate injury boost**: When same-position teammates are injured, remaining players get tier promotion (fringe→rotation→regular)
+- **Team injury penalty**: Teams with many injured starters get dampened form/strength/xG (up to -30%)
+- **Opponent injury penalty**: Playing a weakened team → higher scoring context + higher CS probability
+- **External news overrides**: Real-time injury info from Fabrizio Romano, David Ornstein, Ben Dinnery, BBC Sport overrides slow FPL updates
 
 ### DGW Starter Tiers
 
@@ -310,7 +314,7 @@ MAX_PER_TEAM = 3
 
 ## 📊 Data Sources
 
-All data from the **official FPL API** (no key needed):
+### FPL API (no key needed)
 
 | Endpoint | Data |
 |----------|------|
@@ -318,7 +322,47 @@ All data from the **official FPL API** (no key needed):
 | `fixtures` | All matches with scores, FDR |
 | `element-summary/{id}` | Individual player history |
 
+### External News Sources
+
+Real-time injury/team news fetched via Google News RSS on every refresh:
+
+| Source | Reliability | Type |
+|--------|------------|------|
+| **Fabrizio Romano** | 10/10 | Transfer/injury confirmations |
+| **David Ornstein** | 10/10 | Exclusive team news |
+| **Ben Dinnery** | 9/10 | Injury specialist |
+| **BBC Sport** | 9/10 | RSS feed |
+| **The Athletic** | 9/10 | In-depth reporting |
+| **Sky Sports** | 8/10 | RSS feed |
+| **The Guardian** | 8/10 | RSS feed |
+| **PremierInjuries.com** | 9/10 | Injury tracker |
+
+External news automatically overrides FPL's slow injury updates when a mismatch is detected.
+
 Data cached locally with offline fallback. Auto-refreshed every 2 hours.
+
+---
+
+## 🚀 Deployment
+
+### Option 1: Local (default)
+```bash
+pip install requests numpy
+python server.py    # http://localhost:8888
+```
+
+### Option 2: Render.com (free, cloud)
+1. Push to GitHub (public repo)
+2. Go to [render.com](https://render.com) → New → Web Service
+3. Connect your GitHub repo: `gonzalloe/FPL-GW-Planner`
+4. Settings:
+   - **Root Directory**: `fpl-predictor`
+   - **Build Command**: `pip install requests numpy`
+   - **Start Command**: `python server.py --no-browser`
+   - **Environment**: Python 3
+5. Deploy — your app will be live at `https://fpl-gw-planner.onrender.com`
+
+The included `render.yaml` and `requirements.txt` auto-configure everything.
 
 ---
 
