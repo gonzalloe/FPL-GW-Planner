@@ -757,7 +757,7 @@ async function authLogin() {
     } else {
       showAuthError(d.error || 'Login failed');
     }
-  } catch(e) { showAuthError('Connection error'); }
+  } catch(e) { showAuthError('Connection error: ' + e.message); }
 }
 
 async function authRegister() {
