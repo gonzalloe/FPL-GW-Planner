@@ -143,7 +143,11 @@ class NewsAggregator:
         fpl_news = self._get_fpl_player_news()
         all_news.extend(fpl_news)
 
-        # 2. RSS feeds
+        # 2. Web search for latest injury/team news from reliable journalists
+        web_news = self._search_web_injuries()
+        all_news.extend(web_news)
+
+        # 3. RSS feeds
         for source_key in ["bbc_football", "guardian_football", "sky_sports"]:
             source = NEWS_SOURCES[source_key]
             try:
@@ -152,7 +156,7 @@ class NewsAggregator:
             except Exception:
                 pass
 
-        # 3. Web search for specific injury/transfer news
+        # 4. FPL API status tracker (recently changed statuses)
         injury_news = self._search_injury_news()
         all_news.extend(injury_news)
 
@@ -163,6 +167,144 @@ class NewsAggregator:
         all_news.sort(key=lambda x: (x.get("reliability", 5), x.get("timestamp", "")), reverse=True)
 
         return all_news[:max_items]
+
+    def _search_web_injuries(self) -> list:
+        """
+        Search the web for latest PL injury news using Google News RSS.
+        Targets reliable journalists: Fabrizio Romano, Ben Dinnery, David Ornstein,
+        team-specific reporters, and major outlets.
+        No API key needed — uses Google News RSS endpoint.
+        """
+        news = []
+
+        # Search queries targeting latest injury/team news
+        queries = [
+            "premier league injury news today",
+            "premier league team news confirmed",
+            "FPL injury update",
+        ]
+
+        # Reliable journalist-specific queries
+        journalist_queries = [
+            "Fabrizio Romano premier league",
+            "Ben Dinnery injury update",
+            "David Ornstein exclusive",
+        ]
+
+        all_queries = queries + journalist_queries
+
+        # Journalist reliability scores
+        journalist_reliability = {
+            "fabrizio romano": 10, "romano": 9,
+            "ben dinnery": 9, "dinnery": 9,
+            "david ornstein": 10, "ornstein": 9,
+            "john percy": 8, "percy": 7,
+            "sam dean": 7, "laurie whitwell": 8,
+            "james ducker": 8, "simon stone": 8,
+            "the athletic": 9, "bbc sport": 9,
+            "sky sports": 8, "telegraph": 8,
+            "guardian": 8, "espn": 7,
+            "premierinjuries": 9,
+        }
+
+        for query in all_queries:
+            try:
+                cache_key = hashlib.md5(f"gnews_{query}".encode()).hexdigest()
+                cache_file = CACHE_DIR / f"gnews_{cache_key}.json"
+
+                # Cache for 30 minutes
+                if cache_file.exists():
+                    age = time.time() - cache_file.stat().st_mtime
+                    if age < 1800:
+                        cached = json.loads(cache_file.read_text(encoding="utf-8"))
+                        news.extend(cached)
+                        continue
+
+                # Google News RSS search
+                encoded_q = requests.utils.quote(query)
+                url = f"https://news.google.com/rss/search?q={encoded_q}&hl=en-GB&gl=GB&ceid=GB:en"
+
+                time.sleep(0.5)  # Rate limit
+                resp = requests.get(url, headers=self.headers, timeout=15)
+                if resp.status_code != 200:
+                    continue
+
+                items = self._parse_rss_xml(resp.text)
+                batch = []
+
+                for item in items[:10]:
+                    title = item.get("title", "")
+                    desc = item.get("description", "")
+                    link = item.get("link", "")
+                    pub_date = item.get("pubDate", "")
+
+                    full_text = f"{title} {desc}".lower()
+
+                    # Filter: must be PL-related
+                    matched_teams = self._match_teams(full_text)
+                    if not matched_teams and not any(
+                        kw in full_text for kw in ["premier league", "fpl", "epl"]
+                    ):
+                        continue
+
+                    # Determine source reliability
+                    reliability = 6  # default for unknown source
+                    source_name = "Web Search"
+                    for journalist, score in journalist_reliability.items():
+                        if journalist in full_text:
+                            reliability = max(reliability, score)
+                            source_name = journalist.title()
+                            break
+
+                    category = self._categorize(full_text)
+
+                    # Extract mentioned player names
+                    mentioned_players = self._extract_player_names(full_text)
+
+                    entry = {
+                        "title": title,
+                        "summary": desc[:300] if desc else "",
+                        "source": source_name,
+                        "source_icon": "🔍",
+                        "url": link,
+                        "category": category,
+                        "severity": "critical" if category == "injury" else "info",
+                        "teams": matched_teams,
+                        "players": mentioned_players,
+                        "reliability": reliability,
+                        "timestamp": pub_date or datetime.now().isoformat(),
+                    }
+                    batch.append(entry)
+                    news.append(entry)
+
+                # Cache results
+                try:
+                    cache_file.write_text(json.dumps(batch, ensure_ascii=False), encoding="utf-8")
+                except Exception:
+                    pass
+
+            except Exception:
+                continue
+
+        return news
+
+    def _extract_player_names(self, text: str) -> list:
+        """Extract likely player names from news text (capitalized multi-word names)."""
+        # Common PL player surnames for matching
+        # This is supplemented by the full FPL player list in get_injury_overrides()
+        players = []
+        # Look for known injury patterns like "NAME is ruled out" or "NAME injury"
+        patterns = [
+            r'([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s+(?:is\s+)?(?:ruled out|injured|doubtful|out for|miss|sidelined)',
+            r'(?:injury to|injury update on|blow for)\s+([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)',
+            r'([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s+(?:returns?|fit|available|back)',
+        ]
+        for pattern in patterns:
+            for m in re.finditer(pattern, text, re.IGNORECASE):
+                name = m.group(1).strip()
+                if len(name) > 3 and name.lower() not in {'the', 'and', 'for', 'but', 'premier', 'league', 'breaking'}:
+                    players.append(name)
+        return list(set(players))[:5]
 
     def _get_fpl_player_news(self) -> list:
         """Extract injury/status news from FPL API player data."""
