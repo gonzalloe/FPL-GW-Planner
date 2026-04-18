@@ -813,11 +813,12 @@ def _auto_setup_accounts():
     print(f"  [SETUP] ✅ Accounts created: admin={admin_email}, cc={cc_email}, cc2={cc2_email}")
 
 
-def main():
+def _startup():
+    """Run startup tasks — called once before first request."""
     global _last_refresh
 
     print(f"\n{'='*55}")
-    print(f"  FPL Predictor Server v7 (Flask)")
+    print(f"  FPL Predictor Server v7")
     print(f"{'='*55}")
 
     try:
@@ -836,8 +837,15 @@ def main():
     refresh_thread = threading.Thread(target=_auto_refresh_loop, daemon=True)
     refresh_thread.start()
     print(f"  [INFO] Auto-refresh thread started (every {REFRESH_INTERVAL//3600}h)")
-    print(f"  [INFO] Server starting on port {PORT}...")
 
+
+# Run startup on import (works with both gunicorn and direct python)
+_startup()
+
+
+def main():
+    """Direct execution entry point (local dev or Render without gunicorn)."""
+    print(f"  [INFO] Starting Flask dev server on port {PORT}...")
     app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
 
 
