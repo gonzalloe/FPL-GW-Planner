@@ -4,3 +4,10 @@ cache/
 output/
 *.json.bak
 user_settings.json
+server.log
+debug_*.py
+test_*.py
+check_*.py
+time_test.py
+_check*.py
+
