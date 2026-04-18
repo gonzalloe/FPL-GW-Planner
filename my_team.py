@@ -114,45 +114,54 @@ def enrich_my_team(team_data: dict, player_map: dict, predictions: list) -> dict
     """
     Enrich the team data with player details and predictions.
     Merges FPL player data + our prediction data for each pick.
+    player_map: {player_id: prediction_dict} from our predictions
+    predictions: list of prediction dicts
     """
-    pred_map = {p.get("player_id"): p for p in predictions}
+    # player_map is already keyed by player_id from predictions
+    # Each prediction already contains: name, team, position, price, etc.
 
     enriched_picks = []
     for pick in team_data.get("picks", []):
         pid = pick.get("element")
-        player = player_map.get(pid, {})
-        pred = pred_map.get(pid, {})
+        # player_map contains our prediction data which has all the fields we need
+        pred = player_map.get(pid, {})
 
         enriched = {
             "player_id": pid,
-            "name": player.get("web_name", "Unknown"),
-            "full_name": f"{player.get('first_name', '')} {player.get('second_name', '')}".strip(),
-            "team": player.get("team_short", "???"),
-            "team_name": player.get("team_name", "Unknown"),
-            "position": player.get("position_name", "???"),
-            "position_id": player.get("position_id", 0),
-            "price": player.get("now_cost", 0) / 10,
-            "selected_by_percent": player.get("selected_by_percent", "0"),
-            "form": float(player.get("form", 0)),
-            "points_per_game": float(player.get("points_per_game", 0)),
-            "total_points": int(player.get("total_points", 0)),
-            "minutes": int(player.get("minutes", 0)),
-            "goals_scored": int(player.get("goals_scored", 0)),
-            "assists": int(player.get("assists", 0)),
-            "clean_sheets": int(player.get("clean_sheets", 0)),
-            "status": player.get("status", "a"),
-            "news": player.get("news", ""),
-            "chance_of_playing": player.get("chance_of_playing_next_round"),
-            # From our predictions
+            # From our predictions (which already have the right field names)
+            "name": pred.get("name", "Unknown"),
+            "full_name": pred.get("full_name", "Unknown"),
+            "team": pred.get("team", "???"),
+            "team_name": pred.get("team_name", "Unknown"),
+            "position": pred.get("position", "???"),
+            "position_id": pred.get("position_id", 0),
+            "price": pred.get("price", 0),
+            "selected_by_percent": pred.get("selected_by_percent", "0"),
+            "form": pred.get("form", 0),
+            "ppg": pred.get("ppg", 0),
+            "total_points": pred.get("total_points", 0),
+            "minutes": pred.get("minutes", 0),
+            "goals_scored": pred.get("goals_scored", 0),
+            "assists": pred.get("assists", 0),
+            "clean_sheets": pred.get("clean_sheets", 0),
+            "status": pred.get("status", "a"),
+            "news": pred.get("news", ""),
+            "chance_of_playing": pred.get("chance_of_playing"),
+            # Prediction-specific fields
             "predicted_points": pred.get("predicted_points", 0),
+            "raw_xpts": pred.get("raw_xpts", 0),
             "confidence": pred.get("confidence", 0),
             "fixture": pred.get("fixture", {}),
             "fixtures": pred.get("fixtures", []),
             "is_dgw": pred.get("is_dgw", False),
             "num_fixtures": pred.get("num_fixtures", 0),
             "team_last5_form": pred.get("team_last5_form", ""),
+            "team_season_wr": pred.get("team_season_wr", 0),
             "factors": pred.get("factors", {}),
             "availability": pred.get("availability", {}),
+            "starter_quality": pred.get("starter_quality", {}),
+            "weighted_rotation": pred.get("weighted_rotation", 0),
+            "ict_index": pred.get("ict_index", 0),
             # From picks
             "is_captain": pick.get("is_captain", False),
             "is_vice_captain": pick.get("is_vice_captain", False),
