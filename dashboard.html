@@ -626,7 +626,7 @@ input:focus, select:focus { border-color:var(--accent); }
 </div>
 
 <!-- Admin Dashboard (admin only) -->
-<div class="page" id="page-admin" style="display:none;">
+<div class="page" id="page-admin">
   <h2>🛡️ Admin Dashboard</h2>
   <div class="card" style="margin-bottom:16px;">
     <div class="card-header"><h3>User Management</h3><button class="btn btn-primary" onclick="loadAdminUsers()" style="font-size:12px;padding:6px 14px;">Refresh</button></div>
@@ -795,8 +795,10 @@ function onAuthSuccess() {
     const bar = document.createElement('div');
     bar.id = 'user-info-bar';
     bar.style.cssText = 'padding:12px 16px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);margin-top:auto;';
-    const planBadge = AUTH_USER.plan === 'premium'
-      ? '<span style="background:var(--gold);color:#000;padding:2px 6px;border-radius:4px;font-size:9px;font-weight:700;">PRO</span>'
+    const planBadge = AUTH_USER.plan === 'admin'
+      ? '<span style="background:var(--gold);color:#000;padding:2px 6px;border-radius:4px;font-size:9px;font-weight:700;">ADMIN</span>'
+      : AUTH_USER.plan === 'premium'
+      ? '<span style="background:var(--accent);color:#000;padding:2px 6px;border-radius:4px;font-size:9px;font-weight:700;">PRO</span>'
       : '<span style="background:var(--surface3);padding:2px 6px;border-radius:4px;font-size:9px;">FREE</span>';
     bar.innerHTML = `<div style="margin-bottom:4px;">${AUTH_USER.name} ${planBadge}</div>
       <div style="font-size:10px;color:var(--text3);">${AUTH_USER.email}</div>
@@ -2359,19 +2361,30 @@ function loadSimState() {
     const raw = localStorage.getItem('fpl_sim_state');
     if (!raw) return;
     const state = JSON.parse(raw);
-    if (state.transfers?.length && MY_TEAM_DATA) {
-      // Re-apply saved transfers
-      state.transfers.forEach(t => {
-        TRANSFER_QUEUE.push(t);
-        applyTransferToSquadHelper(t);
-      });
-      if (state.chip) {
-        const chipSel = document.getElementById('sim-chip-select');
-        if (chipSel) chipSel.value = state.chip;
-      }
-      renderSimPitch();
-      renderTransferQueue();
+    if (!state.transfers?.length || !MY_TEAM_DATA) return;
+
+    // Validate: check that all "out" players actually exist in current squad
+    const currentIds = new Set();
+    [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])].forEach(p => currentIds.add(p.player_id));
+
+    const valid = state.transfers.every(t => currentIds.has(t.out_id));
+    if (!valid) {
+      // Saved state is stale (squad changed since last save) — discard
+      localStorage.removeItem('fpl_sim_state');
+      return;
     }
+
+    // Re-apply saved transfers
+    state.transfers.forEach(t => {
+      TRANSFER_QUEUE.push(t);
+      applyTransferToSquadHelper(t);
+    });
+    if (state.chip) {
+      const chipSel = document.getElementById('sim-chip-select');
+      if (chipSel) chipSel.value = state.chip;
+    }
+    renderSimPitch();
+    renderTransferQueue();
   } catch(e) { console.warn('Failed to load sim state:', e); }
 }
 
