@@ -1185,7 +1185,10 @@ def serve(port: int = PORT, open_browser: bool = True):
     print(f"{'='*55}")
 
     # Auto-create initial accounts if not present (survives ephemeral deploys)
-    _auto_setup_accounts()
+    try:
+        _auto_setup_accounts()
+    except Exception as e:
+        print(f"  [SETUP] ⚠️ Auto-setup failed (non-fatal): {e}")
     print(f"\n  Dashboard:        http://localhost:{port}")
     print(f"  API:              http://localhost:{port}/api/predictions")
     print(f"  Simulate:         POST http://localhost:{port}/api/simulate-transfer")
