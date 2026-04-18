@@ -197,6 +197,9 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/setup-accounts":
             self._setup_initial_accounts()
             return
+        if path == "/api/reset-accounts":
+            self._reset_accounts()
+            return
 
         if path == "/" or path == "":
             self.path = "/dashboard.html"
@@ -490,28 +493,48 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         far = (datetime.now() + timedelta(days=365 * 99)).isoformat()
         created = []
 
+        # Step 1: Register all accounts (each saves as free plan)
         register(admin_email, admin_pass, "Admin")
-        users = _load_users()
-        users[admin_email]["plan"] = "admin"
-        users[admin_email]["plan_expires"] = far
         created.append({"email": admin_email, "plan": "admin"})
 
         if cc_email and cc_pass:
             register(cc_email, cc_pass, "CC")
-            users = _load_users()
-            users[cc_email]["plan"] = "premium"
-            users[cc_email]["plan_expires"] = far
             created.append({"email": cc_email, "plan": "premium"})
 
         if cc2_email and cc2_pass:
             register(cc2_email, cc2_pass, "CC Alt")
-            users = _load_users()
-            users[cc2_email]["plan"] = "premium"
-            users[cc2_email]["plan_expires"] = far
             created.append({"email": cc2_email, "plan": "premium"})
 
+        # Step 2: Load once, upgrade plans, save once
+        users = _load_users()
+        if admin_email in users:
+            users[admin_email]["plan"] = "admin"
+            users[admin_email]["plan_expires"] = far
+        if cc_email and cc_email in users:
+            users[cc_email]["plan"] = "premium"
+            users[cc_email]["plan_expires"] = far
+        if cc2_email and cc2_email in users:
+            users[cc2_email]["plan"] = "premium"
+            users[cc2_email]["plan_expires"] = far
         _save_users(users)
+
         self._json_response({"ok": True, "message": f"{len(created)} accounts created", "accounts": created})
+
+    def _reset_accounts(self):
+        """Reset all accounts and re-run setup. Protected by SETUP_KEY."""
+        from auth import _save_users
+
+        setup_key = os.environ.get("SETUP_KEY", "")
+        provided_key = parse_qs(urlparse(self.path).query).get("key", [""])[0]
+        if not setup_key or provided_key != setup_key:
+            self._json_response({"error": "Invalid or missing setup key"}, 403)
+            return
+
+        # Wipe users.json
+        _save_users({})
+
+        # Re-run setup (which now creates accounts with correct plans)
+        self._setup_initial_accounts()
 
     def _serve_latest_predictions(self):
         files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
