@@ -249,6 +249,7 @@ class PredictionEngine:
             "team_last5_wr": round(ts.get("last5_win_rate", 0), 3),
             "team_season_wr": round(ts.get("win_rate", 0), 3),
             "team_momentum": round(calc_team_momentum(self.team_stats, team_id), 3),
+            "team_injury_penalty": getattr(self, '_team_injury_penalty', {}).get(team_id, 1.0),
         }
 
     def predict_all(self, target_gw: int | None = None,
@@ -299,6 +300,36 @@ class PredictionEngine:
                 self._team_injury_context[key]["out"] += 1
                 self._team_injury_context[key]["out_names"].append(p.get("web_name", "?"))
                 self._team_injury_context[key]["out_minutes"] += int(p.get("minutes", 0))
+
+        # ── Build team-level injury penalty ──
+        # Teams with many injured starters should have dampened form/xG/strength
+        # Penalty based on total missing minutes as fraction of team's total
+        self._team_injury_penalty = {}  # {team_id: penalty_multiplier 0.70-1.00}
+        team_total_mins = {}  # total minutes for all players per team
+        team_out_mins = {}    # total minutes for OUT players per team
+        team_out_count = {}   # count of OUT players per team
+
+        for pid, p in self.players.items():
+            tid = p.get("team", 0)
+            mins = int(p.get("minutes", 0))
+            team_total_mins[tid] = team_total_mins.get(tid, 0) + mins
+
+        for (tid, pos_id), ctx in self._team_injury_context.items():
+            team_out_mins[tid] = team_out_mins.get(tid, 0) + ctx["out_minutes"]
+            team_out_count[tid] = team_out_count.get(tid, 0) + ctx["out"]
+
+        for tid in team_total_mins:
+            total = team_total_mins.get(tid, 1)
+            out = team_out_mins.get(tid, 0)
+            n_out = team_out_count.get(tid, 0)
+            if total > 0 and out > 0:
+                # Fraction of team's minutes that are injured
+                injury_fraction = out / total
+                # Penalty: lose 0.30 at most (if half the team's minutes are out)
+                penalty = max(0.70, 1.0 - injury_fraction * 0.60)
+                self._team_injury_penalty[tid] = round(penalty, 3)
+            else:
+                self._team_injury_penalty[tid] = 1.0
 
         results = []
         for pid, p in self.players.items():
@@ -396,6 +427,14 @@ class PredictionEngine:
         team_xg = fix_xg_data.get("team_xg", 1.35)
         scoring_context = team_xg / 1.35  # >1 = team expected to score more than avg
 
+        # Opponent injury penalty → easier to score against weakened opponents
+        opp_id = fix_info.get("opponent_id", 0)
+        opp_injury_pen = getattr(self, '_team_injury_penalty', {}).get(opp_id, 1.0)
+        if opp_injury_pen < 1.0:
+            # Opponent is weakened → boost our scoring context, reduce their xG
+            opp_weakness = 1.0 + (1.0 - opp_injury_pen) * 0.5  # Up to 15% boost
+            scoring_context *= opp_weakness
+
         # xG delta regression: if player massively overperforming xG, regress
         actual_goals = int(p.get("goals_scored", 0))
         xg_delta = self._calc_xg_delta_regression(actual_goals, xg_season, starts)
@@ -419,6 +458,9 @@ class PredictionEngine:
 
         # ── 4. Clean sheet (Poisson) ──
         team_xgc = fix_xg_data.get("team_xgc", 1.35)
+        # If opponent is weakened by injuries, they score fewer goals → lower xGC for us
+        if opp_injury_pen < 1.0:
+            team_xgc *= opp_injury_pen  # Reduce expected goals conceded
         cs_prob = poisson_cs_probability(team_xgc)
 
         # Blend Poisson CS with FDR-derived CS for robustness
@@ -897,10 +939,17 @@ class PredictionEngine:
             atk = p.get("team_strength_attack_away", 1200)
             defn = p.get("team_strength_defence_away", 1200)
         pos = p.get("position_id", 3)
+        # Apply injury penalty — injured teams are weaker than ratings suggest
+        team_id = p.get("team", 0)
+        injury_pen = getattr(self, '_team_injury_penalty', {}).get(team_id, 1.0)
         if pos in (3, 4):
-            return (atk - 1200) / 300
+            raw = (atk - 1200) / 300
         else:
-            return (defn - 1200) / 300
+            raw = (defn - 1200) / 300
+        # Dampen positive strength when team is injured
+        if raw > 0:
+            return raw * injury_pen
+        return raw
 
     def _calc_set_piece_bonus(self, p: dict) -> float:
         pen_order = p.get("penalties_order")
@@ -945,6 +994,9 @@ class PredictionEngine:
         l5_wr = ts.get("last5_win_rate", 0.4)
         l5_gf = ts.get("last5_gf_pg", 1.3)
 
+        # Apply injury penalty — a team missing key players has lower effective form
+        injury_pen = getattr(self, '_team_injury_penalty', {}).get(team_id, 1.0)
+
         pos = p.get("position_id", 3)
         if pos in (3, 4):
             score = (l5_wr - 0.4) * 0.5 + (l5_gf - 1.3) * 0.15 + momentum * 0.3
@@ -952,6 +1004,10 @@ class PredictionEngine:
             l5_ga = ts.get("last5_ga_pg", 1.3)
             l5_cs = ts.get("last5_cs", 1) / max(len(ts.get("results", [])[-5:]), 1)
             score = (l5_wr - 0.4) * 0.3 + (1.3 - l5_ga) * 0.2 + l5_cs * 0.3 + momentum * 0.2
+
+        # Dampen positive form when team is weakened by injuries
+        if score > 0:
+            score *= injury_pen
 
         return max(-0.4, min(score, 0.4))
 
