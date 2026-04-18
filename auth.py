@@ -58,6 +58,20 @@ PLANS = {
             "no_chip_planner": False,
         },
     },
+    "admin": {
+        "name": "Admin",
+        "price_usd": 0,
+        "price_display": "Free (Owner)",
+        "features": ["All Premium features", "Admin dashboard", "User management"],
+        "limits": {
+            "hide_xpts": False,
+            "hide_detailed_stats": False,
+            "chat_limit": 99999,
+            "no_transfer_sim": False,
+            "no_chip_planner": False,
+            "is_admin": True,
+        },
+    },
 }
 
 SESSION_TTL = 30 * 24 * 3600  # 30 days
@@ -302,3 +316,72 @@ def increment_chat_count(email: str):
     user["chat_count_today"] = user.get("chat_count_today", 0) + 1
     users[email] = user
     _save_users(users)
+
+
+# ── Admin Functions ──
+
+def is_admin(user: dict) -> bool:
+    """Check if user is an admin."""
+    return user.get("plan") == "admin" or user.get("limits", {}).get("is_admin", False)
+
+
+def list_all_users(admin_email: str) -> dict:
+    """List all users (admin only)."""
+    users = _load_users()
+    admin = users.get(admin_email)
+    if not admin or admin.get("plan") != "admin":
+        return {"error": "Unauthorized"}
+
+    user_list = []
+    for email, u in users.items():
+        user_list.append({
+            "email": email,
+            "name": u.get("name", ""),
+            "plan": u.get("plan", "free"),
+            "plan_expires": u.get("plan_expires"),
+            "created_at": u.get("created_at"),
+            "team_id": u.get("team_id"),
+            "chat_count_today": u.get("chat_count_today", 0),
+        })
+
+    return {"ok": True, "users": user_list, "total": len(user_list)}
+
+
+def admin_set_plan(admin_email: str, target_email: str, plan: str, months: int = 999) -> dict:
+    """Admin: set a user's plan."""
+    users = _load_users()
+    admin = users.get(admin_email)
+    if not admin or admin.get("plan") != "admin":
+        return {"error": "Unauthorized"}
+
+    target = users.get(target_email)
+    if not target:
+        return {"error": f"User {target_email} not found"}
+
+    target["plan"] = plan
+    if plan in ("premium", "admin"):
+        target["plan_expires"] = (datetime.now() + timedelta(days=30 * months)).isoformat()
+    else:
+        target["plan_expires"] = None
+
+    users[target_email] = target
+    _save_users(users)
+    return {"ok": True, "user": _public_user(target)}
+
+
+def admin_delete_user(admin_email: str, target_email: str) -> dict:
+    """Admin: delete a user."""
+    users = _load_users()
+    admin = users.get(admin_email)
+    if not admin or admin.get("plan") != "admin":
+        return {"error": "Unauthorized"}
+
+    if target_email not in users:
+        return {"error": f"User {target_email} not found"}
+
+    if target_email == admin_email:
+        return {"error": "Cannot delete yourself"}
+
+    del users[target_email]
+    _save_users(users)
+    return {"ok": True, "message": f"Deleted {target_email}"}

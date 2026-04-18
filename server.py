@@ -294,6 +294,18 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_stripe_webhook()
             return
 
+        if path == "/api/admin/users":
+            self._handle_admin_users()
+            return
+
+        if path == "/api/admin/set-plan":
+            self._handle_admin_set_plan()
+            return
+
+        if path == "/api/admin/delete-user":
+            self._handle_admin_delete_user()
+            return
+
         self._json_response({"error": "Not found"}, 404)
 
     def _read_post_body(self):
@@ -411,6 +423,35 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
+    def _handle_admin_users(self):
+        user = self._get_auth_user()
+        if not user or user.get("plan") != "admin":
+            self._json_response({"error": "Admin access required"}, 403)
+            return
+        from auth import list_all_users
+        result = list_all_users(user["email"])
+        self._json_response(result)
+
+    def _handle_admin_set_plan(self):
+        user = self._get_auth_user()
+        if not user or user.get("plan") != "admin":
+            self._json_response({"error": "Admin access required"}, 403)
+            return
+        from auth import admin_set_plan
+        data = self._read_post_body()
+        result = admin_set_plan(user["email"], data.get("email", ""), data.get("plan", "free"), data.get("months", 999))
+        self._json_response(result)
+
+    def _handle_admin_delete_user(self):
+        user = self._get_auth_user()
+        if not user or user.get("plan") != "admin":
+            self._json_response({"error": "Admin access required"}, 403)
+            return
+        from auth import admin_delete_user
+        data = self._read_post_body()
+        result = admin_delete_user(user["email"], data.get("email", ""))
+        self._json_response(result)
+
     def _serve_latest_predictions(self):
         files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
         if not files:
@@ -420,7 +461,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
 
         # Apply tier gating — free users can't see xPts
         user = self._get_auth_user()
-        is_premium = user and user.get("plan") == "premium"
+        is_premium = user and user.get("plan") in ("premium", "admin")
 
         if not is_premium:
             data["user_plan"] = "free" if user else "guest"
