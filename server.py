@@ -194,6 +194,9 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/squad-predictions":
             self._serve_squad_predictions(params)
             return
+        if path == "/api/setup-accounts":
+            self._setup_initial_accounts()
+            return
 
         if path == "/" or path == "":
             self.path = "/dashboard.html"
@@ -451,6 +454,32 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         data = self._read_post_body()
         result = admin_delete_user(user["email"], data.get("email", ""))
         self._json_response(result)
+
+    def _setup_initial_accounts(self):
+        """One-time setup: create admin + owner accounts. Only works if no users exist yet."""
+        from auth import register, _load_users, _save_users
+        from datetime import datetime, timedelta
+        users = _load_users()
+        if users:
+            self._json_response({"error": "Accounts already exist. Delete data/users.json to reset."})
+            return
+        far = (datetime.now() + timedelta(days=365 * 99)).isoformat()
+        r1 = register("admin@fplpredictor.com", "FPL@dm1n2026!", "Admin")
+        r2 = register("cc@fplpredictor.com", "CC@fpl2026!", "CC")
+        r3 = register("cc2@fplpredictor.com", "CC2@fpl2026!", "CC Alt")
+        users = _load_users()
+        users["admin@fplpredictor.com"]["plan"] = "admin"
+        users["admin@fplpredictor.com"]["plan_expires"] = far
+        users["cc@fplpredictor.com"]["plan"] = "premium"
+        users["cc@fplpredictor.com"]["plan_expires"] = far
+        users["cc2@fplpredictor.com"]["plan"] = "premium"
+        users["cc2@fplpredictor.com"]["plan_expires"] = far
+        _save_users(users)
+        self._json_response({"ok": True, "message": "3 accounts created: admin + cc + cc2", "accounts": [
+            {"email": "admin@fplpredictor.com", "plan": "admin"},
+            {"email": "cc@fplpredictor.com", "plan": "premium"},
+            {"email": "cc2@fplpredictor.com", "plan": "premium"},
+        ]})
 
     def _serve_latest_predictions(self):
         files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
