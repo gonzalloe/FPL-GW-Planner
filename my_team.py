@@ -56,18 +56,56 @@ def fetch_my_team(team_id: int) -> dict:
     time.sleep(0.3)
 
     # 2. Current GW picks (squad selection)
+    # We need to handle Free Hit correctly:
+    # If FH was played last GW, the current picks API returns the FH squad,
+    # but the actual squad for THIS week is the one from before FH.
     current_event = result["info"]["current_event"]
     if current_event:
         try:
-            url = f"{FPL_API_BASE}/entry/{team_id}/event/{current_event}/picks/"
+            # First, check if Free Hit was used in the previous GW
+            # by looking at the history/chips endpoint
+            history_url = f"{FPL_API_BASE}/entry/{team_id}/history/"
+            hist_resp = requests.get(history_url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
+            hist_resp.raise_for_status()
+            hist_data = hist_resp.json()
+            chips_used = hist_data.get("chips", [])
+            
+            # Check if FH was used in the previous GW (current_event - 1 is the last completed GW)
+            # If current_event is 34, last completed is 33
+            last_completed_gw = current_event  # This is actually the last GW that has data
+            
+            fh_last_gw = any(
+                c.get("name") == "freehit" and c.get("event") == last_completed_gw
+                for c in chips_used
+            )
+            
+            # Determine which GW's picks to fetch
+            if fh_last_gw and last_completed_gw > 1:
+                # FH was used last GW - get picks from the GW before FH
+                # to restore the "real" squad
+                picks_gw = last_completed_gw - 1
+                result["fh_revert_from"] = last_completed_gw
+                result["fh_reverted_to"] = picks_gw
+            else:
+                picks_gw = current_event
+            
+            url = f"{FPL_API_BASE}/entry/{team_id}/event/{picks_gw}/picks/"
             resp = requests.get(url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
             resp.raise_for_status()
             picks_data = resp.json()
             result["picks"] = picks_data.get("picks", [])
-            result["active_chip"] = picks_data.get("active_chip")
+            result["active_chip"] = picks_data.get("active_chip") if picks_gw == current_event else None
             result["auto_subs"] = picks_data.get("automatic_subs", [])
-            # entry_history has GW-level summary
-            eh = picks_data.get("entry_history", {})
+            
+            # entry_history has GW-level summary - always use current event for summary
+            current_url = f"{FPL_API_BASE}/entry/{team_id}/event/{current_event}/picks/"
+            current_resp = requests.get(current_url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
+            if current_resp.ok:
+                current_picks = current_resp.json()
+                eh = current_picks.get("entry_history", {})
+            else:
+                eh = picks_data.get("entry_history", {})
+            
             result["gw_summary"] = {
                 "points": eh.get("points", 0),
                 "total_points": eh.get("total_points", 0),
@@ -79,6 +117,12 @@ def fetch_my_team(team_id: int) -> dict:
                 "event_transfers_cost": eh.get("event_transfers_cost", 0),
                 "points_on_bench": eh.get("points_on_bench", 0),
             }
+            
+            # Store chips for later use (already fetched)
+            result["history"] = hist_data.get("current", [])
+            result["chips"] = chips_used
+            result["past_seasons"] = hist_data.get("past", [])
+            
         except Exception as e:
             result["error"] = f"Could not fetch GW picks: {str(e)}"
 
@@ -93,19 +137,21 @@ def fetch_my_team(team_id: int) -> dict:
     except Exception:
         pass
 
-    time.sleep(0.3)
+    # Skip re-fetching history if already fetched above
+    if "history" not in result or not result["history"]:
+        time.sleep(0.3)
 
-    # 4. Season history (GW-by-GW)
-    try:
-        url = f"{FPL_API_BASE}/entry/{team_id}/history/"
-        resp = requests.get(url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
-        resp.raise_for_status()
-        hist = resp.json()
-        result["history"] = hist.get("current", [])
-        result["chips"] = hist.get("chips", [])
-        result["past_seasons"] = hist.get("past", [])
-    except Exception:
-        pass
+        # 4. Season history (GW-by-GW)
+        try:
+            url = f"{FPL_API_BASE}/entry/{team_id}/history/"
+            resp = requests.get(url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
+            resp.raise_for_status()
+            hist = resp.json()
+            result["history"] = hist.get("current", [])
+            result["chips"] = hist.get("chips", [])
+            result["past_seasons"] = hist.get("past", [])
+        except Exception:
+            pass
 
     return result
 
