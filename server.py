@@ -152,6 +152,9 @@ def _auto_refresh_loop():
 
 
 class FPLHandler(http.server.SimpleHTTPRequestHandler):
+    # Use HTTP/1.1 for reverse proxy (Render) compatibility
+    protocol_version = "HTTP/1.1"
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(BASE_DIR), **kwargs)
 
