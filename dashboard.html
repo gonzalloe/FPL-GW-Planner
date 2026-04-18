@@ -993,7 +993,7 @@ async function loadData() {
 
   // Try cached predictions first
   try {
-    const r = await fetch('/api/predictions', {headers: authHeaders()});
+    const r = await fetch('/api/predictions?_t=' + Date.now(), {headers: authHeaders()});
     if (r.ok) {
       DATA = await r.json();
       if (DATA && DATA.predictions) {
