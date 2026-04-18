@@ -236,12 +236,10 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             self.path = "/dashboard.html"
         super().do_GET()
 
-    def _handle_chat_post(self):
+    def _handle_chat_post(self, raw_body=None):
         """Handle AI chat question."""
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length)
         try:
-            data = json.loads(body)
+            data = json.loads(raw_body) if raw_body else {}
             question = data.get("question", "").strip()
             if not question:
                 self._json_response({"error": "No question provided"}, 400)
@@ -289,13 +287,19 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        # CRITICAL: Read body immediately before routing.
+        # With HTTP/1.1 keep-alive + threading, delayed reads can get empty/wrong data.
+        length = int(self.headers.get("Content-Length", 0))
+        raw_body = self.rfile.read(length) if length else b""
+        try:
+            post_data = json.loads(raw_body) if raw_body else {}
+        except json.JSONDecodeError:
+            post_data = {}
+
         if path == "/api/settings":
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length)
             try:
-                data = json.loads(body)
                 settings = _load_settings()
-                settings.update(data)
+                settings.update(post_data)
                 _save_settings(settings)
                 self._json_response({"ok": True, "settings": settings})
             except Exception as e:
@@ -303,19 +307,19 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         if path == "/api/chat":
-            self._handle_chat_post()
+            self._handle_chat_post(raw_body)
             return
 
         if path == "/api/simulate-transfer":
-            self._handle_simulate_transfer()
+            self._handle_simulate_transfer(post_data)
             return
 
         if path == "/api/auth/register":
-            self._handle_auth_register()
+            self._handle_auth_register(post_data)
             return
 
         if path == "/api/auth/login":
-            self._handle_auth_login()
+            self._handle_auth_login(post_data)
             return
 
         if path == "/api/auth/me":
@@ -327,7 +331,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         if path == "/api/stripe/webhook":
-            self._handle_stripe_webhook()
+            self._handle_stripe_webhook(raw_body)
             return
 
         if path == "/api/admin/users":
@@ -335,11 +339,11 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         if path == "/api/admin/set-plan":
-            self._handle_admin_set_plan()
+            self._handle_admin_set_plan(post_data)
             return
 
         if path == "/api/admin/delete-user":
-            self._handle_admin_delete_user()
+            self._handle_admin_delete_user(post_data)
             return
 
         self._json_response({"error": "Not found"}, 404)
@@ -355,19 +359,21 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         token = auth.replace("Bearer ", "") if auth.startswith("Bearer ") else ""
         return get_user_from_token(token)
 
-    def _handle_auth_register(self):
+    def _handle_auth_register(self, data=None):
         try:
             from auth import register
-            data = self._read_post_body()
+            if data is None:
+                data = self._read_post_body()
             result = register(data.get("email", ""), data.get("password", ""), data.get("name", ""))
             self._json_response(result, 200 if result.get("ok") else 400)
         except Exception as e:
             self._json_response({"error": str(e)}, 500)
 
-    def _handle_auth_login(self):
+    def _handle_auth_login(self, data=None):
         try:
             from auth import login
-            data = self._read_post_body()
+            if data is None:
+                data = self._read_post_body()
             print(f"  [AUTH] Login attempt: {data.get('email', '?')}")
             result = login(data.get("email", ""), data.get("password", ""))
             print(f"  [AUTH] Login result: ok={result.get('ok', False)}")
@@ -425,7 +431,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self._json_response({"error": str(e)}, 500)
 
-    def _handle_stripe_webhook(self):
+    def _handle_stripe_webhook(self, raw_body=None):
         """Handle Stripe webhook for subscription events."""
         try:
             import stripe
@@ -438,7 +444,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             length = int(self.headers.get("Content-Length", 0))
-            payload = self.rfile.read(length)
+            payload = raw_body if raw_body else self.rfile.read(length)
             sig = self.headers.get("Stripe-Signature", "")
 
             # Always verify signature when webhook secret is set
@@ -475,23 +481,25 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         result = list_all_users(user["email"])
         self._json_response(result)
 
-    def _handle_admin_set_plan(self):
+    def _handle_admin_set_plan(self, data=None):
         user = self._get_auth_user()
         if not user or user.get("plan") != "admin":
             self._json_response({"error": "Admin access required"}, 403)
             return
         from auth import admin_set_plan
-        data = self._read_post_body()
+        if data is None:
+            data = self._read_post_body()
         result = admin_set_plan(user["email"], data.get("email", ""), data.get("plan", "free"), data.get("months", 999))
         self._json_response(result)
 
-    def _handle_admin_delete_user(self):
+    def _handle_admin_delete_user(self, data=None):
         user = self._get_auth_user()
         if not user or user.get("plan") != "admin":
             self._json_response({"error": "Admin access required"}, 403)
             return
         from auth import admin_delete_user
-        data = self._read_post_body()
+        if data is None:
+            data = self._read_post_body()
         result = admin_delete_user(user["email"], data.get("email", ""))
         self._json_response(result)
 
@@ -1048,12 +1056,11 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self._json_response({"error": str(e)}, 500)
 
-    def _handle_simulate_transfer(self):
+    def _handle_simulate_transfer(self, data=None):
         """Simulate a transfer: given current squad + proposed in/out, return impact analysis."""
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length)
         try:
-            data = json.loads(body)
+            if data is None:
+                data = self._read_post_body()
             squad_ids = data.get("squad_ids", [])
             out_id = data.get("out_id")
             in_id = data.get("in_id")
