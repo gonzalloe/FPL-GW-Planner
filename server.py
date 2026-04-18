@@ -465,20 +465,52 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
 
         if not is_premium:
             data["user_plan"] = "free" if user else "guest"
+
+            # Shuffle predictions so free users can't infer xPts from sort order
+            import random
+            preds = data.get("predictions", [])
+            random.shuffle(preds)
+            data["predictions"] = preds
+
             # Mask prediction details for free users
-            for p in data.get("predictions", []):
+            for p in preds:
                 p["predicted_points"] = "🔒"
                 p["raw_xpts"] = "🔒"
                 p["confidence"] = "🔒"
+                p["team_last5_wr"] = "🔒"
+                p["team_season_wr"] = "🔒"
+                p["team_momentum"] = "🔒"
+                p["team_injury_penalty"] = "🔒"
                 p.pop("fixtures", None)
                 p.pop("factors", None)
-            # Also mask squad
+                p.pop("starter_quality", None)
+
+            # Mask squad — shuffle XI so ranking is hidden
             sq = data.get("squad", {})
-            for p in sq.get("starting_xi", []):
+            xi = sq.get("starting_xi", [])
+            random.shuffle(xi)
+            for p in xi:
                 p["predicted_points"] = "🔒"
+                p["confidence"] = "🔒"
+                p.pop("fixtures", None)
             for p in sq.get("bench", []):
                 p["predicted_points"] = "🔒"
+                p.pop("fixtures", None)
             sq["predicted_total_points"] = "🔒"
+
+            # Mask chip analysis scores
+            chip = data.get("chip_analysis", {})
+            if chip.get("best_chip"):
+                chip["best_chip"]["score"] = "🔒"
+            for rec in chip.get("recommendations", []):
+                rec["score"] = "🔒"
+
+            # Mask top picks and differentials
+            for key in ("top_picks", "differentials", "value_picks"):
+                for p in data.get(key, []):
+                    p["predicted_points"] = "🔒"
+                    p["raw_xpts"] = "🔒"
+                random.shuffle(data.get(key, []))
         else:
             data["user_plan"] = "premium"
 
