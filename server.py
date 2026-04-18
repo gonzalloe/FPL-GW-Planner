@@ -306,7 +306,15 @@ def api_my_team():
             return jsonify(team_data), 400
 
         engine = PredictionEngine()
-        predictions = engine.predict_all()
+
+        # Use cached predictions if available (much faster than predict_all)
+        files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
+        if files:
+            cached = json.loads(files[0].read_text(encoding="utf-8"))
+            predictions = cached.get("predictions", [])
+        else:
+            predictions = engine.predict_all()
+
         enriched = enrich_my_team(team_data, engine.players, predictions)
         suggestions = generate_transfer_suggestions(enriched, predictions)
         enriched["transfer_suggestions"] = suggestions
@@ -353,7 +361,13 @@ def api_transfers():
         from prediction_engine import PredictionEngine
         team_data = fetch_my_team(team_id)
         engine = PredictionEngine()
-        predictions = engine.predict_all()
+        # Use cached predictions if available
+        files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
+        if files:
+            cached = json.loads(files[0].read_text(encoding="utf-8"))
+            predictions = cached.get("predictions", [])
+        else:
+            predictions = engine.predict_all()
         enriched = enrich_my_team(team_data, engine.players, predictions)
         suggestions = generate_transfer_suggestions(enriched, predictions, free_transfers=2)
         return jsonify({"team_id": team_id, "suggestions": suggestions,
