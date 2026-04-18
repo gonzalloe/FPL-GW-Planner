@@ -126,6 +126,19 @@ class FPLChatEngine:
             (r'\bif\b.*\b100%\b', 3.5), (r'\bper\s*fixture\b', 3.0),
             (r'\bbreakdown\b', 2.5), (r'\bper\s*game\b', 2.5),
         ],
+        "methodology": [
+            (r'\bhow\b.*\b(do\s+you|does\s+(it|the\s+model|this))\b.*\b(calculate|compute|evaluate|measure|estimate|predict|work)\b', 4.0),
+            (r'\bhow\b.*\b(is|are)\b.*\bcalculated\b', 3.5),
+            (r'\bwhat\b.*\b(is|are)\b.*\b(based\s+on|formula|algorithm|methodology)\b', 3.5),
+            (r'\bexplain\b.*\b(model|prediction|algorithm|calculation|methodology)\b', 3.5),
+            (r'\bhow\b.*\bwork\b', 2.5), (r'\bwhy\b.*\b(is|are)\b.*\b(the\s+same|different|higher|lower)\b', 3.0),
+            (r'\bwin\s*rate\b', 2.5), (r'\bxpts?\b.*\b(calculated|computed|formula)\b', 3.0),
+            (r'\btier\b.*\b(mean|determined|calculated)\b', 3.0), (r'\bfdr\b.*\b(mean|work|calculated)\b', 3.0),
+            (r'\bconfidence\b.*\b(mean|calculated|score)\b', 3.0), (r'\bform\b.*\b(calculated|measured|work)\b', 2.5),
+            (r'\bmomentum\b.*\b(calculated|mean|work)\b', 2.5), (r'\brotation\b.*\b(risk|calculated|work)\b', 2.5),
+            (r'\bxg\b.*\b(calculated|mean|work|from)\b', 2.5), (r'\bdocumentation\b', 2.0),
+            (r'\bmethod(ology)?\b', 3.0), (r'\bmodel\b.*\b(work|use|factor)\b', 2.5),
+        ],
     }
 
     # Team aliases — maps various ways to refer to a team to its FPL 3-letter code
@@ -249,6 +262,7 @@ class FPLChatEngine:
             "differential": self._handle_differentials,
             "value": self._handle_value,
             "what_if": self._handle_what_if,
+            "methodology": self._handle_methodology,
         }
 
         handler = handlers.get(best_intent, self._handle_general)
@@ -1106,6 +1120,170 @@ class FPLChatEngine:
                 f"Compare {p['name']} vs {self.predictions[0]['name']}" if self.predictions else "Best picks?",
                 f"Should I captain {p['name']}?",
                 f"Best {p['position']} picks this week?",
+            ]
+        }
+
+    def _handle_methodology(self, q: str, original: str, entities: dict) -> dict:
+        """Explain methodology, calculations, and how metrics work."""
+        q_lower = q.lower()
+        sections = []
+
+        # Detect which metric/concept they're asking about
+        if re.search(r'win\s*rate|wr\b', q_lower):
+            sections.append("## 📊 Win Rate (WR) — How It's Calculated\n")
+            sections.append("**Win Rate** is the team's **season-long** winning percentage from all Premier League matches played this season.\n")
+            sections.append("### Formula")
+            sections.append("```")
+            sections.append("Win Rate = Wins / Total Matches Played")
+            sections.append("```\n")
+            sections.append("### Example")
+            sections.append("If Manchester United has 15 wins from 33 matches:")
+            sections.append("- WR = 15 / 33 = **45.5%**\n")
+            sections.append("### Important Notes")
+            sections.append("- ⚠️ **WR is static per season** — it doesn't change based on opponent")
+            sections.append("- The same team will show the same WR in GW33 vs GW34 (unless more matches are played)")
+            sections.append("- For **opponent-adjusted** metrics, the model uses:")
+            sections.append("  - **Fixture xG/xGC** (expected goals based on specific opponent)")
+            sections.append("  - **FDR** (fixture difficulty rating — 1-5 scale)")
+            sections.append("  - **H2H record** (head-to-head this season)")
+            sections.append("  - **Team Momentum** (recent form trend)\n")
+            sections.append("### Related Metrics")
+            sections.append("| Metric | Description |")
+            sections.append("|--------|-------------|")
+            sections.append("| **Last 5 Form** | W/D/L string from last 5 matches |")
+            sections.append("| **Last 5 WR** | Win rate from last 5 matches only |")
+            sections.append("| **Momentum** | Weighted recent form (-1 to +1) |")
+            sections.append("| **Fixture xG** | Expected goals vs specific opponent |")
+
+        elif re.search(r'xpts?|predicted\s*points|prediction', q_lower):
+            sections.append("## ⚽ xPts — How It's Calculated\n")
+            sections.append("**xPts (Expected Points)** is the model's prediction for how many FPL points a player will score.\n")
+            sections.append("### Factors (Weighted)")
+            sections.append("| Factor | Weight | Description |")
+            sections.append("|--------|--------|-------------|")
+            sections.append("| Form | 20% | Recent GW performance (last 5) |")
+            sections.append("| Fixture Difficulty | 15% | FDR-based multiplier |")
+            sections.append("| ICT Index | 10% | FPL's Influence/Creativity/Threat |")
+            sections.append("| Team Form | 10% | Team's recent results & goals |")
+            sections.append("| H2H Factor | 8% | Head-to-head + fixture xG/xGC |")
+            sections.append("| Season Average | 8% | PPG this season |")
+            sections.append("| Home/Away | 7% | +10% home, -8% away |")
+            sections.append("| Minutes Consistency | 7% | Start rate & minutes volatility |")
+            sections.append("| Team Strength | 5% | FPL strength ratings |")
+            sections.append("| Set Pieces | 5% | Penalty/FK/corner duties |")
+            sections.append("| Ownership Trend | 3% | Transfer momentum |")
+            sections.append("| Bonus Tendency | 2% | Historical BPS rate |")
+            sections.append("\n### Adjustments")
+            sections.append("- **Rotation Risk**: Non-nailed players get ~15-50% discount")
+            sections.append("- **Availability**: Flagged players (75%/50%/25%) discounted accordingly")
+            sections.append("- **DGW**: 2 fixtures → higher xPts (but P(start both) < 100%)\n")
+            sections.append("### Raw vs Adjusted xPts")
+            sections.append("- **Raw xPts**: If player plays 90 mins every game")
+            sections.append("- **Adjusted xPts**: After rotation/injury discount")
+
+        elif re.search(r'tier|starter|nailed|rotation', q_lower):
+            sections.append("## 🔒 Starter Tier — How It's Determined\n")
+            sections.append("**Tier** classifies how likely a player is to start matches.\n")
+            sections.append("### Tier Definitions")
+            sections.append("| Tier | Start Rate | Description |")
+            sections.append("|------|------------|-------------|")
+            sections.append("| **Nailed** | >85% | Almost always starts |")
+            sections.append("| **Regular** | 65-85% | Usually starts |")
+            sections.append("| **Rotation** | 40-65% | Rotates with others |")
+            sections.append("| **Fringe** | <40% | Rarely starts |")
+            sections.append("\n### Calculation Inputs")
+            sections.append("- Minutes played / total available minutes")
+            sections.append("- Starts / total matches")
+            sections.append("- Minutes volatility (consistency)")
+            sections.append("- Recent trend (fading or rising?)")
+
+        elif re.search(r'fdr|fixture\s*difficulty', q_lower):
+            sections.append("## 🎯 FDR — Fixture Difficulty Rating\n")
+            sections.append("**FDR** is FPL's official 1-5 scale for fixture difficulty.\n")
+            sections.append("### FDR Scale")
+            sections.append("| FDR | Difficulty | xPts Multiplier |")
+            sections.append("|-----|------------|-----------------|")
+            sections.append("| 1 | Very Easy | ×1.30 (+30%) |")
+            sections.append("| 2 | Easy | ×1.15 (+15%) |")
+            sections.append("| 3 | Medium | ×1.00 (baseline) |")
+            sections.append("| 4 | Tough | ×0.85 (-15%) |")
+            sections.append("| 5 | Very Tough | ×0.70 (-30%) |")
+            sections.append("\n### Position-Aware FDR")
+            sections.append("The model also uses **position-aware FDR**:")
+            sections.append("- GKP/DEF: Based on opponent's attack strength")
+            sections.append("- MID/FWD: Based on opponent's defense strength")
+
+        elif re.search(r'xg|expected\s*goals', q_lower):
+            sections.append("## 📈 Fixture xG / xGC — How It Works\n")
+            sections.append("**Fixture xG** predicts goals for a specific matchup.\n")
+            sections.append("### Calculation")
+            sections.append("Based on this season's actual results:")
+            sections.append("- Team's **goals per game** (home vs away)")
+            sections.append("- Opponent's **goals conceded** (home vs away)")
+            sections.append("- **H2H record** this season (if played)")
+            sections.append("- Weighted average of these factors\n")
+            sections.append("### Example")
+            sections.append("Arsenal (H) vs Southampton:")
+            sections.append("- Arsenal home GF/G: 2.1")
+            sections.append("- Southampton away GA/G: 2.4")
+            sections.append("- → Fixture xG ≈ 2.2 for Arsenal")
+
+        elif re.search(r'confidence|conf\b', q_lower):
+            sections.append("## 🎲 Confidence Score — What It Means\n")
+            sections.append("**Confidence** (0-100%) indicates prediction reliability.\n")
+            sections.append("### Factors That Increase Confidence")
+            sections.append("- ✅ Nailed starter (high minutes)")
+            sections.append("- ✅ Easy fixture (low FDR)")
+            sections.append("- ✅ Good recent form")
+            sections.append("- ✅ Team in good form")
+            sections.append("- ✅ No injury doubts\n")
+            sections.append("### Factors That Decrease Confidence")
+            sections.append("- ❌ Rotation risk")
+            sections.append("- ❌ Injury flag")
+            sections.append("- ❌ Tough fixture")
+            sections.append("- ❌ Inconsistent minutes")
+
+        elif re.search(r'momentum|form\s*(calculation|work)', q_lower):
+            sections.append("## 📈 Team Momentum — How It's Calculated\n")
+            sections.append("**Momentum** measures recent form trend (-1 to +1).\n")
+            sections.append("### Formula")
+            sections.append("Weighted average of last 5 results:")
+            sections.append("- Most recent match: weight 1.0")
+            sections.append("- 2nd most recent: weight 0.8")
+            sections.append("- 3rd: weight 0.6, 4th: 0.4, 5th: 0.2\n")
+            sections.append("Result values: W=+1, D=0, L=-1\n")
+            sections.append("### Example")
+            sections.append("Last 5: W W D L W")
+            sections.append("- Momentum = (1×1 + 1×0.8 + 0×0.6 + (-1)×0.4 + 1×0.2) / 3")
+            sections.append("- = 1.6 / 3 = **+0.53** (positive, improving)")
+
+        else:
+            # General methodology overview
+            sections.append("## 📖 FPL Predictor — Model Methodology\n")
+            sections.append("The prediction model combines **12+ factors** to estimate expected points.\n")
+            sections.append("### Key Concepts")
+            sections.append("Ask me about any of these:")
+            sections.append("- **xPts**: How predictions are calculated")
+            sections.append("- **Win Rate**: Season-long team win percentage")
+            sections.append("- **Tier**: Starter classification (nailed/regular/rotation/fringe)")
+            sections.append("- **FDR**: Fixture difficulty rating (1-5)")
+            sections.append("- **Fixture xG**: Expected goals for specific matchup")
+            sections.append("- **Confidence**: Prediction reliability score")
+            sections.append("- **Momentum**: Recent form trend\n")
+            sections.append("### Example Questions")
+            sections.append("- \"How do you calculate xPts?\"")
+            sections.append("- \"What does win rate mean?\"")
+            sections.append("- \"How is tier determined?\"")
+            sections.append("- \"Explain FDR\"")
+
+        return {
+            "answer": "\n".join(sections),
+            "data": {"type": "methodology"},
+            "suggestions": [
+                "How is xPts calculated?",
+                "What does tier mean?",
+                "How does FDR work?",
+                "Explain fixture xG",
             ]
         }
 
