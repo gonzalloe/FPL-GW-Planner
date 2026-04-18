@@ -1643,7 +1643,7 @@ async function onSimGWChange() {
   const ids = allPicks.map(p => p.player_id).join(',');
 
   try {
-    const r = await fetch(`/api/squad-predictions?gw=${newGW}&ids=${ids}`);
+    const r = await fetch(`/api/squad-predictions?gw=${newGW}&ids=${ids}`, {headers: authHeaders()});
     const data = await r.json();
     if (data.predictions) {
       const predMap = {};

@@ -522,7 +522,7 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
 
     def _reset_accounts(self):
         """Reset all accounts and re-run setup. Protected by SETUP_KEY."""
-        from auth import _save_users
+        from auth import _save_users, _save_sessions
 
         setup_key = os.environ.get("SETUP_KEY", "")
         provided_key = parse_qs(urlparse(self.path).query).get("key", [""])[0]
@@ -530,8 +530,9 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response({"error": "Invalid or missing setup key"}, 403)
             return
 
-        # Wipe users.json
+        # Wipe users.json AND sessions.json
         _save_users({})
+        _save_sessions({})
 
         # Re-run setup (which now creates accounts with correct plans)
         self._setup_initial_accounts()
