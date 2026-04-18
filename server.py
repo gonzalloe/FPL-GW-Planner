@@ -819,9 +819,14 @@ def _auto_setup_accounts():
     print(f"  [SETUP] ✅ Accounts created: admin={admin_email}, cc={cc_email}, cc2={cc2_email}")
 
 
+_startup_done = False
+
 def _startup():
-    """Run startup tasks — called once before first request."""
-    global _last_refresh
+    """Run startup tasks — called once before serving requests."""
+    global _last_refresh, _startup_done
+    if _startup_done:
+        return
+    _startup_done = True
 
     print(f"\n{'='*55}")
     print(f"  FPL Predictor Server v7")
@@ -837,16 +842,18 @@ def _startup():
         _last_refresh = files[0].stat().st_mtime
         print(f"  [INFO] Using cached predictions from {datetime.fromtimestamp(_last_refresh).strftime('%Y-%m-%d %H:%M')}")
     else:
-        _last_refresh = time.time() - REFRESH_INTERVAL + 60
-        print(f"  [INFO] No cached predictions — auto-refresh in ~60s")
+        _last_refresh = time.time() - REFRESH_INTERVAL + 120
+        print(f"  [INFO] No cached predictions — auto-refresh in ~120s")
 
     refresh_thread = threading.Thread(target=_auto_refresh_loop, daemon=True)
     refresh_thread.start()
     print(f"  [INFO] Auto-refresh thread started (every {REFRESH_INTERVAL//3600}h)")
 
 
-# Run startup on import (works with both gunicorn and direct python)
-_startup()
+# Use Flask's before_request to ensure startup runs once in the right worker
+@app.before_request
+def ensure_startup():
+    _startup()
 
 
 def main():
