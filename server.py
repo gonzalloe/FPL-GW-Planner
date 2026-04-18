@@ -341,9 +341,12 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
         try:
             from auth import login
             data = self._read_post_body()
+            print(f"  [AUTH] Login attempt: {data.get('email', '?')}")
             result = login(data.get("email", ""), data.get("password", ""))
+            print(f"  [AUTH] Login result: ok={result.get('ok', False)}")
             self._json_response(result, 200 if result.get("ok") else 401)
         except Exception as e:
+            print(f"  [AUTH] Login error: {e}")
             self._json_response({"error": str(e)}, 500)
 
     def _handle_auth_me(self):
@@ -1212,7 +1215,9 @@ def serve(port: int = PORT, open_browser: bool = True):
         _last_refresh = files[0].stat().st_mtime
         print(f"  [INFO] Using cached predictions from {datetime.fromtimestamp(_last_refresh).strftime('%Y-%m-%d %H:%M')}")
     else:
-        print(f"  [INFO] No cached predictions — will generate on first request")
+        # No predictions yet — delay auto-refresh by 60s so server can accept login/API requests first
+        _last_refresh = time.time() - REFRESH_INTERVAL + 60
+        print(f"  [INFO] No cached predictions — auto-refresh in ~60s (server ready for logins now)")
 
     # Start auto-refresh background thread
     refresh_thread = threading.Thread(target=_auto_refresh_loop, daemon=True)
