@@ -57,7 +57,7 @@ fpl-predictor/
 ├── news_aggregator.py     # Multi-source football news scraper
 ├── main.py                # CLI runner
 ├── server.py              # HTTP server + REST API (port 8888, auto-refresh every 2h)
-├── dashboard.html         # Full interactive web dashboard (single-file SPA, ~115KB)
+├── dashboard.html         # Full interactive web dashboard (single-file SPA, ~136KB)
 ├── cache/                 # API response cache (auto-managed)
 └── output/                # Generated prediction JSON files
 ```
@@ -145,14 +145,20 @@ The **FPL-style Transfer Simulator** lets you plan transfers interactively:
 
 ### Features
 - **Pitch view**: Your squad displayed as a football pitch (FWD/MID/DEF/GKP rows + bench bar)
+- **Player info**: Each player box shows opponent(venue), xG, and W/D/L team form below xPts
 - **Click to sell**: Click any player → opens replacement search panel
+- **Double-click to buy**: Double-click any replacement to instantly confirm the transfer
 - **Drag to swap**: Drag any player onto another to swap positions (starter ↔ bench substitution)
+- **⚡ Optimize XI**: Auto-picks the best starting 11 + captain + vice-captain based on xPts across all valid formations
 - **GW selector**: Choose target GW (current + next 5) — impact calculated per GW
-- **Chip toggle**: Select active chip (WC/FH/BB/TC)
+- **Chip toggle**: Select active chip (WC/FH/BB/TC) — chips used in 1st half don't affect 2nd half (FPL 25/26 dual chip sets)
+- **Free transfers on chips**: FH/WC active → all transfers show as FREE (0 hits)
 - **Budget awareness**: All players shown, unaffordable ones dimmed with "need +£Xm" badge
 - **Impact analysis**: This GW gain, XI xPts before/after, multi-GW value (4 GW lookahead), price delta
 - **Live squad update**: After confirming a transfer, the pitch instantly updates with the new player (green glow + "NEW" badge)
 - **Transfer queue**: Plan multiple transfers, see total gain/cost/hits summary
+- **Save & Restore**: Save your transfer plan to localStorage — auto-restores when you come back
+- **Captain/VC**: Double-click for captain (C), right-click for vice-captain (V)
 
 ### Drag & Drop Substitution
 - Drag any player (starter or bench) onto another → instant position swap
@@ -169,12 +175,18 @@ Scans **ALL remaining gameweeks** to find the optimal time for each chip.
 1. Go to **Chip Strategy** page → Click **"Analyze Season"**
 2. System scans every remaining GW (e.g., GW33-GW38) and scores each chip 0-100
 3. Considers: DGW size, BGW blanks, bench quality, captain quality, WC-before-DGW strategy
+4. **Uses your actual squad**: BB scores your real bench, TC finds your best captain
+
+### FPL 25/26 Dual Chip Sets
+- Each half-season (GW1-19, GW20-38) gets its own set of 4 chips (BB, TC, FH, WC)
+- Chips used in 1st half don't affect 2nd half availability
+- Currently active chip (this GW) shown as "Active", not "Used"
 
 ### Output
-- **Recommended Chip Schedule**: Timeline showing when to use each chip
+- **Recommended Chip Schedule**: Timeline showing when to use each chip (1 chip per GW enforced)
 - **Per-chip cards**: Best GW + score + top 3 alternatives with reasoning
 - **Score Heatmap**: Color-coded grid of every chip × every GW (hover for details)
-- **Auto-detects** which chips you've already used this season
+- **Auto-detects** which chips you've already used this half-season
 
 ### Scoring Factors
 | Chip | Key Triggers |
@@ -206,16 +218,20 @@ Multi-GW transfer planning with rolling state simulation.
 
 | Tab | What it shows |
 |-----|---------------|
-| **📊 Overview** | Pitch view with optimal XI, stats summary, chip recommendation, DGW banner |
+| **📊 Overview** | GW hero card with DGW/BGW alerts, pitch view with optimal XI, stats summary, chip recommendation |
 | **⚽ Best Squad** | Starting XI + bench with full stats, xPts, fixtures, team form |
 | **🏆 Players** | Unified table: Top 30, All, DGW, Differentials (<10% owned), Value (≤£6.5m) |
-| **🎯 Chip Strategy** | Current GW + season-wide analysis with heatmap and recommended schedule |
+| **🎯 Chip Strategy** | Current GW + season-wide analysis with heatmap, half-season chip tracking |
 | **👤 My Team & Planner** | 4 sub-tabs: My Squad, Transfer Simulator, GW Planner, Fixture Ticker |
-| **🤖 AI Chat** | Natural language Q&A — semantic NLU, no external LLM needed |
+| **🤖 AI Chat** | Natural language Q&A — semantic NLU with what-if scenarios, no external LLM needed |
 
 ### Key UI Features
-- **FPL-style pitch**: Gradient jerseys with team shortnames, captain/DGW/injury badges
+- **GW Hero header**: Gradient card with large GW number + DGW/BGW/Normal alerts
+- **FPL-style pitch**: Gradient jerseys with team shortnames, captain/DGW/injury badges, opponent/xG/form info
+- **⚡ Optimize XI**: One-click auto-pick best starting 11 + captain + vice-captain
 - **Drag & drop**: Swap players by dragging between positions
+- **Double-click to buy**: Instantly confirm transfers in replacement list
+- **Save & restore**: Transfer plans persist across sessions via localStorage
 - **Live transfer updates**: Pitch reflects changes instantly after confirming transfers
 - **Refresh status**: Shows "Updated Xh Ym ago" with manual refresh button
 
@@ -244,7 +260,7 @@ Multi-GW transfer planning with rolling state simulation.
 
 ## 🤖 AI Chat
 
-Semantic intent scoring with 100+ weighted regex patterns across 11 intents. No external LLM required.
+Semantic intent scoring with 100+ weighted regex patterns across 12 intents. No external LLM required.
 
 | Intent | Example |
 |--------|---------|
@@ -255,6 +271,8 @@ Semantic intent scoring with 100+ weighted regex patterns across 11 intents. No 
 | **Transfers** | "Is it worth taking a -4 for Haaland?" |
 | **Value picks** | "Budget defenders?", "Best under 6m" |
 | **Differentials** | "Hidden gems nobody owns?" |
+| **What-If** | "If Darlow plays both DGW games, what's his xPts?" |
+| **Player lookup** | "Tell me about Haaland" — shows per-fixture xPts/xMins/xG/CS% breakdown |
 
 ---
 
