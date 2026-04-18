@@ -752,8 +752,20 @@ async function authLogin() {
       AUTH_TOKEN = d.token;
       AUTH_USER = d.user;
       localStorage.setItem('fpl_auth_token', AUTH_TOKEN);
-      // Reload page so predictions are fetched with auth token (unmasked for premium)
-      location.reload();
+      hideAuthOverlay();
+      onAuthSuccess();
+      // Re-fetch predictions with auth token to get unmasked premium data
+      try {
+        const pr = await fetch('/api/predictions?_t=' + Date.now(), {headers: authHeaders()});
+        if (pr.ok) {
+          DATA = await pr.json();
+          if (DATA && DATA.predictions) {
+            USER_PLAN = DATA.user_plan || (AUTH_USER?.plan) || 'free';
+            ALL_PREDICTIONS = DATA.predictions || [];
+            render();
+          }
+        }
+      } catch(e2) { console.warn('Re-fetch predictions after login failed:', e2); }
     } else {
       showAuthError(d.error || 'Login failed');
     }
