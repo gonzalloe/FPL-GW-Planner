@@ -748,12 +748,20 @@ def api_reset_accounts():
 
 @app.route("/")
 def index():
-    return send_from_directory(str(BASE_DIR), "dashboard.html")
+    resp = send_from_directory(str(BASE_DIR), "dashboard.html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/<path:filename>")
 def static_files(filename):
-    return send_from_directory(str(BASE_DIR), filename)
+    resp = send_from_directory(str(BASE_DIR), filename)
+    if filename.endswith((".html", ".js")):
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 # ── Startup ──
