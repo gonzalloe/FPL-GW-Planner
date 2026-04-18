@@ -295,7 +295,6 @@ def api_my_team():
     try:
         team_id = int(team_id)
         from my_team import fetch_my_team, enrich_my_team, generate_transfer_suggestions
-        from prediction_engine import PredictionEngine
 
         settings = _load_settings()
         settings["team_id"] = team_id
@@ -305,17 +304,24 @@ def api_my_team():
         if team_data.get("error"):
             return jsonify(team_data), 400
 
-        engine = PredictionEngine()
-
         # Use cached predictions if available (much faster than predict_all)
         files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
         if files:
             cached = json.loads(files[0].read_text(encoding="utf-8"))
             predictions = cached.get("predictions", [])
         else:
+            from prediction_engine import PredictionEngine
+            engine = PredictionEngine()
             predictions = engine.predict_all()
 
-        enriched = enrich_my_team(team_data, engine.players, predictions)
+        # Build player_map from predictions (avoids PredictionEngine init + FPL API call)
+        player_map = {}
+        for p in predictions:
+            pid = p.get("player_id")
+            if pid:
+                player_map[pid] = p
+
+        enriched = enrich_my_team(team_data, player_map, predictions)
         suggestions = generate_transfer_suggestions(enriched, predictions)
         enriched["transfer_suggestions"] = suggestions
 
@@ -358,17 +364,17 @@ def api_transfers():
     try:
         team_id = int(team_id)
         from my_team import fetch_my_team, enrich_my_team, generate_transfer_suggestions
-        from prediction_engine import PredictionEngine
         team_data = fetch_my_team(team_id)
-        engine = PredictionEngine()
         # Use cached predictions if available
         files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
         if files:
             cached = json.loads(files[0].read_text(encoding="utf-8"))
             predictions = cached.get("predictions", [])
         else:
-            predictions = engine.predict_all()
-        enriched = enrich_my_team(team_data, engine.players, predictions)
+            from prediction_engine import PredictionEngine
+            predictions = PredictionEngine().predict_all()
+        player_map = {p.get("player_id"): p for p in predictions if p.get("player_id")}
+        enriched = enrich_my_team(team_data, player_map, predictions)
         suggestions = generate_transfer_suggestions(enriched, predictions, free_transfers=2)
         return jsonify({"team_id": team_id, "suggestions": suggestions,
                         "bank": enriched.get("gw_summary", {}).get("bank", 0),
