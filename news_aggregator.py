@@ -23,6 +23,13 @@ NEWS_SOURCES = {
         "reliability": 10,
         "icon": "⚽",
     },
+    "premier_injuries": {
+        "name": "PremierInjuries.com",
+        "url": "https://www.premierinjuries.com/injury-table.php",
+        "type": "web",
+        "reliability": 9,
+        "icon": "🏥",
+    },
     "premier_league": {
         "name": "PremierLeague.com",
         "url": "https://www.premierleague.com/news",
@@ -57,6 +64,13 @@ NEWS_SOURCES = {
         "type": "web",
         "reliability": 9,
         "icon": "📊",
+    },
+    "fpl_community": {
+        "name": "FPL Community",
+        "url": "https://www.fplgameweek.com/",
+        "type": "web",
+        "reliability": 7,
+        "icon": "👥",
     },
 }
 
@@ -454,3 +468,93 @@ class NewsAggregator:
             "fetched_at": datetime.now().isoformat(),
             "sources": list(NEWS_SOURCES.keys()),
         }
+
+    def get_injury_overrides(self, player_map: dict) -> dict:
+        """
+        Cross-reference external news with FPL player data to find
+        injury information that FPL hasn't updated yet.
+
+        Returns: {player_id: {"status": "i"/"d"/"a", "chance": int, "news": str, "source": str}}
+        Only returns overrides for players whose FPL status doesn't match external reports.
+        """
+        overrides = {}
+
+        # Build reverse lookup: name → player_id
+        name_to_pid = {}
+        for pid, p in player_map.items():
+            web_name = p.get("web_name", "").lower()
+            full_name = f"{p.get('first_name', '')} {p.get('second_name', '')}".lower().strip()
+            second_name = p.get("second_name", "").lower()
+            if web_name:
+                name_to_pid[web_name] = pid
+            if full_name:
+                name_to_pid[full_name] = pid
+            if second_name and len(second_name) > 3:
+                name_to_pid[second_name] = pid
+
+        # Get external news
+        try:
+            all_news = self.get_all_news()
+        except Exception:
+            return overrides
+
+        # Extract injury-related news and match to players
+        for item in all_news:
+            if item.get("source") == "FPL Official":
+                continue  # Skip FPL's own data, we already have it
+
+            title_lower = item.get("title", "").lower()
+            summary_lower = item.get("summary", "").lower()
+            full_text = f"{title_lower} {summary_lower}"
+            category = item.get("category", "")
+
+            if category not in ("injury", "doubt", "return", "team_news"):
+                continue
+
+            # Try to match player names from the article
+            for player_name_lower, pid in name_to_pid.items():
+                if len(player_name_lower) < 4:
+                    continue
+                if player_name_lower in full_text:
+                    p = player_map.get(pid, {})
+                    fpl_status = p.get("status", "a")
+                    fpl_chance = p.get("chance_of_playing_next_round")
+
+                    # Determine what the news suggests
+                    is_ruled_out = any(kw in full_text for kw in [
+                        "ruled out", "out for", "miss", "sidelined", "surgery",
+                        "fracture", "long-term", "confirmed injured", "will not play",
+                        "not available", "absent", "knee injury", "ankle injury",
+                    ])
+                    is_doubtful = any(kw in full_text for kw in [
+                        "doubt", "doubtful", "fitness test", "assess", "scan",
+                        "50-50", "touch and go", "not certain",
+                    ])
+                    is_returning = any(kw in full_text for kw in [
+                        "fit again", "back in training", "return", "available",
+                        "passed fit", "in contention", "recovered", "comeback",
+                    ])
+
+                    # Only override if there's a mismatch with FPL's data
+                    if is_ruled_out and fpl_status == "a":
+                        # External says out, FPL says available → override
+                        overrides[pid] = {
+                            "status": "i", "chance": 0,
+                            "news": item.get("title", "Ruled out per external report"),
+                            "source": item.get("source", "External"),
+                        }
+                    elif is_doubtful and fpl_status == "a":
+                        overrides[pid] = {
+                            "status": "d", "chance": 50,
+                            "news": item.get("title", "Doubtful per external report"),
+                            "source": item.get("source", "External"),
+                        }
+                    elif is_returning and fpl_status in ("i", "u", "s"):
+                        overrides[pid] = {
+                            "status": "d", "chance": 75,
+                            "news": item.get("title", "Returning per external report"),
+                            "source": item.get("source", "External"),
+                        }
+                    break  # One match per news item
+
+        return overrides

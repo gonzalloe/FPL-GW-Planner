@@ -260,6 +260,28 @@ class PredictionEngine:
         self.dgw_teams = get_dgw_teams(target_gw, self.fixtures)
         self.bgw_teams = get_bgw_teams(target_gw, self.fixtures, self.bootstrap)
 
+        # ── Fetch external news overrides ──
+        # Cross-reference BBC/Sky/PremierInjuries with FPL data to catch
+        # injuries/returns that FPL hasn't updated yet
+        self._news_overrides = {}
+        try:
+            from news_aggregator import NewsAggregator
+            aggregator = NewsAggregator()
+            self._news_overrides = aggregator.get_injury_overrides(self.players)
+            if self._news_overrides:
+                # Apply overrides to player data so injury context picks them up
+                for pid, override in self._news_overrides.items():
+                    if pid in self.players:
+                        self.players[pid]["_news_override"] = override
+                        # Override status if external source says they're out
+                        if override["status"] in ("i", "u", "s"):
+                            self.players[pid]["status"] = override["status"]
+                            self.players[pid]["chance_of_playing_next_round"] = override["chance"]
+                            if override.get("news"):
+                                self.players[pid]["news"] = override["news"]
+        except Exception:
+            pass
+
         # ── Build team injury context ──
         # Count unavailable players per team+position to boost replacements
         self._team_injury_context = {}  # {(team_id, pos_id): {"out": count, "out_names": [...]}}
@@ -281,17 +303,13 @@ class PredictionEngine:
         results = []
         for pid, p in self.players.items():
             chance = p.get("chance_of_playing_next_round")
+            # Only skip players explicitly marked as very unlikely (0% or <25%)
             if chance is not None and chance < min_chance:
                 continue
 
-            if self.current_gw > 5:
-                min_minutes = p.get("minutes", 0)
-                avg_mins_per_gw = min_minutes / max(self.current_gw - 1, 1)
-                if avg_mins_per_gw < 5:
-                    continue
-
             pred = self.predict_player(pid, target_gw)
-            if pred.get("predicted_points", 0) > 0:
+            # Include ALL players — even 0 xPts (youngsters, bench warmers)
+            if not pred.get("error"):
                 results.append(pred)
 
         results.sort(key=lambda x: x["predicted_points"], reverse=True)
