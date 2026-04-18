@@ -9,6 +9,7 @@ An intelligent prediction and squad optimization system for Fantasy Premier Leag
 - [Quick Start](#-quick-start)
 - [Project Structure](#-project-structure)
 - [Setup Guide](#-setup-guide)
+- [User Accounts & Subscription](#-user-accounts--subscription)
 - [How Predictions Work](#-how-predictions-work)
 - [How the Squad Optimizer Works](#-how-the-squad-optimizer-works)
 - [Transfer Simulator](#-transfer-simulator)
@@ -18,6 +19,7 @@ An intelligent prediction and squad optimization system for Fantasy Premier Leag
 - [API Reference](#-api-reference)
 - [AI Chat](#-ai-chat)
 - [Auto-Refresh](#-auto-refresh)
+- [Deployment](#-deployment)
 - [Configuration & Tuning](#-configuration--tuning)
 
 ---
@@ -54,12 +56,17 @@ fpl-predictor/
 ├── ai_chat.py             # Semantic NLU chat engine (v2, no external LLM needed)
 ├── ai_analyst.py          # LLM prompt generator for external AI analysis
 ├── my_team.py             # FPL team import via Team ID
-├── news_aggregator.py     # Multi-source football news scraper
+├── news_aggregator.py     # Multi-source news: FPL + BBC + Sky + Google News (Romano, Ornstein, Dinnery)
+├── auth.py                # User authentication + subscription tiers (free/premium/admin)
 ├── main.py                # CLI runner
 ├── server.py              # HTTP server + REST API (port 8888, auto-refresh every 2h)
-├── dashboard.html         # Full interactive web dashboard (single-file SPA, ~136KB)
+├── dashboard.html         # Full interactive web dashboard (single-file SPA, ~140KB)
+├── requirements.txt       # Python dependencies
+├── render.yaml            # Render.com deployment config
+├── .gitignore             # Excludes cache, output, data, debug files
 ├── cache/                 # API response cache (auto-managed)
-└── output/                # Generated prediction JSON files
+├── output/                # Generated prediction JSON files
+└── data/                  # User accounts & sessions (auto-created, gitignored)
 ```
 
 ---
@@ -85,6 +92,73 @@ python server.py      # Start dashboard at http://localhost:8888
 1. Go to `https://fantasy.premierleague.com` → Log in → "My Team"
 2. Find your Team ID in the URL: `fantasy.premierleague.com/entry/1234567/event/...`
 3. Enter `1234567` in the **My Team & Planner** page
+
+---
+
+## 👤 User Accounts & Subscription
+
+### Authentication
+Users must register/login to access the dashboard. Accounts stored in `data/users.json` (server-side, not in repo).
+
+### Tiers
+
+| Feature | Free | Premium ($2.50/mo) | Admin |
+|---------|------|---------------------|-------|
+| Import FPL Team | ✅ | ✅ | ✅ |
+| View Squad & Formation | ✅ | ✅ | ✅ |
+| Basic Fixture Ticker | ✅ | ✅ | ✅ |
+| AI Chat | 3/day | Unlimited | Unlimited |
+| **xPts Predictions** | 🔒 | ✅ | ✅ |
+| **Transfer Simulator** | 🔒 | ✅ | ✅ |
+| **Optimize XI** | 🔒 | ✅ | ✅ |
+| **Season Chip Planner** | 🔒 | ✅ | ✅ |
+| **GW Planner** | 🔒 | ✅ | ✅ |
+| **Per-fixture Breakdown** | 🔒 | ✅ | ✅ |
+| **What-If Scenarios** | 🔒 | ✅ | ✅ |
+| **User Management** | ❌ | ❌ | ✅ |
+
+### Payment (Stripe)
+- Premium subscription: **$2.50/month** via Stripe Checkout
+- Set `STRIPE_SECRET_KEY` env var for live payments
+- Without Stripe key: test-mode instant upgrade (for development)
+- Webhook endpoint: `POST /api/stripe/webhook`
+
+### Admin API
+```bash
+# List all users
+POST /api/admin/users
+
+# Change user plan
+POST /api/admin/set-plan
+{"email": "user@example.com", "plan": "premium", "months": 12}
+
+# Delete user
+POST /api/admin/delete-user
+{"email": "user@example.com"}
+```
+
+### Initial Setup (after deployment)
+Create admin and personal accounts:
+```python
+python -c "
+from auth import register, _load_users, _save_users
+from datetime import datetime, timedelta
+
+# Create accounts
+register('admin@yourdomain.com', 'YourAdminPassword', 'Admin')
+register('you@yourdomain.com', 'YourPassword', 'YourName')
+
+# Set plans
+users = _load_users()
+far = (datetime.now() + timedelta(days=365*99)).isoformat()
+users['admin@yourdomain.com']['plan'] = 'admin'
+users['admin@yourdomain.com']['plan_expires'] = far
+users['you@yourdomain.com']['plan'] = 'premium'
+users['you@yourdomain.com']['plan_expires'] = far
+_save_users(users)
+print('Done!')
+"
+```
 
 ---
 
@@ -243,9 +317,11 @@ Multi-GW transfer planning with rolling state simulation.
 
 ## 📡 API Reference
 
+### Data Endpoints (require auth token)
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/predictions` | GET | Latest cached predictions (all 387 players) |
+| `/api/predictions` | GET | All player predictions (xPts masked for free users) |
 | `/api/run?gw=33` | GET | Run fresh predictions |
 | `/api/my-team?id=12345` | GET | Fetch & enrich your FPL team |
 | `/api/search-players?q=haaland&pos=FWD` | GET | Search players for transfer simulator |
@@ -256,9 +332,28 @@ Multi-GW transfer planning with rolling state simulation.
 | `/api/fixture-rankings?gws=5` | GET | Teams ranked by FDR |
 | `/api/chip-analysis` | GET | Current GW chip scoring |
 | `/api/chat` | POST | `{"question": "Who should I captain?"}` |
+| `/api/news` | GET | Aggregated news from all sources |
 | `/api/refresh` | GET | Trigger manual data refresh |
 | `/api/refresh-status` | GET | Last refresh time + next refresh ETA |
 | `/api/settings` | GET/POST | User settings (team_id, etc.) |
+
+### Auth Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/auth/register` | POST | `{email, password, name}` → create account |
+| `/api/auth/login` | POST | `{email, password}` → get session token |
+| `/api/auth/me` | POST | Validate token → return user info |
+| `/api/stripe/create-checkout` | POST | Start Stripe subscription checkout |
+| `/api/stripe/webhook` | POST | Stripe webhook for payment events |
+
+### Admin Endpoints (admin role required)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/admin/users` | POST | List all users |
+| `/api/admin/set-plan` | POST | `{email, plan, months}` → change user plan |
+| `/api/admin/delete-user` | POST | `{email}` → delete user |
 
 ---
 
@@ -363,6 +458,41 @@ python server.py    # http://localhost:8888
 5. Deploy — your app will be live at `https://fpl-gw-planner.onrender.com`
 
 The included `render.yaml` and `requirements.txt` auto-configure everything.
+
+### Step 3: Configure Stripe (optional, for real payments)
+1. Create account at [stripe.com](https://stripe.com)
+2. Get API keys from Stripe Dashboard → Developers → API keys
+3. In Render, add environment variables:
+   - `STRIPE_SECRET_KEY` = `sk_live_xxx` (or `sk_test_xxx` for testing)
+   - `STRIPE_WEBHOOK_SECRET` = `whsec_xxx`
+4. In Stripe Dashboard → Webhooks → Add endpoint:
+   - URL: `https://your-app.onrender.com/api/stripe/webhook`
+   - Events: `checkout.session.completed`
+
+Without Stripe keys, the "Upgrade" button uses test-mode (instant free upgrade for development).
+
+### Step 4: Create Admin Account (after first deploy)
+Use Render's Shell tab or run locally:
+```python
+python -c "
+from auth import register, _load_users, _save_users
+from datetime import datetime, timedelta
+register('admin@yourdomain.com', 'SecurePassword123!', 'Admin')
+users = _load_users()
+users['admin@yourdomain.com']['plan'] = 'admin'
+users['admin@yourdomain.com']['plan_expires'] = (datetime.now() + timedelta(days=365*99)).isoformat()
+_save_users(users)
+print('Admin account created!')
+"
+```
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PORT` | No | Server port (default: 8888, Render sets this automatically) |
+| `STRIPE_SECRET_KEY` | No | Stripe API key for real payments |
+| `STRIPE_WEBHOOK_SECRET` | No | Stripe webhook signature verification |
 
 ---
 
