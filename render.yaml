@@ -3,7 +3,7 @@ services:
     name: fpl-predictor
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python server.py --no-browser
+    startCommand: python server.py
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.0"
