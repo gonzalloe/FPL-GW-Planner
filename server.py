@@ -1132,12 +1132,60 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             print(f"  API: {args[0]}")
 
 
+def _auto_setup_accounts():
+    """Auto-create initial accounts on startup if they don't exist (for ephemeral hosting)."""
+    from auth import register, _load_users, _save_users
+    from datetime import timedelta
+
+    admin_email = os.environ.get("ADMIN_EMAIL", "")
+    admin_pass = os.environ.get("ADMIN_PASSWORD", "")
+    cc_email = os.environ.get("CC_EMAIL", "")
+    cc_pass = os.environ.get("CC_PASSWORD", "")
+    cc2_email = os.environ.get("CC2_EMAIL", "")
+    cc2_pass = os.environ.get("CC2_PASSWORD", "")
+
+    if not admin_email or not admin_pass:
+        return  # No credentials configured, skip
+
+    users = _load_users()
+    if admin_email in users:
+        return  # Already set up
+
+    print("  [SETUP] Creating initial accounts...")
+    far = (datetime.now() + timedelta(days=365 * 99)).isoformat()
+
+    # Register all accounts
+    if admin_pass:
+        register(admin_email, admin_pass, "Admin")
+    if cc_email and cc_pass:
+        register(cc_email, cc_pass, "CC")
+    if cc2_email and cc2_pass:
+        register(cc2_email, cc2_pass, "CC Alt")
+
+    # Set correct plans
+    users = _load_users()
+    if admin_email in users:
+        users[admin_email]["plan"] = "admin"
+        users[admin_email]["plan_expires"] = far
+    if cc_email and cc_email in users:
+        users[cc_email]["plan"] = "premium"
+        users[cc_email]["plan_expires"] = far
+    if cc2_email and cc2_email in users:
+        users[cc2_email]["plan"] = "premium"
+        users[cc2_email]["plan_expires"] = far
+    _save_users(users)
+    print(f"  [SETUP] ✅ Accounts created: admin={admin_email}, cc={cc_email}, cc2={cc2_email}")
+
+
 def serve(port: int = PORT, open_browser: bool = True):
     global _last_refresh
 
     print(f"\n{'='*55}")
     print(f"  FPL Predictor Server v6 (Auto-Refresh + Simulator)")
     print(f"{'='*55}")
+
+    # Auto-create initial accounts if not present (survives ephemeral deploys)
+    _auto_setup_accounts()
     print(f"\n  Dashboard:        http://localhost:{port}")
     print(f"  API:              http://localhost:{port}/api/predictions")
     print(f"  Simulate:         POST http://localhost:{port}/api/simulate-transfer")
