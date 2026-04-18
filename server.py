@@ -93,11 +93,12 @@ def _run_predictions(gw=None):
 
 
 def _refresh_data():
-    """Refresh all cached data: clear cache, re-fetch from FPL API, re-run predictions."""
+    """Refresh all cached data: clear cache, re-fetch from FPL API, re-run predictions.
+    Runs prediction engine in a subprocess to avoid GIL blocking HTTP threads."""
     global _last_refresh
+    import subprocess
     with _refresh_lock:
         try:
-            import shutil
             cache_dir = BASE_DIR / "cache"
             if cache_dir.exists():
                 for f in cache_dir.glob("*.json"):
@@ -106,11 +107,34 @@ def _refresh_data():
                     except Exception:
                         pass
             print(f"  [REFRESH] {datetime.now().strftime('%H:%M:%S')} — Clearing cache and re-fetching data...")
-            _run_predictions()
+
+            # Run predictions in subprocess so GIL doesn't block HTTP threads
+            result = subprocess.run(
+                [sys.executable, "-c",
+                 "import sys; sys.path.insert(0, '" + str(BASE_DIR).replace("\\", "/") + "'); "
+                 "from server import _run_predictions; _run_predictions()"],
+                capture_output=True, text=True, timeout=300,
+                cwd=str(BASE_DIR)
+            )
+            if result.returncode != 0:
+                print(f"  [REFRESH] Subprocess stderr: {result.stderr[:500]}")
+                # Fallback to in-process if subprocess fails
+                _run_predictions()
+
             _last_refresh = time.time()
             print(f"  [REFRESH] {datetime.now().strftime('%H:%M:%S')} — Data refreshed successfully.")
+        except subprocess.TimeoutExpired:
+            print(f"  [REFRESH] WARNING: Subprocess timed out (300s), running in-process...")
+            _run_predictions()
+            _last_refresh = time.time()
         except Exception as e:
             print(f"  [REFRESH] ERROR: {e}")
+            # Fallback to in-process
+            try:
+                _run_predictions()
+                _last_refresh = time.time()
+            except Exception as e2:
+                print(f"  [REFRESH] Fallback also failed: {e2}")
 
 
 def _auto_refresh_loop():
