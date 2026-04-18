@@ -752,8 +752,8 @@ async function authLogin() {
       AUTH_TOKEN = d.token;
       AUTH_USER = d.user;
       localStorage.setItem('fpl_auth_token', AUTH_TOKEN);
-      hideAuthOverlay();
-      onAuthSuccess();
+      // Reload page so predictions are fetched with auth token (unmasked for premium)
+      location.reload();
     } else {
       showAuthError(d.error || 'Login failed');
     }
