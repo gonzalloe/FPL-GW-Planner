@@ -253,8 +253,8 @@ class PredictionEngine:
         }
 
     def predict_all(self, target_gw: int | None = None,
-                    min_chance: int = 25) -> list[dict]:
-        """Predict points for all eligible players."""
+                    min_chance: int = 0) -> list[dict]:
+        """Predict points for ALL FPL players including injured/suspended."""
         if target_gw is None:
             target_gw = self.next_gw
 
