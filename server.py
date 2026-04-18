@@ -274,7 +274,135 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_simulate_transfer()
             return
 
+        if path == "/api/auth/register":
+            self._handle_auth_register()
+            return
+
+        if path == "/api/auth/login":
+            self._handle_auth_login()
+            return
+
+        if path == "/api/auth/me":
+            self._handle_auth_me()
+            return
+
+        if path == "/api/stripe/create-checkout":
+            self._handle_stripe_checkout()
+            return
+
+        if path == "/api/stripe/webhook":
+            self._handle_stripe_webhook()
+            return
+
         self._json_response({"error": "Not found"}, 404)
+
+    def _read_post_body(self):
+        length = int(self.headers.get("Content-Length", 0))
+        return json.loads(self.rfile.read(length)) if length else {}
+
+    def _get_auth_user(self):
+        """Extract user from Authorization header."""
+        from auth import get_user_from_token
+        auth = self.headers.get("Authorization", "")
+        token = auth.replace("Bearer ", "") if auth.startswith("Bearer ") else ""
+        return get_user_from_token(token)
+
+    def _handle_auth_register(self):
+        try:
+            from auth import register
+            data = self._read_post_body()
+            result = register(data.get("email", ""), data.get("password", ""), data.get("name", ""))
+            self._json_response(result, 200 if result.get("ok") else 400)
+        except Exception as e:
+            self._json_response({"error": str(e)}, 500)
+
+    def _handle_auth_login(self):
+        try:
+            from auth import login
+            data = self._read_post_body()
+            result = login(data.get("email", ""), data.get("password", ""))
+            self._json_response(result, 200 if result.get("ok") else 401)
+        except Exception as e:
+            self._json_response({"error": str(e)}, 500)
+
+    def _handle_auth_me(self):
+        user = self._get_auth_user()
+        if user:
+            self._json_response({"ok": True, "user": user})
+        else:
+            self._json_response({"error": "Not authenticated"}, 401)
+
+    def _handle_stripe_checkout(self):
+        """Create a Stripe Checkout session for premium subscription."""
+        user = self._get_auth_user()
+        if not user:
+            self._json_response({"error": "Not authenticated"}, 401)
+            return
+        try:
+            import stripe
+            stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+            if not stripe.api_key:
+                # No Stripe key — use manual upgrade for testing
+                from auth import upgrade_to_premium
+                result = upgrade_to_premium(user["email"])
+                self._json_response({"ok": True, "message": "Upgraded (test mode)", "user": result.get("user")})
+                return
+
+            session = stripe.checkout.Session.create(
+                payment_method_types=["card"],
+                line_items=[{
+                    "price_data": {
+                        "currency": "usd",
+                        "product_data": {"name": "FPL Predictor Premium"},
+                        "unit_amount": 250,  # $2.50 in cents
+                        "recurring": {"interval": "month"},
+                    },
+                    "quantity": 1,
+                }],
+                mode="subscription",
+                success_url=self.headers.get("Origin", "http://localhost:8888") + "/?upgraded=1",
+                cancel_url=self.headers.get("Origin", "http://localhost:8888") + "/?cancelled=1",
+                client_reference_id=user["email"],
+                customer_email=user["email"],
+            )
+            self._json_response({"ok": True, "checkout_url": session.url})
+        except ImportError:
+            # Stripe not installed — manual upgrade for testing
+            from auth import upgrade_to_premium
+            result = upgrade_to_premium(user["email"])
+            self._json_response({"ok": True, "message": "Upgraded (test mode — install stripe package for real payments)", "user": result.get("user")})
+        except Exception as e:
+            self._json_response({"error": str(e)}, 500)
+
+    def _handle_stripe_webhook(self):
+        """Handle Stripe webhook for subscription events."""
+        try:
+            import stripe
+            stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+            webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+            length = int(self.headers.get("Content-Length", 0))
+            payload = self.rfile.read(length)
+            sig = self.headers.get("Stripe-Signature", "")
+
+            if webhook_secret:
+                event = stripe.Webhook.construct_event(payload, sig, webhook_secret)
+            else:
+                event = json.loads(payload)
+
+            if event.get("type") == "checkout.session.completed":
+                session = event["data"]["object"]
+                email = session.get("client_reference_id") or session.get("customer_email")
+                if email:
+                    from auth import upgrade_to_premium
+                    upgrade_to_premium(
+                        email,
+                        stripe_customer_id=session.get("customer"),
+                        stripe_subscription_id=session.get("subscription"),
+                    )
+
+            self._json_response({"ok": True})
+        except Exception as e:
+            self._json_response({"error": str(e)}, 400)
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -289,6 +417,30 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response({"error": "No predictions. Run first."}, 404)
             return
         data = json.loads(files[0].read_text(encoding="utf-8"))
+
+        # Apply tier gating — free users can't see xPts
+        user = self._get_auth_user()
+        is_premium = user and user.get("plan") == "premium"
+
+        if not is_premium:
+            data["user_plan"] = "free" if user else "guest"
+            # Mask prediction details for free users
+            for p in data.get("predictions", []):
+                p["predicted_points"] = "🔒"
+                p["raw_xpts"] = "🔒"
+                p["confidence"] = "🔒"
+                p.pop("fixtures", None)
+                p.pop("factors", None)
+            # Also mask squad
+            sq = data.get("squad", {})
+            for p in sq.get("starting_xi", []):
+                p["predicted_points"] = "🔒"
+            for p in sq.get("bench", []):
+                p["predicted_points"] = "🔒"
+            sq["predicted_total_points"] = "🔒"
+        else:
+            data["user_plan"] = "premium"
+
         self._json_response(data)
 
     def _run_and_serve(self, gw):

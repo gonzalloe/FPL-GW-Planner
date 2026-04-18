@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 cache/
 output/
+data/
 *.json.bak
 user_settings.json
 server.log
