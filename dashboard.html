@@ -355,13 +355,13 @@ input:focus, select:focus { border-color:var(--accent); }
     <h1>FPL Predictor</h1>
     <small>AI-Powered v9</small>
   </div>
-  <div class="nav-item active" data-page="overview">📊 Overview</div>
-  <div class="nav-item" data-page="squad">⚽ Best Squad</div>
-  <div class="nav-item" data-page="players">🏆 Players</div>
-  <div class="nav-item" data-page="chips">🎯 Chip Strategy</div>
-  <div class="nav-item" data-page="myteam">👤 My Team & Planner</div>
+  <div class="nav-item active" data-page="overview" id="nav-overview">📊 Overview</div>
+  <div class="nav-item" data-page="squad" id="nav-squad">⚽ Best Squad</div>
+  <div class="nav-item" data-page="players" id="nav-players">🏆 Players</div>
+  <div class="nav-item" data-page="chips" id="nav-chips">🎯 Chip Strategy</div>
+  <div class="nav-item" data-page="myteam" id="nav-myteam">👤 My Team & Planner</div>
   <div style="border-top:1px solid var(--border);margin:12px 0;"></div>
-  <div class="nav-item" data-page="chat" style="color:var(--accent);">🤖 AI Chat</div>
+  <div class="nav-item" data-page="chat" id="nav-chat" style="color:var(--accent);">🤖 AI Chat</div>
   <div class="nav-item" data-page="admin" id="nav-admin" style="display:none;color:var(--gold);">🛡️ Admin</div>
   <div style="padding:12px 20px;font-size:10px;color:var(--text3);border-top:1px solid var(--border);margin-top:auto;">
     <div id="refresh-status">Data: --</div>
@@ -480,8 +480,8 @@ input:focus, select:focus { border-color:var(--accent); }
     <!-- Sub-tabs -->
     <div class="filters" style="margin-bottom:16px;">
       <button class="filter-btn active" data-mtab="squad" onclick="switchMyTeamTab(this)">📋 My Squad</button>
-      <button class="filter-btn" data-mtab="simulator" onclick="switchMyTeamTab(this)">🔄 Transfer Simulator</button>
-      <button class="filter-btn" data-mtab="planner" onclick="switchMyTeamTab(this)">📅 GW Planner</button>
+      <button class="filter-btn" data-mtab="simulator" id="mtab-btn-simulator" onclick="switchMyTeamTab(this)">🔄 Transfer Simulator</button>
+      <button class="filter-btn" data-mtab="planner" id="mtab-btn-planner" onclick="switchMyTeamTab(this)">📅 GW Planner</button>
       <button class="filter-btn" data-mtab="fixtures" onclick="switchMyTeamTab(this)">📊 Fixture Ticker</button>
     </div>
 
@@ -811,6 +811,37 @@ function onAuthSuccess() {
   if (AUTH_USER.plan === 'admin' || AUTH_USER.limits?.is_admin) {
     const adminNav = document.getElementById('nav-admin');
     if (adminNav) adminNav.style.display = '';
+  }
+
+  // ── Nav gating by plan ──
+  const isPremiumOrAdmin = AUTH_USER.plan === 'premium' || AUTH_USER.plan === 'admin';
+  const premiumOnlyNavs = ['nav-overview', 'nav-squad', 'nav-players', 'nav-chips', 'nav-chat'];
+  premiumOnlyNavs.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      if (isPremiumOrAdmin) {
+        el.style.display = '';
+      } else {
+        // Free user: hide premium tabs, add lock icon
+        el.style.display = 'none';
+      }
+    }
+  });
+
+  // Free users: default to My Team page instead of Overview
+  if (!isPremiumOrAdmin) {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    const myteamNav = document.getElementById('nav-myteam');
+    if (myteamNav) myteamNav.classList.add('active');
+    const myteamPage = document.getElementById('page-myteam');
+    if (myteamPage) myteamPage.classList.add('active');
+
+    // Hide premium sub-tabs within My Team
+    const simBtn = document.getElementById('mtab-btn-simulator');
+    const planBtn = document.getElementById('mtab-btn-planner');
+    if (simBtn) simBtn.style.display = 'none';
+    if (planBtn) planBtn.style.display = 'none';
   }
 }
 
