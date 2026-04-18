@@ -1,6 +1,18 @@
 # ⚽ FPL Predictor — AI-Powered Fantasy Premier League Squad Optimizer
 
-An intelligent prediction and squad optimization system for Fantasy Premier League. Pulls live data from the official FPL API, runs a Poisson-based prediction model, and generates the mathematically optimal squad for each gameweek — with transfer simulator, season-wide chip planning, and AI chat.
+An intelligent prediction and squad optimization system for Fantasy Premier League. Features a **Poisson-based prediction model** with injury-aware team analysis, **real-time news** from Fabrizio Romano/David Ornstein/BBC Sport, interactive **transfer simulator**, season-wide **chip planning**, and **AI chat** with what-if scenarios.
+
+**Live Demo**: Deploy on [Render.com](https://render.com) in 2 minutes (free tier). See [Deployment](#-deployment).
+
+### Highlights
+- 🧠 **12-factor Poisson model** — xG, xA, CS probability, bonus points, negative events
+- 🏥 **Injury-aware** — teammate injury boosts, team penalty, opponent weakness detection
+- 📰 **Real-time news** — Google News RSS pulls Fabrizio Romano, Ben Dinnery, David Ornstein updates
+- ⚡ **Transfer Simulator** — FPL-style pitch, drag-to-swap, double-click-to-buy, Optimize XI button
+- 🎯 **Chip Planner** — Season-wide analysis, 1 chip per GW, dual chip sets (FPL 25/26)
+- 🤖 **AI Chat** — 12 intents, what-if scenarios, per-fixture breakdown
+- 👤 **User accounts** — Free/Premium ($2.50/mo)/Admin tiers with Stripe payments
+- 📊 **All FPL players** — 600+ players including injured/suspended/youngsters
 
 ---
 
@@ -204,6 +216,18 @@ The engine uses a **Poisson-based probabilistic model** inspired by FPL Review, 
 | **Rotation** | 25% | -50% |
 | **Fringe** | 8% | -75% |
 
+### Injury Intelligence
+
+The engine dynamically adjusts predictions based on team injury context:
+
+| Feature | Effect |
+|---------|--------|
+| **Teammate injury boost** | If same-position teammate is out, player gets tier promotion (fringe→rotation→regular) |
+| **Team injury penalty** | `max(0.70, 1.0 - injury_fraction × 0.60)` — dampens form/strength for injured teams |
+| **Opponent weakness** | Playing against injured team → higher scoring context, higher CS probability |
+| **External news override** | If Fabrizio Romano reports injury before FPL updates, engine applies it immediately |
+| **Confidence boost** | +10-15% confidence when opportunity created by teammate injuries |
+
 ---
 
 ## 🏆 How the Squad Optimizer Works
@@ -292,16 +316,17 @@ Multi-GW transfer planning with rolling state simulation.
 
 ## 🌐 Dashboard Features
 
-6 pages, accessible via sidebar:
+7 pages, accessible via sidebar (premium tabs hidden for free users):
 
-| Tab | What it shows |
-|-----|---------------|
-| **📊 Overview** | GW hero card with DGW/BGW alerts, pitch view with optimal XI, stats summary, chip recommendation |
-| **⚽ Best Squad** | Starting XI + bench with full stats, xPts, fixtures, team form |
-| **🏆 Players** | Unified table: Top 30, All, DGW, Differentials (<10% owned), Value (≤£6.5m) |
-| **🎯 Chip Strategy** | Current GW + season-wide analysis with heatmap, half-season chip tracking |
-| **👤 My Team & Planner** | 4 sub-tabs: My Squad, Transfer Simulator, GW Planner, Fixture Ticker |
-| **🤖 AI Chat** | Natural language Q&A — semantic NLU with what-if scenarios, no external LLM needed |
+| Tab | What it shows | Free | Premium |
+|-----|---------------|------|---------|
+| **📊 Overview** | GW hero card with DGW/BGW alerts, pitch view, stats, chip rec | 🔒 | ✅ |
+| **⚽ Best Squad** | Starting XI + bench with full stats, fixtures, form | 🔒 | ✅ |
+| **🏆 Players** | Top 30, All, DGW, Differentials, Value — 600+ players | 🔒 | ✅ |
+| **🎯 Chip Strategy** | Season-wide analysis, heatmap, half-season chip tracking | 🔒 | ✅ |
+| **👤 My Team** | My Squad + Fixture Ticker (free) / + Transfer Sim + GW Planner (premium) | ✅* | ✅ |
+| **🤖 AI Chat** | 12-intent NLU, what-if scenarios, per-fixture breakdown | 🔒 | ✅ |
+| **🛡️ Admin** | User management, plan upgrades, bulk actions (admin only) | ❌ | ❌/✅ |
 
 ### Key UI Features
 - **GW Hero header**: Gradient card with large GW number + DGW/BGW/Normal alerts
@@ -379,11 +404,14 @@ Semantic intent scoring with 100+ weighted regex patterns across 12 intents. No 
 
 The server automatically refreshes all data every **2 hours**:
 
-- Clears cached FPL API data
-- Re-fetches fresh player stats, injuries, news, fixtures
-- Re-runs the prediction engine
-- Manual refresh available via sidebar button or `GET /api/refresh`
-- Refresh status shown in sidebar: "Updated Xh Ym ago"
+1. Clears cached FPL API data
+2. Re-fetches fresh player stats, injuries, news, fixtures from FPL API
+3. **Searches Google News RSS** for latest PL injury/team news (Fabrizio Romano, David Ornstein, Ben Dinnery, BBC, Sky, Guardian)
+4. **Cross-references** external news with FPL data → overrides slow FPL injury updates
+5. **Rebuilds team injury context** → cascading effects on predictions
+6. Re-runs the prediction engine for all 600+ players
+7. Manual refresh available via sidebar button or `GET /api/refresh`
+8. Refresh status shown in sidebar: "Updated Xh Ym ago"
 
 ---
 
