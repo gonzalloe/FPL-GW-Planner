@@ -14,6 +14,10 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
 
+# Force unbuffered output for Render/Docker (prints show immediately in logs)
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 PORT = int(os.environ.get("PORT", 8888))
@@ -1118,14 +1122,17 @@ class FPLHandler(http.server.SimpleHTTPRequestHandler):
             traceback.print_exc(); self._json_response({"error": "Internal server error"}, 500)
 
     def _json_response(self, data, code=200):
-        body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except BrokenPipeError:
+            pass  # Client disconnected, safe to ignore
 
     def log_message(self, format, *args):
         if "/api/" in str(args[0]) if args else False:
