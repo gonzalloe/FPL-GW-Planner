@@ -3353,7 +3353,7 @@ function renderFixturesTable() {
   for (let gw = fromGw; gw <= toGw; gw++) gws.push(gw);
 
   const teamEntries = Object.entries(ticker);
-  // Use backend-computed avg_fdr per GW which already accounts for BGW (6.0) and DGW (-0.5 bonus)
+  // Use backend-computed avg_fdr per GW which already accounts for BGW (5.5) and DGW (-0.5 bonus)
   teamEntries.forEach(([tid, team]) => {
     const fixes = team.fixtures || [];
     // Include all GWs: blanks contribute high FDR (penalized on backend), DGWs contribute low
@@ -3919,7 +3919,7 @@ function renderPlannerTicker(data) {
 
   const gws = gwPlans.map(g => g.gameweek);
 
-  // Sort teams by avg FDR across horizon
+  // Sort teams by avg FDR across horizon (use backend-computed avg_fdr which includes BGW/DGW adjustments)
   const teamEntries = Object.entries(ticker);
   teamEntries.sort((a, b) => {
     const avgA = a[1].fixtures.reduce((s, f) => s + f.avg_fdr, 0) / Math.max(a[1].fixtures.length, 1);
@@ -3956,13 +3956,15 @@ function renderPlannerTicker(data) {
 }
 
 function renderPlannerRankings(data) {
-  // Use fixture ticker to compute rankings
+  // Use fixture ticker to compute rankings — use backend avg_fdr directly
+  // (backend already applies BGW=5.5 penalty and DGW=-0.5 bonus)
   const ticker = data.fixture_ticker || {};
   const rankings = Object.entries(ticker).map(([tid, team]) => {
     const fixes = team.fixtures || [];
-    const totalFdr = fixes.reduce((s, f) => s + f.avg_fdr * (f.is_blank ? 0 : 1) + (f.is_blank ? 5 : 0), 0);
+    const avgFdr = fixes.length
+      ? fixes.reduce((s, f) => s + f.avg_fdr, 0) / fixes.length
+      : 5;
     const numFix = fixes.reduce((s, f) => s + f.fixture_count, 0);
-    const avgFdr = totalFdr / Math.max(fixes.length, 1);
     const dgws = fixes.filter(f => f.is_dgw).length;
     const blanks = fixes.filter(f => f.is_blank).length;
     return { team: team.short_name, avgFdr: avgFdr.toFixed(2), numFix, dgws, blanks,
