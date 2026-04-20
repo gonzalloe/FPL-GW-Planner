@@ -438,7 +438,9 @@ input:focus, select:focus {
 /* Custom select styling (native <select> dropdown is hard to theme, but we can
    force a solid theme-colored background + chevron and style <option>s) */
 select {
-  appearance:none !important; -webkit-appearance:none !important; -moz-appearance:none !important;
+  appearance:none !important; 
+  -webkit-appearance:none !important; 
+  -moz-appearance:none !important;
   padding-right:32px;
   background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%238892a8' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
   background-repeat:no-repeat;
@@ -446,7 +448,10 @@ select {
   background-size:12px 8px;
   cursor:pointer;
 }
+/* Aggressively remove all native arrows across browsers */
 select::-ms-expand { display:none; }
+select::-webkit-calendar-picker-indicator { display:none !important; opacity:0 !important; }
+select::-webkit-inner-spin-button, select::-webkit-outer-spin-button { display:none !important; }
 select option {
   background:var(--surface);
   color:var(--text);
@@ -457,8 +462,10 @@ select option:checked, select option:hover {
   background:linear-gradient(var(--accent-dim), var(--accent-dim));
   color:var(--accent);
 }
+/* Light theme: darker arrow for contrast */
 [data-theme="light"] select {
-  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a5878' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a5878' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E") !important;
+  background-color:var(--input-bg) !important;
 }
 [data-theme="light"] select option {
   background:#ffffff;

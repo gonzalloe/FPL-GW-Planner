@@ -1,20 +1,38 @@
 """
-FPL Predictor - Web Server (v8 — Flask + Gunicorn safe)
+FPL Predictor - Web Server (v9 — Scalable Flask + Gunicorn)
 Designed for Render free tier: 512MB RAM, 1 CPU, ephemeral disk.
+
+Scalability features:
+  - API rate limiting (flask-limiter) to prevent abuse
+  - In-memory response caching with TTL for heavy endpoints
+  - Thread-safe JSON file operations (via auth.py locks)
+  - Static asset cache headers for CDN/browser caching
+  - Health check endpoint for monitoring
+  - Auth-protected heavy computation endpoints
 """
 import json
 import sys
 import os
 import time
 import threading
+import hashlib
 from pathlib import Path
 from datetime import datetime
+from functools import wraps
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 sys.path.insert(0, str(Path(__file__).parent))
 
 from flask import Flask, request, jsonify, send_from_directory, make_response
+
+# Rate limiting — graceful fallback if flask-limiter not installed
+try:
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+    _HAS_LIMITER = True
+except ImportError:
+    _HAS_LIMITER = False
 
 PORT = int(os.environ.get("PORT", 8888))
 BASE_DIR = Path(__file__).parent
@@ -27,16 +45,92 @@ _refresh_thread_started = False
 
 app = Flask(__name__, static_folder=None)  # Disable Flask's default static handling
 
+# ── Rate Limiter (degrades gracefully if dependency missing) ──
+if _HAS_LIMITER:
+    limiter = Limiter(
+        get_remote_address,
+        app=app,
+        default_limits=["120 per minute"],  # Global default
+        storage_uri="memory://",
+    )
+else:
+    # Stub limiter that does nothing
+    class _NoopLimiter:
+        def limit(self, *a, **kw):
+            def decorator(f): return f
+            return decorator
+        def exempt(self, f): return f
+    limiter = _NoopLimiter()
+
+# ── In-Memory Response Cache ──
+_response_cache = {}  # {cache_key: {"data": ..., "expires": timestamp}}
+_cache_lock = threading.Lock()
+
+
+def cached_response(ttl_seconds: int = 60, key_prefix: str = ""):
+    """Decorator: cache JSON responses in memory with TTL.
+    Greatly reduces CPU load for repeat requests to heavy endpoints."""
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            # Build cache key from endpoint + query string
+            cache_key = f"{key_prefix or f.__name__}:{request.full_path}"
+            now = time.time()
+            with _cache_lock:
+                entry = _response_cache.get(cache_key)
+                if entry and entry["expires"] > now:
+                    return jsonify(entry["data"])
+            # Cache miss — compute
+            result = f(*args, **kwargs)
+            # Only cache successful JSON responses
+            if isinstance(result, tuple):
+                resp, code = result
+                if code == 200:
+                    try:
+                        data = resp.get_json()
+                        with _cache_lock:
+                            _response_cache[cache_key] = {"data": data, "expires": now + ttl_seconds}
+                    except Exception:
+                        pass
+                return result
+            else:
+                try:
+                    data = result.get_json()
+                    with _cache_lock:
+                        _response_cache[cache_key] = {"data": data, "expires": now + ttl_seconds}
+                except Exception:
+                    pass
+                return result
+        return wrapper
+    return decorator
+
+
+def invalidate_cache(prefix: str = ""):
+    """Invalidate cached responses (call after data refresh or prediction regeneration)."""
+    with _cache_lock:
+        if not prefix:
+            _response_cache.clear()
+        else:
+            keys_to_del = [k for k in _response_cache if k.startswith(prefix)]
+            for k in keys_to_del:
+                del _response_cache[k]
+
 
 # ── Utilities ──
 
+_settings_lock = threading.Lock()
+
 def _load_settings():
-    if SETTINGS_FILE.exists():
-        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    return {}
+    with _settings_lock:
+        if SETTINGS_FILE.exists():
+            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        return {}
 
 def _save_settings(data):
-    SETTINGS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    with _settings_lock:
+        tmp = SETTINGS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(SETTINGS_FILE)
 
 def _run_predictions(gw=None):
     from prediction_engine import PredictionEngine
@@ -64,6 +158,7 @@ def _run_predictions(gw=None):
     OUTPUT_DIR.mkdir(exist_ok=True)
     filename = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
     filename.write_text(json.dumps(output, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    invalidate_cache()  # Clear all cached responses when predictions change
     return output
 
 def _refresh_data():
@@ -122,31 +217,64 @@ def _ensure_refresh_thread():
     print(f"  [INFO] Auto-refresh thread started (pid={os.getpid()})")
 
 def _auto_setup_accounts():
-    from auth import register, _load_users, _save_users
+    from auth import register, _load_users, _save_users, _hash_password
     from datetime import timedelta
     admin_email = os.environ.get("ADMIN_EMAIL", "")
     admin_pass = os.environ.get("ADMIN_PASSWORD", "")
     if not admin_email or not admin_pass:
         return
     users = _load_users()
-    if admin_email in users:
-        return
-    print("  [SETUP] Creating initial accounts...")
     far = (datetime.now() + timedelta(days=365 * 99)).isoformat()
-    register(admin_email, admin_pass, "Admin")
-    cc_email = os.environ.get("CC_EMAIL", "")
-    cc_pass = os.environ.get("CC_PASSWORD", "")
-    cc2_email = os.environ.get("CC2_EMAIL", "")
-    cc2_pass = os.environ.get("CC2_PASSWORD", "")
-    if cc_email and cc_pass: register(cc_email, cc_pass, "CC")
-    if cc2_email and cc2_pass: register(cc2_email, cc2_pass, "CC Alt")
-    users = _load_users()
-    for email, plan in [(admin_email, "admin"), (cc_email, "premium"), (cc2_email, "premium")]:
-        if email and email in users:
-            users[email]["plan"] = plan
-            users[email]["plan_expires"] = far
-    _save_users(users)
-    print(f"  [SETUP] ✅ Done.")
+
+    if admin_email not in users:
+        # Fresh start — create all accounts
+        print("  [SETUP] Creating initial accounts...")
+        register(admin_email, admin_pass, "Admin")
+        cc_email = os.environ.get("CC_EMAIL", "")
+        cc_pass = os.environ.get("CC_PASSWORD", "")
+        cc2_email = os.environ.get("CC2_EMAIL", "")
+        cc2_pass = os.environ.get("CC2_PASSWORD", "")
+        if cc_email and cc_pass: register(cc_email, cc_pass, "CC")
+        if cc2_email and cc2_pass: register(cc2_email, cc2_pass, "CC Alt")
+        users = _load_users()
+        for email, plan in [(admin_email, "admin"), (cc_email, "premium"), (cc2_email, "premium")]:
+            if email and email in users:
+                users[email]["plan"] = plan
+                users[email]["plan_expires"] = far
+        _save_users(users)
+        print(f"  [SETUP] ✅ Done.")
+    else:
+        # Accounts exist — sync passwords from env vars (handles Render ephemeral disk
+        # where old users.json may be stale, or env var password was changed)
+        changed = False
+        accounts = [
+            (admin_email, admin_pass, "admin"),
+            (os.environ.get("CC_EMAIL", ""), os.environ.get("CC_PASSWORD", ""), "premium"),
+            (os.environ.get("CC2_EMAIL", ""), os.environ.get("CC2_PASSWORD", ""), "premium"),
+        ]
+        for email, password, plan in accounts:
+            if not email or not password:
+                continue
+            if email not in users:
+                # Account missing — recreate it
+                register(email, password, email.split("@")[0].title())
+                users = _load_users()
+                users[email]["plan"] = plan
+                users[email]["plan_expires"] = far
+                changed = True
+                print(f"  [SETUP] Re-created missing account: {email}")
+            else:
+                # Verify password matches env var — reset if not
+                hashed, _ = _hash_password(password, users[email]["salt"])
+                if hashed != users[email]["password_hash"]:
+                    new_hash, new_salt = _hash_password(password)
+                    users[email]["password_hash"] = new_hash
+                    users[email]["salt"] = new_salt
+                    changed = True
+                    print(f"  [SETUP] Password synced from env for: {email}")
+        if changed:
+            _save_users(users)
+            print(f"  [SETUP] ✅ Account sync complete.")
 
 def _get_auth_user():
     from auth import get_user_from_token
@@ -170,14 +298,40 @@ def after_request(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    # Prevent caching of ALL responses (HTML, JSON, everything)
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
+
+    # Smart caching: API responses = no-cache, static assets = long cache
+    path = request.path
+    if path.startswith("/api/"):
+        # API responses: never cache in browser (server-side cache handles this)
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    elif path == "/" or path.endswith(".html"):
+        # HTML: short cache with revalidation (so new deploys propagate fast)
+        resp.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
+    elif any(path.endswith(ext) for ext in (".css", ".js", ".png", ".jpg", ".ico", ".svg", ".woff2")):
+        # Static assets: long cache (1 day) — bust via query string on deploy
+        resp.headers["Cache-Control"] = "public, max-age=86400, immutable"
+    else:
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+
     return resp
 
 @app.before_request
 def before_request():
+    # ── CORS Preflight: handle OPTIONS immediately ──
+    # Browsers send OPTIONS before POST with Content-Type: application/json.
+    # Without this, Flask returns 405 and the browser blocks the actual request
+    # with "fail to fetch" — this was breaking login on ALL browsers except the
+    # one that had a cached token in localStorage.
+    if request.method == "OPTIONS":
+        resp = app.make_default_options_response()
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Max-Age"] = "86400"  # Cache preflight for 24h
+        return resp
+
     # Lazy-start refresh thread on first request (safe for gunicorn workers)
     _ensure_refresh_thread()
     # Auto-setup accounts on first request
@@ -199,16 +353,19 @@ def serve_static(filename):
 # ── Auth ──
 
 @app.route("/api/auth/login", methods=["POST"])
+@limiter.limit("10 per minute")
 def api_auth_login():
     from auth import login
     data = request.get_json(silent=True) or {}
-    print(f"  [AUTH] Login: {data.get('email', '?')}")
+    email = data.get("email", "?")
+    print(f"  [AUTH] Login: {email}")
     result = login(data.get("email", ""), data.get("password", ""))
     code = 200 if result.get("ok") else 401
-    print(f"  [AUTH] Result: ok={result.get('ok', False)} code={code}")
+    print(f"  [AUTH] Result: ok={result.get('ok', False)} code={code} error={result.get('error', 'none')}")
     return jsonify(result), code
 
 @app.route("/api/auth/register", methods=["POST"])
+@limiter.limit("5 per minute")
 def api_auth_register():
     from auth import register
     data = request.get_json(silent=True) or {}
@@ -293,7 +450,12 @@ def api_predictions():
     return jsonify(data)
 
 @app.route("/api/run")
+@limiter.limit("3 per minute")
 def api_run():
+    # Protect heavy prediction regeneration — require admin auth
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin":
+        return jsonify({"error": "Admin access required to trigger prediction run"}), 403
     try:
         gw = request.args.get("gw", 0, type=int) or None
         return jsonify(_run_predictions(gw))
@@ -302,7 +464,11 @@ def api_run():
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route("/api/refresh")
+@limiter.limit("5 per minute")
 def api_refresh():
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
     threading.Thread(target=_refresh_data, daemon=True).start()
     return jsonify({"ok": True, "message": "Refresh started"})
 
@@ -332,6 +498,7 @@ def api_settings():
 # ── Chat ──
 
 @app.route("/api/chat", methods=["POST"])
+@limiter.limit("20 per minute")
 def api_chat():
     try:
         data = request.get_json(silent=True) or {}
@@ -429,6 +596,7 @@ def api_files():
 # ── Heavy endpoints (use cached data where possible) ──
 
 @app.route("/api/chip-analysis")
+@limiter.limit("10 per minute")
 def api_chip_analysis():
     try:
         preds, cached = _cached_predictions()
@@ -460,6 +628,7 @@ def api_chip_analysis():
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route("/api/gw-planner")
+@limiter.limit("5 per minute")
 def api_gw_planner():
     team_id = request.args.get("id") or _load_settings().get("team_id")
     if not team_id:
@@ -474,6 +643,7 @@ def api_gw_planner():
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route("/api/fixture-ticker")
+@cached_response(ttl_seconds=120, key_prefix="fixture-ticker")
 def api_fixture_ticker():
     try:
         horizon = request.args.get("horizon", 6, type=int)
@@ -486,6 +656,7 @@ def api_fixture_ticker():
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route("/api/top-transfers")
+@cached_response(ttl_seconds=300, key_prefix="top-transfers")
 def api_top_transfers():
     """Top 15 transfers in/out this GW from FPL API bootstrap (free for all users)."""
     try:
@@ -539,6 +710,7 @@ def api_top_transfers():
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route("/api/fixture-rankings")
+@cached_response(ttl_seconds=120, key_prefix="fixture-rankings")
 def api_fixture_rankings():
     try:
         n = request.args.get("gws", 5, type=int)
@@ -843,6 +1015,24 @@ def api_reset_accounts():
     _save_users({}); _save_sessions({})
     _auto_setup_accounts()
     return jsonify({"ok": True, "message": "Reset done"})
+
+
+# ── Health & Monitoring ──
+
+@app.route("/api/health")
+@limiter.exempt
+def api_health():
+    """Health check for monitoring / load balancer. Fast, no auth required."""
+    predictions_exist = any(OUTPUT_DIR.glob("gw*_predictions.json")) if OUTPUT_DIR.exists() else False
+    cache_size = len(_response_cache)
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "predictions_available": predictions_exist,
+        "last_refresh_seconds_ago": int(time.time() - _last_refresh) if _last_refresh else None,
+        "response_cache_entries": cache_size,
+        "pid": os.getpid(),
+    })
 
 
 # ── Entry point ──

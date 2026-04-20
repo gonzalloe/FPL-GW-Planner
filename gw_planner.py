@@ -88,12 +88,12 @@ class GWPlanner:
                 is_dgw = tid in dgw_teams and len(opponents) >= 2
 
                 # Avg FDR calculation:
-                # - BGW: treated as 6.0 (worse than hardest FDR=5, since no game = 0 pts)
+                # - BGW: treated as 5.5 (penalty for no game, slightly above hardest FDR=5)
                 # - DGW: sum FDR / num_fixtures (low avg = good two games), but
                 #        bonus: subtract 0.5 to reward having double fixture
                 # - SGW: plain average
                 if is_blank:
-                    effective_fdr = 6.0
+                    effective_fdr = 5.5
                 elif is_dgw:
                     raw_avg = sum(o["fdr"] for o in opponents) / len(opponents)
                     effective_fdr = round(max(1.0, raw_avg - 0.5), 1)  # DGW bonus

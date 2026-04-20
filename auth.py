@@ -2,11 +2,15 @@
 FPL Predictor — User Authentication & Subscription System
 Lightweight auth with JSON file storage. No database required.
 Supports: register, login, session tokens, free/premium tiers.
+
+Thread-safety: All JSON file operations are protected by reentrant locks
+to prevent data corruption under Gunicorn's threaded worker model.
 """
 import json
 import hashlib
 import secrets
 import time
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -14,6 +18,10 @@ DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 USERS_FILE = DATA_DIR / "users.json"
 SESSIONS_FILE = DATA_DIR / "sessions.json"
+
+# Thread-safety locks for JSON file access (prevents concurrent read/write corruption)
+_users_lock = threading.RLock()
+_sessions_lock = threading.RLock()
 
 # Subscription config
 PLANS = {
@@ -93,23 +101,31 @@ def _hash_password(password: str, salt: str = None) -> tuple:
 
 
 def _load_users() -> dict:
-    if USERS_FILE.exists():
-        return json.loads(USERS_FILE.read_text(encoding="utf-8"))
-    return {}
+    with _users_lock:
+        if USERS_FILE.exists():
+            return json.loads(USERS_FILE.read_text(encoding="utf-8"))
+        return {}
 
 
 def _save_users(users: dict):
-    USERS_FILE.write_text(json.dumps(users, indent=2, ensure_ascii=False), encoding="utf-8")
+    with _users_lock:
+        tmp = USERS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(users, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(USERS_FILE)  # atomic on POSIX, near-atomic on Windows
 
 
 def _load_sessions() -> dict:
-    if SESSIONS_FILE.exists():
-        return json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
-    return {}
+    with _sessions_lock:
+        if SESSIONS_FILE.exists():
+            return json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
+        return {}
 
 
 def _save_sessions(sessions: dict):
-    SESSIONS_FILE.write_text(json.dumps(sessions, indent=2, ensure_ascii=False), encoding="utf-8")
+    with _sessions_lock:
+        tmp = SESSIONS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(sessions, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(SESSIONS_FILE)
 
 
 def register(email: str, password: str, name: str = "") -> dict:
@@ -210,9 +226,12 @@ def get_user_from_token(token: str) -> dict:
     if not user:
         return None
 
+    # Only write back if plan expiry actually changed (avoid write-on-every-read)
+    old_plan = user.get("plan")
     _check_plan_expiry(user)
-    users[email] = user
-    _save_users(users)
+    if user.get("plan") != old_plan:
+        users[email] = user
+        _save_users(users)
 
     return _public_user(user)
 
