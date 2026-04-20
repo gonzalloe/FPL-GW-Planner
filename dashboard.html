@@ -149,7 +149,7 @@ body, .sidebar, .card, .stat-box, .chip-card, input, select, button, .filter-btn
 }
 
 /* Main */
-.main { flex:1; padding:28px 32px; max-width:1280px; }
+.main { flex:1; padding:28px 32px; max-width:1440px; width:100%; }
 .page { display:none; animation:pageIn .4s cubic-bezier(.4,0,.2,1); } .page.active { display:block; }
 @keyframes pageIn { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
 h2 {
@@ -495,6 +495,23 @@ input:focus, select:focus {
   margin:16px auto 0;
   box-shadow:0 0 24px var(--accent-glow);
 }
+.loading-spinner-lg {
+  width:56px; height:56px; margin:0 auto;
+  border:4px solid var(--input-bg);
+  border-top-color:var(--accent);
+  border-right-color:var(--blue);
+  border-radius:50%;
+  animation:spin .9s cubic-bezier(.4,0,.2,1) infinite;
+  box-shadow:0 0 32px var(--accent-glow);
+}
+/* Skeleton loader */
+.skeleton {
+  background:linear-gradient(90deg, var(--input-bg) 0%, var(--hover-bg) 50%, var(--input-bg) 100%);
+  background-size:200% 100%;
+  animation:skeleton-shimmer 1.4s ease-in-out infinite;
+  border-radius:var(--radius-sm);
+}
+@keyframes skeleton-shimmer { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
 @keyframes spin { to { transform:rotate(360deg); } }
 
 /* Fixtures row in table */
@@ -559,15 +576,31 @@ input:focus, select:focus {
 
 
 /* AI Chat */
-.chat-container { display:flex; flex-direction:column; height:calc(100vh - 160px); max-height:700px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
-.chat-messages { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:16px; scroll-behavior:smooth; }
-.chat-msg { display:flex; gap:10px; max-width:90%; animation:chatIn .3s ease; }
+.chat-container {
+  display:flex; flex-direction:column;
+  height:calc(100vh - 180px); min-height:600px; max-height:calc(100vh - 100px);
+  background:var(--gradient-surface); border:1px solid var(--card-border);
+  border-radius:var(--radius); overflow:hidden;
+  box-shadow:var(--shadow);
+  backdrop-filter:blur(16px);
+}
+.chat-messages { flex:1; overflow-y:auto; padding:24px 28px; display:flex; flex-direction:column; gap:18px; scroll-behavior:smooth; }
+.chat-msg { display:flex; gap:12px; max-width:92%; animation:chatIn .3s ease; }
 .chat-msg.bot { align-self:flex-start; }
 .chat-msg.user { align-self:flex-end; flex-direction:row-reverse; }
 @keyframes chatIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
-.chat-avatar { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0; background:var(--surface2); }
+.chat-avatar {
+  width:38px; height:38px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px; flex-shrink:0;
+  background:var(--surface2);
+  box-shadow:0 2px 8px rgba(0,0,0,.15);
+}
 .chat-msg.user .chat-avatar { background:var(--accent-dim); }
-.chat-bubble { padding:12px 16px; border-radius:12px; font-size:13px; line-height:1.7; max-width:100%; overflow-x:auto; }
+.chat-bubble {
+  padding:14px 18px; border-radius:14px; font-size:14px; line-height:1.75;
+  max-width:100%; overflow-x:auto;
+}
 .bot-bubble { background:var(--surface2); border:1px solid var(--border); border-top-left-radius:4px; }
 .user-bubble { background:var(--accent-dim); border:1px solid rgba(0,230,118,.2); border-top-right-radius:4px; color:var(--text); }
 .chat-text { white-space:pre-wrap; word-break:break-word; }
@@ -786,6 +819,7 @@ table tr:hover { background:var(--surface2); }
   <div class="nav-item" data-page="squad" id="nav-squad">⚽ Best Squad</div>
   <div class="nav-item" data-page="players" id="nav-players">🏆 Players</div>
   <div class="nav-item" data-page="chips" id="nav-chips">🎯 Chip Strategy</div>
+  <div class="nav-item" data-page="fixtures" id="nav-fixtures">📅 Fixtures</div>
   <div class="nav-item" data-page="myteam" id="nav-myteam">👤 My Team & Planner</div>
   <div style="border-top:1px solid var(--border);margin:12px 0;"></div>
   <div class="nav-item" data-page="chat" id="nav-chat" style="color:var(--accent);">🤖 AI Chat</div>
@@ -828,9 +862,16 @@ table tr:hover { background:var(--surface2); }
 <!-- Best Squad -->
 <div class="page" id="page-squad">
   <h2>⚽ Best Squad — GW<span class="gw-num">--</span></h2>
-  <div id="squad-stats" class="stats-row"></div>
-  <div class="card"><h3 style="margin-bottom:12px;">Starting XI</h3><div class="tbl-wrap"><table id="tbl-xi"></table></div></div>
-  <div class="card"><h3 style="margin-bottom:12px;">Bench</h3><div class="tbl-wrap"><table id="tbl-bench"></table></div></div>
+  <div id="squad-loading" class="card" style="text-align:center;padding:60px 20px;">
+    <div class="loading-spinner-lg"></div>
+    <h3 style="margin-top:20px;font-size:16px;color:var(--text2);">Building Optimal Squad...</h3>
+    <p style="color:var(--text3);font-size:13px;margin-top:6px;">Analyzing 800+ players, fixtures, and form data</p>
+  </div>
+  <div id="squad-content" style="display:none;">
+    <div id="squad-stats" class="stats-row"></div>
+    <div class="card"><h3 style="margin-bottom:12px;">Starting XI</h3><div class="tbl-wrap"><table id="tbl-xi"></table></div></div>
+    <div class="card"><h3 style="margin-bottom:12px;">Bench</h3><div class="tbl-wrap"><table id="tbl-bench"></table></div></div>
+  </div>
 </div>
 
 <!-- Chip Strategy (Season-Wide) -->
@@ -865,11 +906,56 @@ table tr:hover { background:var(--surface2); }
   </div>
 </div>
 
+<!-- Fixtures (free for all users) -->
+<div class="page" id="page-fixtures">
+  <h2>📅 Fixture Ticker <span style="background:var(--gradient-accent);color:#000;font-size:10px;padding:3px 10px;border-radius:12px;font-weight:800;letter-spacing:.5px;">FREE</span></h2>
+  <p style="color:var(--text3);font-size:13px;margin-bottom:16px;">All 20 teams' upcoming fixtures with color-coded difficulty. Plan your transfers, captain picks, and chip usage.</p>
+
+  <div class="filters" style="margin-bottom:16px;">
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);">
+      <span>Horizon:</span>
+      <select id="fixtures-horizon" onchange="loadFixturesPage()" style="min-width:90px;">
+        <option value="5">Next 5 GWs</option>
+        <option value="8">Next 8 GWs</option>
+        <option value="10">Next 10 GWs</option>
+      </select>
+    </label>
+    <button class="filter-btn active" data-fsort="none" onclick="sortFixtureTeams(this,'none')">By Team</button>
+    <button class="filter-btn" data-fsort="easy" onclick="sortFixtureTeams(this,'easy')">Easiest Fixtures</button>
+    <button class="filter-btn" data-fsort="hard" onclick="sortFixtureTeams(this,'hard')">Hardest Fixtures</button>
+  </div>
+
+  <div id="fixtures-loading" class="card" style="text-align:center;padding:60px 20px;">
+    <div class="loading-spinner-lg"></div>
+    <h3 style="margin-top:20px;font-size:16px;color:var(--text2);">Loading Fixtures...</h3>
+  </div>
+  <div id="fixtures-content" style="display:none;">
+    <div class="card">
+      <div class="ticker-wrap"><table class="ticker-table" id="fixtures-ticker-table"></table></div>
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:11px;color:var(--text3);">
+      <span><span class="fdr fdr-1">2</span> Very Easy</span>
+      <span><span class="fdr fdr-2">3</span> Easy</span>
+      <span><span class="fdr fdr-3">3</span> Neutral</span>
+      <span><span class="fdr fdr-4">4</span> Hard</span>
+      <span><span class="fdr fdr-5">5</span> Very Hard</span>
+      <span style="color:var(--dgw);font-weight:700;">DGW</span> — Double Gameweek
+      <span style="color:var(--red);font-weight:700;">BGW</span> — Blank Gameweek
+    </div>
+  </div>
+</div>
+
 <!-- Players (unified) -->
 <div class="page" id="page-players">
   <h2>🏆 Players — GW<span class="gw-num">--</span> <span id="players-dgw-badge"></span></h2>
-  <div class="filters" style="margin-bottom:4px;">
-    <button class="filter-btn active" data-pfilter="top30" onclick="filterPlayers(this)">Top 30</button>
+  <div id="players-loading" class="card" style="text-align:center;padding:60px 20px;">
+    <div class="loading-spinner-lg"></div>
+    <h3 style="margin-top:20px;font-size:16px;color:var(--text2);">Loading Player Predictions...</h3>
+    <p style="color:var(--text3);font-size:13px;margin-top:6px;">Computing xPts, win probability, and fixture analysis</p>
+  </div>
+  <div id="players-content" style="display:none;">
+    <div class="filters" style="margin-bottom:4px;">
+      <button class="filter-btn active" data-pfilter="top30" onclick="filterPlayers(this)">Top 30</button>
     <button class="filter-btn" data-pfilter="all" onclick="filterPlayers(this)">All Players</button>
     <button class="filter-btn" data-pfilter="dgw" onclick="filterPlayers(this)" style="border-color:var(--dgw);color:var(--dgw);">🔥 DGW</button>
     <button class="filter-btn" data-pfilter="differentials" onclick="filterPlayers(this)" style="border-color:var(--purple);color:var(--purple);">💎 Differentials</button>
@@ -885,6 +971,7 @@ table tr:hover { background:var(--surface2); }
   <div id="players-info-banner" class="card" style="display:none;margin-bottom:16px;"></div>
   <div class="card"><div class="tbl-wrap"><table id="tbl-players"></table></div></div>
   <div id="players-count" style="text-align:center;padding:8px;font-size:12px;color:var(--text3);"></div>
+  </div><!-- /players-content -->
 </div>
 
 <!-- My Team & Planner (merged) -->
@@ -1023,7 +1110,7 @@ table tr:hover { background:var(--surface2); }
 </div>
 
 <!-- AI Chat -->
-<div class="page" id="page-chat">
+<div class="page" id="page-chat" style="max-width:none;">
   <h2>🤖 AI Assistant</h2>
   <p style="color:var(--text3);font-size:13px;margin-bottom:16px;">Ask me anything about FPL — player comparisons, captain picks, chip strategy, transfer advice, and more. All answers are backed by real prediction data.</p>
   <div class="chat-container">
@@ -1610,6 +1697,8 @@ document.querySelectorAll('.nav-item').forEach(el => {
     if (page) page.classList.add('active');
     // Auto-load admin data
     if (el.dataset.page === 'admin') loadAdminUsers();
+    // Auto-load fixtures page on first visit
+    if (el.dataset.page === 'fixtures' && !_fixturesData) loadFixturesPage();
   });
 });
 
@@ -1734,9 +1823,11 @@ function render() {
   try { renderPlayersPage(ALL_PREDICTIONS, gwInfo); } catch(e) { console.error('renderPlayersPage:', e); }
 
   // Free user upgrade prompt on locked sections (NEVER shown to admin or premium)
+  // First, always clear any pre-existing lock notice to prevent stale state
+  document.querySelectorAll('.free-lock-notice').forEach(el => el.remove());
   const isPaidUser = USER_PLAN === 'premium' || USER_PLAN === 'admin' || AUTH_USER?.plan === 'premium' || AUTH_USER?.plan === 'admin';
   if (!isPaidUser && (USER_PLAN === 'free' || USER_PLAN === 'guest')) {
-    const lockHtml = `<div style="text-align:center;padding:24px;background:rgba(0,0,0,.3);border-radius:var(--radius);margin-top:8px;">
+    const lockHtml = `<div class="free-lock-notice" style="text-align:center;padding:24px;background:rgba(0,0,0,.3);border-radius:var(--radius);margin-top:8px;">
       <div style="font-size:28px;margin-bottom:8px;">🔒</div>
       <p style="color:var(--text2);font-size:13px;margin-bottom:12px;">xPts predictions are a Premium feature</p>
       <button onclick="upgradeToPremium()" style="padding:8px 20px;border-radius:16px;background:var(--gold);color:#000;border:none;font-weight:700;font-size:12px;cursor:pointer;">⭐ Upgrade — $2.50/month</button>
@@ -1836,6 +1927,12 @@ function renderSquadTables(squad) {
   const bench = squad.bench || [];
   const captain = squad.captain;
   const vice = squad.vice_captain;
+
+  // Swap loading -> content
+  const loadingEl = document.getElementById('squad-loading');
+  const contentEl = document.getElementById('squad-content');
+  if (loadingEl) loadingEl.style.display = 'none';
+  if (contentEl) contentEl.style.display = 'block';
 
   document.getElementById('squad-stats').innerHTML = `
     <div class="stat-box"><div class="label">XI + Captain</div><div class="value" style="color:var(--accent);">${squad.predicted_total_points}</div></div>
@@ -1982,6 +2079,11 @@ let _playersStatusFilters = new Set();
 function renderPlayersPage(players, gwInfo) {
   window._allPlayersData = players;
   window._gwInfoData = gwInfo;
+  // Swap loading -> content
+  const loadingEl = document.getElementById('players-loading');
+  const contentEl = document.getElementById('players-content');
+  if (loadingEl) loadingEl.style.display = 'none';
+  if (contentEl) contentEl.style.display = 'block';
   // DGW badge
   if (gwInfo?.is_dgw) {
     const dgwCount = Object.keys(gwInfo.dgw_teams || {}).length;
@@ -3047,6 +3149,94 @@ async function loadFixtureTicker() {
     const rankings = await r2.json();
     if (!rankings.error) renderPlannerRankings({fixture_ticker: data.teams, gw_plans: Array.from({length: 5}, (_, i) => ({gameweek: data.from_gw + i}))});
   } catch(e) {}
+}
+
+// ── Standalone Fixtures Page (free for all users) ──
+let _fixturesSort = 'none';
+let _fixturesData = null;
+
+async function loadFixturesPage() {
+  const loadingEl = document.getElementById('fixtures-loading');
+  const contentEl = document.getElementById('fixtures-content');
+  if (loadingEl) loadingEl.style.display = '';
+  if (contentEl) contentEl.style.display = 'none';
+
+  try {
+    const horizon = document.getElementById('fixtures-horizon')?.value || '5';
+    const r = await fetch('/api/fixture-ticker?horizon=' + horizon);
+    const data = await r.json();
+    if (data.error) {
+      if (loadingEl) loadingEl.innerHTML = `<p style="color:var(--red);">Error loading fixtures: ${data.error}</p>`;
+      return;
+    }
+    _fixturesData = data;
+    renderFixturesTable();
+    if (loadingEl) loadingEl.style.display = 'none';
+    if (contentEl) contentEl.style.display = 'block';
+  } catch(e) {
+    if (loadingEl) loadingEl.innerHTML = `<p style="color:var(--red);">Failed to load: ${e.message}</p>`;
+  }
+}
+
+function sortFixtureTeams(btn, sortKey) {
+  document.querySelectorAll('#page-fixtures [data-fsort]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _fixturesSort = sortKey;
+  if (_fixturesData) renderFixturesTable();
+}
+
+function renderFixturesTable() {
+  if (!_fixturesData) return;
+  const ticker = _fixturesData.teams || {};
+  const fromGw = _fixturesData.from_gw;
+  const toGw = _fixturesData.to_gw;
+  const gws = [];
+  for (let gw = fromGw; gw <= toGw; gw++) gws.push(gw);
+
+  const teamEntries = Object.entries(ticker);
+  // Compute avg FDR per team for sorting
+  teamEntries.forEach(([tid, team]) => {
+    const fixes = team.fixtures || [];
+    const valid = fixes.filter(f => !f.is_blank);
+    team._avgFdr = valid.length ? valid.reduce((s, f) => s + f.avg_fdr, 0) / valid.length : 5;
+  });
+
+  if (_fixturesSort === 'easy') teamEntries.sort((a, b) => a[1]._avgFdr - b[1]._avgFdr);
+  else if (_fixturesSort === 'hard') teamEntries.sort((a, b) => b[1]._avgFdr - a[1]._avgFdr);
+  else teamEntries.sort((a, b) => a[1].short_name.localeCompare(b[1].short_name));
+
+  let html = '<thead><tr><th style="text-align:left;min-width:90px;">Team</th><th style="min-width:70px;">Avg FDR</th>';
+  gws.forEach(gw => { html += `<th>GW${gw}</th>`; });
+  html += '</tr></thead><tbody>';
+
+  teamEntries.forEach(([tid, team]) => {
+    const avgFdr = team._avgFdr.toFixed(2);
+    const fdrColor = team._avgFdr <= 2.5 ? 'var(--accent)' :
+                     team._avgFdr <= 3.0 ? '#66bb6a' :
+                     team._avgFdr <= 3.5 ? 'var(--text2)' :
+                     team._avgFdr <= 4.0 ? 'var(--orange)' : 'var(--red)';
+    html += `<tr><td class="team-cell" style="font-weight:700;padding:10px;">${team.short_name}</td>`;
+    html += `<td style="text-align:center;color:${fdrColor};font-weight:700;">${avgFdr}</td>`;
+    (team.fixtures || []).forEach(f => {
+      html += '<td style="padding:6px;">';
+      if (f.is_blank) {
+        html += '<span style="color:var(--red);font-weight:700;font-size:11px;">BLANK</span>';
+      } else if (f.opponents && f.opponents.length > 1) {
+        html += '<div style="display:flex;flex-direction:column;gap:3px;">';
+        f.opponents.forEach(o => {
+          html += `<span style="display:inline-block;"><span class="fdr fdr-${o.fdr}">${o.name}</span><small style="color:var(--text3);margin-left:3px;">(${o.venue})</small></span>`;
+        });
+        html += '<span style="font-size:9px;color:var(--dgw);font-weight:700;">DGW</span></div>';
+      } else if (f.opponents && f.opponents.length) {
+        const o = f.opponents[0];
+        html += `<span class="fdr fdr-${o.fdr}">${o.name}</span><small style="color:var(--text3);margin-left:3px;">(${o.venue})</small>`;
+      }
+      html += '</td>';
+    });
+    html += '</tr>';
+  });
+  html += '</tbody>';
+  document.getElementById('fixtures-ticker-table').innerHTML = html;
 }
 
 // Refresh functions

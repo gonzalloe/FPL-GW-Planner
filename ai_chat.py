@@ -82,10 +82,12 @@ class FPLChatEngine:
             (r'\bbest\s+(defenders?|def|cbs?|fullbacks?)\b', 3.5),
             (r'\bbest\s+(midfielders?|mid|wingers?|cams?)\b', 3.5),
             (r'\bbest\s+(forwards?|fwd|strikers?|cf)\b', 3.5),
-            (r'\btop\s+(gkp|def|mid|fwd)\b', 3.0),
+            (r'\btop\s+(gkp|def|mid|fwd|midfielders?|defenders?|forwards?|keepers?)\b', 3.0),
             (r'\bwhich\s+(keeper|goalkeeper|defender|midfielder|forward|striker)\b', 3.0),
-            (r'\bbest\b.*\b(under|below|budget)\b.*\b(mid|def|fwd|gk)\b', 3.5),
-            (r'\bcheap(est)?\s+(mid|def|fwd|gk)\b', 3.0),
+            # Budget + position combinations (e.g. "best budget midfielders")
+            (r'\bbudget\s+(midfielders?|defenders?|forwards?|keepers?|goalkeepers?)\b', 3.5),
+            (r'\bcheap(est)?\s+(midfielders?|defenders?|forwards?|keepers?|goalkeepers?|mid|def|fwd|gk)\b', 3.5),
+            (r'\bbest\s+(cheap|budget|affordable|value)\s+(midfielders?|defenders?|forwards?|keepers?|goalkeepers?)\b', 4.0),
         ],
         "dgw": [
             (r'\bdgw\b', 3.0), (r'\bdouble\s*(gw|gameweek)\b', 3.5),
@@ -412,20 +414,36 @@ class FPLChatEngine:
         n1, n2 = p1["name"], p2["name"]
         gw = self.gw_info.get("gameweek", "?")
         xp1, xp2 = p1["predicted_points"], p2["predicted_points"]
+        raw1 = p1.get("raw_xpts", xp1)
+        raw2 = p2.get("raw_xpts", xp2)
         winner = p1 if xp1 >= xp2 else p2
         loser = p2 if xp1 >= xp2 else p1
+
+        # Flags for context
+        avail1 = p1.get("availability", {})
+        avail2 = p2.get("availability", {})
+        flagged1 = avail1.get("status") == "doubtful"
+        flagged2 = avail2.get("status") == "doubtful"
 
         sections = []
         sections.append(f"## {n1} vs {n2} — GW{gw} Comparison\n")
 
         diff = abs(xp1 - xp2)
-        sections.append(f"**🏆 Verdict: {winner['name']}** is predicted to score **{diff:.1f} more points** this GW.\n")
+        verdict_emoji = "🏆"
+        if diff < 0.5:
+            verdict_emoji = "⚖️"
+            sections.append(f"**{verdict_emoji} Close call** — only **{diff:.1f} pts** separate them. Consider other factors (risk, captaincy, team balance).\n")
+        else:
+            sections.append(f"**{verdict_emoji} Verdict: {winner['name']}** is predicted to score **{diff:.1f} more points** this GW (risk-adjusted).\n")
 
         # Stats table
         sections.append("### 📊 Head-to-Head\n")
         sections.append(f"| Metric | {n1} | {n2} |")
         sections.append("|--------|------|------|")
-        sections.append(f"| **Predicted Points** | **{xp1:.1f}** | **{xp2:.1f}** |")
+        sections.append(f"| **xPts (risk-adjusted)** | **{xp1:.1f}** | **{xp2:.1f}** |")
+        # Show raw vs adjusted if any player has a meaningful discount
+        if abs(raw1 - xp1) > 0.1 or abs(raw2 - xp2) > 0.1:
+            sections.append(f"| Raw xPts (no risk discount) | {raw1:.1f} | {raw2:.1f} |")
         sections.append(f"| Position | {p1['position']} | {p2['position']} |")
         sections.append(f"| Price | £{p1['price']:.1f}m | £{p2['price']:.1f}m |")
         sections.append(f"| Form | {p1.get('form', '--')} | {p2.get('form', '--')} |")
@@ -436,6 +454,10 @@ class FPLChatEngine:
         sections.append(f"| Ownership | {p1.get('selected_by_percent', '--')}% | {p2.get('selected_by_percent', '--')}% |")
         sections.append(f"| Starter Tier | {p1.get('starter_quality', {}).get('tier', '?')} | {p2.get('starter_quality', {}).get('tier', '?')} |")
         sections.append(f"| Confidence | {int(p1.get('confidence', 0)*100)}% | {int(p2.get('confidence', 0)*100)}% |")
+        # Availability row with ⚠️ icon if flagged
+        a1 = f"✅ Available" if not flagged1 else f"⚠️ {avail1.get('chance','?')}% chance"
+        a2 = f"✅ Available" if not flagged2 else f"⚠️ {avail2.get('chance','?')}% chance"
+        sections.append(f"| Availability | {a1} | {a2} |")
 
         dgw1, dgw2 = p1.get("is_dgw", False), p2.get("is_dgw", False)
         sections.append(f"| DGW? | {'✅ Yes' if dgw1 else '❌ No'} | {'✅ Yes' if dgw2 else '❌ No'} |")
@@ -453,12 +475,21 @@ class FPLChatEngine:
         if re.search(r'why\b.*\b(pick|choose|select|prefer|have)', question.lower()):
             sections.append(f"\n### 📝 Context")
             if xp1 >= xp2:
-                sections.append(f"The model picks **{n1}** because the combined factors (form, fixture difficulty, DGW status, nailedness, ICT) produce a higher expected output this GW.")
+                sections.append(f"The model picks **{n1}** because the combined factors (form, fixture difficulty, DGW status, nailedness, ICT, availability) produce a higher expected output this GW.")
             else:
                 sections.append(f"Actually, the model **favors {n2}** over {n1} for this GW. If {n1} is in your squad instead, consider the transfer suggestion above.")
 
         sections.append(f"\n### ✅ Recommendation")
-        sections.append(f"**Pick {winner['name']}** for GW{gw}. Expected {winner['predicted_points']:.1f} pts vs {loser['predicted_points']:.1f} pts.")
+        if diff < 0.5:
+            # Close — recommend the one with less risk
+            if flagged1 and not flagged2:
+                sections.append(f"**Pick {n2}** for GW{gw} — very close on xPts ({xp2:.1f} vs {xp1:.1f}), but {n1} carries injury risk.")
+            elif flagged2 and not flagged1:
+                sections.append(f"**Pick {n1}** for GW{gw} — very close on xPts ({xp1:.1f} vs {xp2:.1f}), but {n2} carries injury risk.")
+            else:
+                sections.append(f"**Pick {winner['name']}** for GW{gw} — narrow edge ({winner['predicted_points']:.1f} pts vs {loser['predicted_points']:.1f} pts). Either is a fine pick.")
+        else:
+            sections.append(f"**Pick {winner['name']}** for GW{gw}. Expected {winner['predicted_points']:.1f} pts vs {loser['predicted_points']:.1f} pts.")
 
         return {
             "answer": "\n".join(sections),
@@ -478,6 +509,22 @@ class FPLChatEngine:
         """Generate natural reasoning comparing two players."""
         n1, n2 = p1["name"], p2["name"]
         reasons = []
+
+        # Availability (MOST IMPORTANT — flagged is a risk signal)
+        avail1 = p1.get("availability", {})
+        avail2 = p2.get("availability", {})
+        st1, st2 = avail1.get("status", "available"), avail2.get("status", "available")
+        ch1, ch2 = avail1.get("chance", 100), avail2.get("chance", 100)
+        if st1 == "doubtful" and st2 != "doubtful":
+            news = p1.get("news", avail1.get("news", ""))
+            reasons.append(f"🚨 **{n1} is flagged** ({ch1}% chance to play){' — ' + news if news else ''}. {n2} is fully available — safer pick.")
+        elif st2 == "doubtful" and st1 != "doubtful":
+            news = p2.get("news", avail2.get("news", ""))
+            reasons.append(f"🚨 **{n2} is flagged** ({ch2}% chance to play){' — ' + news if news else ''}. {n1} is fully available — safer pick.")
+        elif st1 == "doubtful" and st2 == "doubtful":
+            if ch1 != ch2:
+                safer = n1 if ch1 > ch2 else n2
+                reasons.append(f"⚠️ Both flagged — **{safer}** has a higher chance ({max(ch1,ch2)}% vs {min(ch1,ch2)}%).")
 
         # DGW
         dgw1, dgw2 = p1.get("is_dgw", False), p2.get("is_dgw", False)
@@ -528,14 +575,6 @@ class FPLChatEngine:
             reasons.append(f"🏟️ **{n1}** plays at home, giving a statistical advantage.")
         elif home2 and not home1:
             reasons.append(f"🏟️ **{n2}** plays at home, giving a statistical advantage.")
-
-        # Availability
-        avail1 = p1.get("availability", {})
-        avail2 = p2.get("availability", {})
-        if avail1.get("status") == "doubtful" and avail2.get("status") != "doubtful":
-            reasons.append(f"⚠️ **{n1} is flagged** ({avail1.get('chance', '?')}% chance) — {n2} is fully available.")
-        elif avail2.get("status") == "doubtful" and avail1.get("status") != "doubtful":
-            reasons.append(f"⚠️ **{n2} is flagged** ({avail2.get('chance', '?')}% chance) — {n1} is fully available.")
 
         if not reasons:
             reasons.append("Both players are closely matched. The model gives a slight edge based on combined factor weighting.")
@@ -880,47 +919,93 @@ class FPLChatEngine:
         }
 
     def _handle_position_query(self, q: str, original: str, entities: dict) -> dict:
-        """Best players by position."""
+        """Best players by position, with optional budget/differential mode."""
         positions = entities.get("positions", [])
         pos = positions[0] if positions else "mid"
 
+        # Detect budget/value query
+        is_budget = bool(re.search(r'\b(budget|cheap|cheapest|affordable|value|bargain)\b', q))
         # Check for budget constraint
         max_price = entities.get("price_range")
+        if is_budget and not max_price:
+            # Sensible defaults per position
+            max_price = {"gkp": 5.0, "def": 5.5, "mid": 6.5, "fwd": 7.5}.get(pos, 6.5)
 
-        players = sorted(self._by_position.get(pos, []),
-                        key=lambda x: x["predicted_points"], reverse=True)
-
+        players = list(self._by_position.get(pos, []))
         if max_price:
             players = [p for p in players if p["price"] <= max_price]
+
+        # For budget queries, require nailed/regular and sort by value (xPts/£m)
+        if is_budget:
+            players = [p for p in players
+                       if p.get("starter_quality", {}).get("tier") in ("nailed", "regular")]
+            players.sort(key=lambda x: x["predicted_points"] / max(x["price"], 3.5), reverse=True)
+        else:
+            players.sort(key=lambda x: x["predicted_points"], reverse=True)
 
         players = players[:10]
         gw = self.gw_info.get("gameweek", "?")
         pos_full = {"gkp": "Goalkeepers", "def": "Defenders", "mid": "Midfielders", "fwd": "Forwards"}.get(pos, pos)
 
-        sections = []
-        title = f"Best {pos_full}" + (f" under £{max_price}m" if max_price else "") + f" — GW{gw}"
-        sections.append(f"## {title}\n")
-        sections.append("| # | Player | Team | xPts | Price | Form | DGW? | Tier |")
-        sections.append("|---|--------|------|------|-------|------|------|------|")
-        for i, p in enumerate(players, 1):
-            dgw = "✅" if p.get("is_dgw") else ""
-            sections.append(f"| {i} | **{p['name']}** | {p['team']} | {p['predicted_points']:.1f} | £{p['price']:.1f}m | {p.get('form', '--')} | {dgw} | {p.get('starter_quality', {}).get('tier', '?')} |")
+        if not players:
+            return {
+                "answer": f"No nailed {pos_full.lower()} found under £{max_price}m. Try raising the budget.",
+                "data": {"type": "position", "position": pos.upper()},
+                "suggestions": [f"Best {pos_full.lower()}?", "Best budget defenders?", "Best value picks?"],
+            }
 
-        # Budget pick
-        budget = [p for p in self._by_position.get(pos, [])
-                 if p["price"] <= 6.0 and p.get("starter_quality", {}).get("tier") in ("nailed", "regular")]
-        budget.sort(key=lambda x: x["predicted_points"], reverse=True)
-        if budget and not max_price:
-            sections.append(f"\n💰 **Best budget pick**: {budget[0]['name']} ({budget[0]['team']}) — £{budget[0]['price']:.1f}m — {budget[0]['predicted_points']:.1f} xPts")
+        sections = []
+        emoji = {"gkp": "🧤", "def": "🛡️", "mid": "⚡", "fwd": "⚔️"}.get(pos, "🏆")
+        if is_budget:
+            title = f"{emoji} Best Budget {pos_full} (≤ £{max_price}m) — GW{gw}"
+        else:
+            title = f"{emoji} Best {pos_full}" + (f" under £{max_price}m" if max_price else "") + f" — GW{gw}"
+        sections.append(f"## {title}\n")
+
+        if is_budget:
+            sections.append("| # | Player | Team | xPts | Price | Value | Form | DGW? | Tier |")
+            sections.append("|---|--------|------|------|-------|-------|------|------|------|")
+            for i, p in enumerate(players, 1):
+                dgw = "✅" if p.get("is_dgw") else ""
+                val = p["predicted_points"] / max(p["price"], 3.5)
+                sections.append(
+                    f"| {i} | **{p['name']}** | {p['team']} | {p['predicted_points']:.1f} | "
+                    f"£{p['price']:.1f}m | {val:.2f} | {p.get('form', '--')} | {dgw} | "
+                    f"{p.get('starter_quality', {}).get('tier', '?')} |"
+                )
+        else:
+            sections.append("| # | Player | Team | xPts | Price | Form | DGW? | Tier |")
+            sections.append("|---|--------|------|------|-------|------|------|------|")
+            for i, p in enumerate(players, 1):
+                dgw = "✅" if p.get("is_dgw") else ""
+                sections.append(
+                    f"| {i} | **{p['name']}** | {p['team']} | {p['predicted_points']:.1f} | "
+                    f"£{p['price']:.1f}m | {p.get('form', '--')} | {dgw} | "
+                    f"{p.get('starter_quality', {}).get('tier', '?')} |"
+                )
+
+        # Budget pick callout for non-budget queries
+        if not is_budget:
+            budget = [p for p in self._by_position.get(pos, [])
+                     if p["price"] <= 6.0 and p.get("starter_quality", {}).get("tier") in ("nailed", "regular")]
+            budget.sort(key=lambda x: x["predicted_points"], reverse=True)
+            if budget and not max_price:
+                sections.append(f"\n💰 **Best budget pick**: {budget[0]['name']} ({budget[0]['team']}) — £{budget[0]['price']:.1f}m — {budget[0]['predicted_points']:.1f} xPts")
+
+        suggestions = [
+            f"Compare {players[0]['name']} vs {players[1]['name']}" if len(players) > 1 else "Best captain?",
+        ]
+        if not is_budget:
+            suggestions.append(f"Best budget {pos_full.lower()}?")
+        else:
+            other_pos = [pn for pk, pn in [("def","defenders"), ("mid","midfielders"), ("fwd","forwards")] if pk != pos]
+            suggestions.append(f"Best budget {other_pos[0]}?")
+        suggestions.append(f"Best differential {pos_full.lower()}?")
 
         return {
             "answer": "\n".join(sections),
-            "data": {"type": "position", "position": pos.upper()},
-            "suggestions": [
-                f"Compare {players[0]['name']} vs {players[1]['name']}" if len(players) > 1 else "Best captain?",
-                f"Best budget {pos_full.lower()}?",
-                f"Best differential {pos_full.lower()}?"
-            ]
+            "data": {"type": "position", "position": pos.upper(), "is_budget": is_budget},
+            "suggestions": suggestions,
         }
 
     def _handle_dgw(self, q: str, original: str, entities: dict) -> dict:
@@ -1014,28 +1099,61 @@ class FPLChatEngine:
         }
 
     def _handle_value(self, q: str, original: str, entities: dict) -> dict:
-        """Budget/value picks."""
+        """Budget/value picks, optionally filtered by position."""
         gw = self.gw_info.get("gameweek", "?")
         max_price = entities.get("price_range") or 6.5
+        positions = entities.get("positions", [])
+        pos_filter = positions[0] if positions else None
+
+        pos_names = {"gkp": "Goalkeepers", "def": "Defenders", "mid": "Midfielders", "fwd": "Forwards"}
+        pos_label = pos_names.get(pos_filter, "Value Picks") if pos_filter else "Value Picks"
 
         value = [p for p in self.predictions
                 if p["price"] <= max_price
                 and p.get("starter_quality", {}).get("tier") in ("nailed", "regular")]
+        if pos_filter:
+            value = [p for p in value if p.get("position", "").lower() == pos_filter]
         value.sort(key=lambda x: x["predicted_points"] / max(x["price"], 3.5), reverse=True)
 
+        if not value:
+            return {
+                "answer": f"No {pos_label.lower()} found under £{max_price}m with nailed/regular starting quality. Try raising the budget.",
+                "data": {"type": "value"},
+                "suggestions": ["Best budget defenders?", "Best budget midfielders?", "Best budget forwards?"],
+            }
+
         sections = []
-        sections.append(f"## 💰 Value Picks (≤ £{max_price}m) — GW{gw}\n")
-        sections.append("| # | Player | Team | Pos | xPts | Price | Value | DGW? |")
-        sections.append("|---|--------|------|-----|------|-------|-------|------|")
+        title_emoji = {"gkp": "🧤", "def": "🛡️", "mid": "⚡", "fwd": "⚔️"}.get(pos_filter, "💰")
+        header = f"## {title_emoji} Best Budget {pos_label} (≤ £{max_price}m) — GW{gw}\n" if pos_filter \
+                 else f"## 💰 Value Picks (≤ £{max_price}m) — GW{gw}\n"
+        sections.append(header)
+        if pos_filter:
+            sections.append("| # | Player | Team | Pos | xPts | Price | Value | DGW? | Tier |")
+            sections.append("|---|--------|------|-----|------|-------|-------|------|------|")
+        else:
+            sections.append("| # | Player | Team | Pos | xPts | Price | Value | DGW? |")
+            sections.append("|---|--------|------|-----|------|-------|-------|------|")
+
         for i, p in enumerate(value[:10], 1):
             val = p["predicted_points"] / max(p["price"], 3.5)
             dgw = "✅" if p.get("is_dgw") else ""
-            sections.append(f"| {i} | **{p['name']}** | {p['team']} | {p['position']} | {p['predicted_points']:.1f} | £{p['price']:.1f}m | {val:.2f} xPts/£m | {dgw} |")
+            tier = p.get('starter_quality', {}).get('tier', '?')
+            row = f"| {i} | **{p['name']}** | {p['team']} | {p['position']} | {p['predicted_points']:.1f} | £{p['price']:.1f}m | {val:.2f} xPts/£m | {dgw} |"
+            if pos_filter:
+                row = row + f" {tier} |"
+            sections.append(row)
+
+        suggestions = []
+        if pos_filter:
+            other = [pn for pk, pn in [("def","defenders"), ("mid","midfielders"), ("fwd","forwards")] if pk != pos_filter]
+            suggestions = [f"Best budget {other[0]}?", f"Best budget {other[1]}?", "Cheapest nailed starters?"]
+        else:
+            suggestions = ["Best budget defenders?", "Best budget midfielders?", "Cheapest nailed starters?"]
 
         return {
             "answer": "\n".join(sections),
-            "data": {"type": "value"},
-            "suggestions": ["Best budget defenders?", "Best budget midfielders?", "Cheapest nailed starters?"]
+            "data": {"type": "value", "position": (pos_filter or "").upper()},
+            "suggestions": suggestions,
         }
 
     def _handle_what_if(self, q: str, original: str, entities: dict) -> dict:

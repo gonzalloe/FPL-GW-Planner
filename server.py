@@ -447,8 +447,10 @@ def api_gw_planner():
 @app.route("/api/fixture-ticker")
 def api_fixture_ticker():
     try:
+        horizon = request.args.get("horizon", 6, type=int)
+        horizon = max(3, min(horizon, 15))  # Clamp between 3 and 15
         from gw_planner import GWPlanner
-        p = GWPlanner(horizon=6)
+        p = GWPlanner(horizon=horizon)
         return jsonify({"from_gw": p.next_gw, "to_gw": p.next_gw + p.horizon - 1, "teams": p.build_fixture_ticker()})
     except Exception as e:
         import traceback; traceback.print_exc()

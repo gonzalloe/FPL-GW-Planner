@@ -1071,17 +1071,25 @@ class PredictionEngine:
             return {"status": "available", "chance": 100, "news": news}
 
     def _apply_availability_discount(self, xp: float, availability: dict) -> float:
-        """Apply availability discount. 75%+ = full points per user rule."""
+        """Apply availability discount based on chance of playing.
+        
+        Even 75%-chance players carry real risk (25% chance of blank).
+        Discount schedule:
+          75%  -> 0.92x  (8% haircut — small but meaningful)
+          50%  -> 0.55x  (nearly half)
+          25%  -> 0.22x  (heavy discount)
+          <25% -> 0.08x  (near-zero)
+        """
         if availability["status"] == "doubtful":
             chance = availability.get("chance", 50)
             if chance >= 75:
-                return xp  # Full points
+                return xp * 0.92
             elif chance >= 50:
-                return xp * 0.50
+                return xp * 0.55
             elif chance >= 25:
-                return xp * 0.25
+                return xp * 0.22
             else:
-                return xp * 0.10
+                return xp * 0.08
         return xp
 
     # ══════════════════════════════════════════════════════════
