@@ -426,9 +426,12 @@ tbody tr:hover td {
 input[type=text], input[type=number], input[type=email], input[type=password], select {
   padding:8px 14px; border-radius:var(--radius-sm);
   border:1px solid var(--input-border);
-  background:var(--input-bg); color:var(--text);
+  color:var(--text);
   font-size:13px; outline:none; transition:var(--transition);
   backdrop-filter:blur(8px);
+}
+input[type=text], input[type=number], input[type=email], input[type=password] {
+  background:var(--input-bg);
 }
 input:focus, select:focus {
   border-color:var(--accent);
@@ -442,14 +445,12 @@ select {
   -webkit-appearance:none !important; 
   -moz-appearance:none !important;
   padding-right:32px;
-  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%238892a8' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
-  background-repeat:no-repeat;
-  background-position:right 12px center;
-  background-size:12px 8px;
+  background:var(--input-bg) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%238892a8' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E") no-repeat right 12px center / 12px 8px !important;
   cursor:pointer;
+  text-overflow:ellipsis;
 }
 /* Aggressively remove all native arrows across browsers */
-select::-ms-expand { display:none; }
+select::-ms-expand { display:none !important; }
 select::-webkit-calendar-picker-indicator { display:none !important; opacity:0 !important; }
 select::-webkit-inner-spin-button, select::-webkit-outer-spin-button { display:none !important; }
 select option {
@@ -462,10 +463,9 @@ select option:checked, select option:hover {
   background:linear-gradient(var(--accent-dim), var(--accent-dim));
   color:var(--accent);
 }
-/* Light theme: darker arrow for contrast */
+/* Light theme: darker arrow for contrast — use combined shorthand to prevent conflicts */
 [data-theme="light"] select {
-  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a5878' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E") !important;
-  background-color:var(--input-bg) !important;
+  background:#f0f2f5 url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a5878' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E") no-repeat right 12px center / 12px 8px !important;
 }
 [data-theme="light"] select option {
   background:#ffffff;

@@ -236,21 +236,22 @@ def _auto_setup_accounts():
     accounts = [
         (admin_email, admin_pass, "Admin", "admin"),
         (os.environ.get("CC_EMAIL", ""), os.environ.get("CC_PASSWORD", ""), "CC", "premium"),
-        (os.environ.get("CC2_EMAIL", ""), os.environ.get("CC2_PASSWORD", ""), "CC Alt", "premium"),
+        (os.environ.get("CC2_EMAIL", ""), os.environ.get("CC2_PASSWORD", ""), "CC Alt", "free"),
     ]
 
-    changed = False
     for email, password, name, plan in accounts:
         if not email or not password:
             continue
         if email not in users:
             register(email, password, name)
+            # register() saves with plan="free" — immediately fix the plan
             users = _load_users()
             users[email]["plan"] = plan
             users[email]["plan_expires"] = far
-            changed = True
+            _save_users(users)  # Save immediately so next register() doesn't overwrite
             print(f"  [SETUP] Created account: {email} ({plan})")
         else:
+            changed = False
             # Verify password matches env var — reset if not
             hashed, _ = _hash_password(password, users[email]["salt"])
             if hashed != users[email]["password_hash"]:
@@ -264,8 +265,9 @@ def _auto_setup_accounts():
                 users[email]["plan"] = plan
                 users[email]["plan_expires"] = far
                 changed = True
-    if changed:
-        _save_users(users)
+                print(f"  [SETUP] Plan fixed: {email} → {plan}")
+            if changed:
+                _save_users(users)
     print(f"  [SETUP] ✅ Done.")
 
 def _get_auth_user():
