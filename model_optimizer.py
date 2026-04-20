@@ -11,20 +11,32 @@ from config import PREDICTION_WEIGHTS
 def load_predictions(gw: int) -> Dict:
     """Load predictions for a specific GW."""
     try:
-        with open(f'output/gw{gw}_predictions.json', 'r') as f:
+        with open(f'output/gw{gw}_predictions.json', 'r', encoding='utf-8') as f:
             return json.load(f)
-    except:
+    except Exception as e:
+        print(f"Warning: Could not load GW{gw} predictions: {e}")
         return None
 
 
 def calculate_accuracy_metrics(gw: int) -> Dict:
-    """Calculate MAE, RMSE, and correlation for a specific GW."""
+    """Calculate MAE, RMSE, and correlation for a specific GW.
+    
+    Note: FPL API's event_points contains the PREVIOUS gameweek's actual points,
+    not the current ongoing GW. So we compare GW predictions with event_points data.
+    """
     predictions = load_predictions(gw)
     if not predictions:
         return {"error": f"No predictions found for GW{gw}"}
     
     bootstrap = fetch_bootstrap()
     player_map = {p['id']: p for p in bootstrap['elements']}
+    current_gw = get_current_gameweek()
+    
+    # event_points contains previous GW's actual points
+    # So if current_gw is 33, event_points has GW32 data
+    # We can only analyze GW predictions if they match the event_points GW
+    if gw != current_gw - 1:
+        return {"error": f"Can only analyze GW{current_gw-1} (event_points data available). Requested GW{gw}."}
     
     errors = []
     abs_errors = []
@@ -32,19 +44,21 @@ def calculate_accuracy_metrics(gw: int) -> Dict:
     actual_points = []
     predicted_points = []
     
-    for pred in predictions['players']:
-        player_id = pred.get('id')
-        xpts = pred.get('xPts', 0)
+    # Get predictions list (key is 'predictions' not 'players')
+    pred_list = predictions.get('predictions', [])
+    if not pred_list:
+        return {"error": f"No predictions data in file for GW{gw}"}
+    
+    for pred in pred_list:
+        player_id = pred.get('player_id')  # Key is 'player_id' not 'id'
+        xpts = pred.get('predicted_points', 0)  # 'predicted_points' is the actual key
         
-        if player_id in player_map:
-            actual = 0
-            history = player_map[player_id].get('history', [])
-            for h in history:
-                if h['round'] == gw:
-                    actual = h['total_points']
-                    break
+        if player_id and player_id in player_map:
+            player_data = player_map[player_id]
+            actual = player_data.get('event_points', 0)
             
-            if actual > 0 or xpts > 2:  # Only count players who played or were predicted to play
+            # Only count players who played or were predicted to play
+            if actual > 0 or xpts > 2:
                 error = actual - xpts
                 errors.append(error)
                 abs_errors.append(abs(error))
@@ -102,20 +116,24 @@ def analyze_position_accuracy(gw: int) -> Dict:
     bootstrap = fetch_bootstrap()
     player_map = {p['id']: p for p in bootstrap['elements']}
     
+    current_gw = get_current_gameweek()
+    if gw != current_gw - 1:
+        return {"error": f"Can only analyze GW{current_gw-1}"}
+    
     position_stats = {1: [], 2: [], 3: [], 4: []}  # GKP, DEF, MID, FWD
     
-    for pred in predictions['players']:
-        player_id = pred.get('id')
-        xpts = pred.get('xPts', 0)
-        pos = pred.get('position')
+    pred_list = predictions.get('predictions', [])
+    if not pred_list:
+        return {"error": f"No predictions data in file"}
+    
+    for pred in pred_list:
+        player_id = pred.get('player_id')  # Key is 'player_id'
+        xpts = pred.get('predicted_points', 0)
+        pos = pred.get('position_id')  # Position is numeric ID
         
-        if player_id in player_map and pos in position_stats:
-            actual = 0
-            history = player_map[player_id].get('history', [])
-            for h in history:
-                if h['round'] == gw:
-                    actual = h['total_points']
-                    break
+        if player_id and player_id in player_map and pos in position_stats:
+            player_data = player_map[player_id]
+            actual = player_data.get('event_points', 0)
             
             if actual > 0 or xpts > 2:
                 error = abs(actual - xpts)
@@ -135,31 +153,43 @@ def analyze_position_accuracy(gw: int) -> Dict:
 
 
 def analyze_recent_gameweeks(num_gws: int = 3) -> Dict:
-    """Analyze accuracy across recent gameweeks."""
+    """Analyze accuracy for the most recent completed gameweek.
+    
+    FPL API behavior:
+    - current_gw returns the NEXT upcoming GW number
+    - event_points contains the PREVIOUS GW's actual points
+    - So we analyze GW(current-1) predictions vs event_points
+    """
     current_gw = get_current_gameweek()
-    results = []
+    gw_to_analyze = current_gw - 1
     
-    for gw in range(max(1, current_gw - num_gws), current_gw + 1):
-        metrics = calculate_accuracy_metrics(gw)
-        if "error" not in metrics:
-            results.append(metrics)
+    # Check if we have predictions for the GW that matches event_points
+    predictions = load_predictions(gw_to_analyze)
+    if not predictions:
+        return {
+            "error": f"No predictions found for GW{gw_to_analyze}",
+            "suggestion": f"Generate predictions for GW{gw_to_analyze} first to enable model analysis."
+        }
     
-    if not results:
-        return {"error": "No data available for recent gameweeks"}
+    metrics = calculate_accuracy_metrics(gw_to_analyze)
     
-    # Calculate averages
-    avg_mae = sum(r['mae'] for r in results) / len(results)
-    avg_rmse = sum(r['rmse'] for r in results) / len(results)
-    avg_correlation = sum(r['correlation'] for r in results) / len(results)
+    if "error" in metrics:
+        return {
+            **metrics,
+            "suggestion": "Model analysis requires prediction data matching the event_points GW."
+        }
+    
+    results = [metrics]
     
     return {
         "gameweeks_analyzed": [r['gw'] for r in results],
         "individual_results": results,
         "averages": {
-            "mae": round(avg_mae, 2),
-            "rmse": round(avg_rmse, 2),
-            "correlation": round(avg_correlation, 3)
-        }
+            "mae": round(metrics['mae'], 2),
+            "rmse": round(metrics['rmse'], 2),
+            "correlation": round(metrics['correlation'], 3)
+        },
+        "note": f"Analysis based on GW{gw_to_analyze} predictions vs actual event_points data."
     }
 
 
@@ -234,7 +264,7 @@ def _grade_performance(mae: float, correlation: float) -> str:
 def apply_weight_adjustments(new_weights: Dict) -> bool:
     """Apply new weights to config.py."""
     try:
-        with open('config.py', 'r') as f:
+        with open('config.py', 'r', encoding='utf-8') as f:
             content = f.read()
         
         # Find PREDICTION_WEIGHTS section
@@ -254,7 +284,7 @@ def apply_weight_adjustments(new_weights: Dict) -> bool:
         # Replace
         new_content = content[:start] + weights_str + content[end:]
         
-        with open('config.py', 'w') as f:
+        with open('config.py', 'w', encoding='utf-8') as f:
             f.write(new_content)
         
         return True
