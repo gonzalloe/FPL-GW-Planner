@@ -216,7 +216,14 @@ def _ensure_refresh_thread():
     t.start()
     print(f"  [INFO] Auto-refresh thread started (pid={os.getpid()})")
 
+_setup_done = False
+
 def _auto_setup_accounts():
+    global _setup_done
+    if _setup_done:
+        return
+    _setup_done = True
+
     from auth import register, _load_users, _save_users, _hash_password
     from datetime import timedelta
     admin_email = os.environ.get("ADMIN_EMAIL", "")
@@ -226,55 +233,40 @@ def _auto_setup_accounts():
     users = _load_users()
     far = (datetime.now() + timedelta(days=365 * 99)).isoformat()
 
-    if admin_email not in users:
-        # Fresh start — create all accounts
-        print("  [SETUP] Creating initial accounts...")
-        register(admin_email, admin_pass, "Admin")
-        cc_email = os.environ.get("CC_EMAIL", "")
-        cc_pass = os.environ.get("CC_PASSWORD", "")
-        cc2_email = os.environ.get("CC2_EMAIL", "")
-        cc2_pass = os.environ.get("CC2_PASSWORD", "")
-        if cc_email and cc_pass: register(cc_email, cc_pass, "CC")
-        if cc2_email and cc2_pass: register(cc2_email, cc2_pass, "CC Alt")
-        users = _load_users()
-        for email, plan in [(admin_email, "admin"), (cc_email, "premium"), (cc2_email, "premium")]:
-            if email and email in users:
-                users[email]["plan"] = plan
-                users[email]["plan_expires"] = far
-        _save_users(users)
-        print(f"  [SETUP] ✅ Done.")
-    else:
-        # Accounts exist — sync passwords from env vars (handles Render ephemeral disk
-        # where old users.json may be stale, or env var password was changed)
-        changed = False
-        accounts = [
-            (admin_email, admin_pass, "admin"),
-            (os.environ.get("CC_EMAIL", ""), os.environ.get("CC_PASSWORD", ""), "premium"),
-            (os.environ.get("CC2_EMAIL", ""), os.environ.get("CC2_PASSWORD", ""), "premium"),
-        ]
-        for email, password, plan in accounts:
-            if not email or not password:
-                continue
-            if email not in users:
-                # Account missing — recreate it
-                register(email, password, email.split("@")[0].title())
-                users = _load_users()
+    accounts = [
+        (admin_email, admin_pass, "Admin", "admin"),
+        (os.environ.get("CC_EMAIL", ""), os.environ.get("CC_PASSWORD", ""), "CC", "premium"),
+        (os.environ.get("CC2_EMAIL", ""), os.environ.get("CC2_PASSWORD", ""), "CC Alt", "premium"),
+    ]
+
+    changed = False
+    for email, password, name, plan in accounts:
+        if not email or not password:
+            continue
+        if email not in users:
+            register(email, password, name)
+            users = _load_users()
+            users[email]["plan"] = plan
+            users[email]["plan_expires"] = far
+            changed = True
+            print(f"  [SETUP] Created account: {email} ({plan})")
+        else:
+            # Verify password matches env var — reset if not
+            hashed, _ = _hash_password(password, users[email]["salt"])
+            if hashed != users[email]["password_hash"]:
+                new_hash, new_salt = _hash_password(password)
+                users[email]["password_hash"] = new_hash
+                users[email]["salt"] = new_salt
+                changed = True
+                print(f"  [SETUP] Password synced from env for: {email}")
+            # Ensure plan is correct
+            if users[email].get("plan") != plan:
                 users[email]["plan"] = plan
                 users[email]["plan_expires"] = far
                 changed = True
-                print(f"  [SETUP] Re-created missing account: {email}")
-            else:
-                # Verify password matches env var — reset if not
-                hashed, _ = _hash_password(password, users[email]["salt"])
-                if hashed != users[email]["password_hash"]:
-                    new_hash, new_salt = _hash_password(password)
-                    users[email]["password_hash"] = new_hash
-                    users[email]["salt"] = new_salt
-                    changed = True
-                    print(f"  [SETUP] Password synced from env for: {email}")
-        if changed:
-            _save_users(users)
-            print(f"  [SETUP] ✅ Account sync complete.")
+    if changed:
+        _save_users(users)
+    print(f"  [SETUP] ✅ Done.")
 
 def _get_auth_user():
     from auth import get_user_from_token

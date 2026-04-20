@@ -1834,32 +1834,61 @@ async function loadData() {
     console.warn('Cached predictions not available:', e.message);
   }
 
-  // Fallback: run predictions (slower)
-  try {
-    const overlay = document.getElementById('loading-overlay');
-    if (overlay) overlay.querySelector('p').textContent = 'Running prediction engine... (this may take 30-60s on first load)';
-    const r2 = await fetch('/api/run');
-    if (r2.ok) {
-      DATA = await r2.json();
-      ALL_PREDICTIONS = DATA.predictions || [];
-      const overlay2 = document.getElementById('loading-overlay');
-      if (overlay2) overlay2.remove();
-      render();
-      return;
+  // Fallback: trigger prediction run (admin only) or wait for auto-refresh
+  const isAdmin = AUTH_USER?.plan === 'admin';
+  if (isAdmin) {
+    try {
+      const overlay = document.getElementById('loading-overlay');
+      if (overlay) overlay.querySelector('p').textContent = 'Running prediction engine... (this may take 30-60s on first load)';
+      const r2 = await fetch('/api/run', {headers: authHeaders()});
+      if (r2.ok) {
+        DATA = await r2.json();
+        ALL_PREDICTIONS = DATA.predictions || [];
+        const overlay2 = document.getElementById('loading-overlay');
+        if (overlay2) overlay2.remove();
+        render();
+        return;
+      }
+    } catch(e2) {
+      console.error('Failed to run predictions:', e2.message);
     }
-  } catch(e2) {
-    console.error('Failed to run predictions:', e2.message);
   }
 
-  // Both failed — show error
+  // Predictions not ready yet — show waiting message with auto-retry
   const overlay = document.getElementById('loading-overlay');
   if (overlay) overlay.remove();
   if (mainEl) {
     const errDiv = document.createElement('div');
     errDiv.className = 'card';
+    errDiv.id = 'data-waiting-card';
     errDiv.style.cssText = 'margin-top:40px;text-align:center;padding:30px;';
-    errDiv.innerHTML = '<h3 style="color:var(--red);">Failed to load data</h3><p style="color:var(--text3);margin-top:8px;">Make sure the server is running and FPL API is accessible.</p><button class="btn btn-primary" style="margin-top:12px;" onclick="location.reload()">🔄 Retry</button><p style="margin-top:12px;font-size:12px;color:var(--text3);">Try: <code>python main.py</code> first, then reload.</p>';
+    errDiv.innerHTML = `<div style="font-size:32px;margin-bottom:12px;">⏳</div>
+      <h3>Predictions are being generated...</h3>
+      <p style="color:var(--text3);margin-top:8px;">The server just started up. Predictions will be ready in about 1-2 minutes.</p>
+      <div style="margin-top:16px;width:200px;height:4px;background:var(--surface3);border-radius:2px;margin:16px auto 0;overflow:hidden;">
+        <div style="width:60%;height:100%;background:var(--accent);border-radius:2px;animation:loading 1.5s ease-in-out infinite;"></div>
+      </div>
+      <p style="margin-top:12px;font-size:12px;color:var(--text3);">Auto-retrying every 15 seconds...</p>`;
     mainEl.prepend(errDiv);
+    // Auto-retry every 15 seconds
+    setTimeout(async function retry() {
+      try {
+        const r3 = await fetch('/api/predictions?_t=' + Date.now(), {headers: authHeaders()});
+        if (r3.ok) {
+          const d = await r3.json();
+          if (d && d.predictions) {
+            DATA = d;
+            USER_PLAN = d.user_plan || (AUTH_USER?.plan) || 'free';
+            ALL_PREDICTIONS = d.predictions || [];
+            const waiting = document.getElementById('data-waiting-card');
+            if (waiting) waiting.remove();
+            render();
+            return;
+          }
+        }
+      } catch(e) {}
+      setTimeout(retry, 15000);
+    }, 15000);
   }
 }
 
