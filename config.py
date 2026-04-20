@@ -74,6 +74,7 @@ PREDICTION_WEIGHTS = {
     # NEW: Team-level factors derived from actual match results
     "team_form": 0.10,           # Team last-5 win rate + momentum + goals
     "h2h_factor": 0.08,          # H2H record + fixture-specific xG/xGC
+    "win_probability": 0.08,     # Team win probability from Poisson(xG)
 }
 
 # ── Fixture Difficulty Modifier ───────────────────────────────

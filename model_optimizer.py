@@ -292,6 +292,8 @@ def suggest_weight_adjustments() -> Dict:
     
     return {
         "analysis": analysis,
+        "averages": analysis.get("averages", {}),
+        "gameweeks_analyzed": analysis.get("gameweeks_analyzed", []),
         "current_weights": PREDICTION_WEIGHTS,
         "suggested_weights": adjusted_weights,
         "suggestions": suggestions,

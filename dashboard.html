@@ -1478,7 +1478,10 @@ async function applyWeightSuggestions() {
     return;
   }
   
-  if (!confirm('Apply suggested weights to prediction model? This will update config.py and require restarting the server for changes to take effect.')) return;
+  if (!confirm('Apply suggested weights and regenerate predictions? New xPts will be calculated using the updated weights.')) return;
+  
+  const applyBtn = document.querySelector('[onclick="applyWeightSuggestions()"]');
+  if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = '⏳ Applying...'; }
   
   try {
     const r = await fetch('/api/admin/apply-weights', {
@@ -1489,12 +1492,25 @@ async function applyWeightSuggestions() {
     const d = await r.json();
     
     if (d.ok) {
-      alert('✓ Weights updated successfully!\n\nPlease restart the server for changes to take effect:\npython server.py');
+      if (d.regenerating) {
+        if (applyBtn) applyBtn.textContent = '🔄 Regenerating predictions...';
+        alert('✓ Weights applied!\n\nPredictions are being regenerated in the background.\nThe page will reload in 12 seconds to show the new xPts.');
+        // Poll for new predictions then reload
+        setTimeout(() => {
+          if (applyBtn) applyBtn.textContent = '✓ Done — reloading...';
+          location.reload();
+        }, 12000);
+      } else {
+        alert('✓ Weights saved. ' + (d.message || ''));
+        if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply Suggested Weights'; }
+      }
     } else {
       alert('Failed: ' + (d.error || d.message));
+      if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply Suggested Weights'; }
     }
   } catch(e) {
     alert('Error: ' + e.message);
+    if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply Suggested Weights'; }
   }
 }
 

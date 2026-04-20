@@ -703,7 +703,7 @@ def api_admin_model_analysis():
 
 @app.route("/api/admin/apply-weights", methods=["POST"])
 def api_admin_apply_weights():
-    """Admin: Apply new weight configuration."""
+    """Admin: Apply new weight configuration and regenerate predictions."""
     user = _get_auth_user()
     if not user or user.get("plan") != "admin": return jsonify({"error": "Admin access required"}), 403
     from model_optimizer import apply_weight_adjustments
@@ -712,7 +712,33 @@ def api_admin_apply_weights():
     if not weights:
         return jsonify({"error": "No weights provided"}), 400
     success = apply_weight_adjustments(weights)
-    return jsonify({"ok": success, "message": "Weights updated" if success else "Failed to update weights"})
+    if not success:
+        return jsonify({"ok": False, "message": "Failed to write weights to config.py"})
+    
+    # Hot-reload config and regenerate predictions so new xPts show immediately
+    try:
+        import importlib, config, prediction_engine
+        importlib.reload(config)
+        importlib.reload(prediction_engine)
+        # Threaded regen so request returns quickly
+        def _regen():
+            try:
+                _run_predictions()
+                print("  [ADMIN] Predictions regenerated with new weights")
+            except Exception as e:
+                print(f"  [ADMIN] Regen failed: {e}")
+        threading.Thread(target=_regen, daemon=True).start()
+        return jsonify({
+            "ok": True,
+            "message": "Weights updated. Regenerating predictions in background — refresh the page in ~10 seconds to see new xPts.",
+            "regenerating": True,
+        })
+    except Exception as e:
+        return jsonify({
+            "ok": True,
+            "message": f"Weights saved but auto-regen failed: {e}. Restart server manually.",
+            "regenerating": False,
+        })
 
 @app.route("/api/setup-accounts")
 def api_setup_accounts():

@@ -170,15 +170,6 @@ class PredictionEngine:
             fix_xp = fix_ev * (1.0 + weighted_mod)
             fix_xp = max(0.0, fix_xp)
 
-            # ── Win Probability adjustment ──
-            # Teams that are more likely to win score more goals, keep more clean sheets,
-            # and earn more bonus points. Apply a modest scaling factor based on win prob.
-            # Baseline is 0.35 (league avg win prob ~35%); scale ±15% around that.
-            win_prob = fix_xg_data.get("win_probability", 0.35)
-            win_prob_multiplier = 1.0 + (win_prob - 0.35) * 0.30  # ±10.5% at extremes
-            win_prob_multiplier = max(0.85, min(win_prob_multiplier, 1.20))
-            fix_xp *= win_prob_multiplier
-
             total_raw += fix_xp
 
             # Availability discount
@@ -888,6 +879,7 @@ class PredictionEngine:
             "bonus_tendency": self._calc_bonus_tendency(p),
             "team_form": self._calc_team_form_factor(p),
             "h2h_factor": self._calc_h2h_factor(p, fixture_info, fix_xg_data),
+            "win_probability": self._calc_win_prob_factor(fix_xg_data),
         }
 
     def _calc_form(self, p: dict) -> float:
@@ -908,6 +900,18 @@ class PredictionEngine:
         pos = p.get("position_id", 3)
         mod = self._position_fdr_modifier(pos, fdr, is_home)
         return (mod - 1.0) * 0.8  # Already includes position awareness
+
+    def _calc_win_prob_factor(self, fix_xg_data: dict) -> float:
+        """
+        Win probability as a prediction factor.
+        Normalized to roughly the same scale as fixture_difficulty (~[-0.4, 0.4]).
+        Baseline: 0.35 (league average win prob).
+        Returns positive value when team is favored, negative when underdog.
+        """
+        win_prob = fix_xg_data.get("win_probability", 0.35)
+        # Scale: (win_prob - 0.35) / 0.35 gives [-1.0, 1.7]
+        # Compress to [-0.4, 0.4] range similar to other factors
+        return max(-0.4, min((win_prob - 0.35) * 1.1, 0.4))
 
     def _calc_season_avg(self, p: dict) -> float:
         ppg = float(p.get("points_per_game", 0))
