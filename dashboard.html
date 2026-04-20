@@ -1444,9 +1444,17 @@ async function authLogin() {
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value;
   if (!email || !password) { showAuthError('Please enter email and password'); return; }
-  try {
-    const r = await fetch('/api/auth/login', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, password})});
-    const d = await r.json();
+
+  // Retry up to 3 times (handles transient failures during server deploys)
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({email, password})
+      });
+      const d = await r.json();
     if (d.ok) {
       AUTH_TOKEN = d.token;
       AUTH_USER = d.user;
@@ -1465,10 +1473,19 @@ async function authLogin() {
           }
         }
       } catch(e2) { console.warn('Re-fetch predictions after login failed:', e2); }
+      return;  // Success — exit retry loop
     } else {
       showAuthError(d.error || 'Login failed');
+      return;  // Server responded with error — don't retry
     }
-  } catch(e) { showAuthError('Connection error: ' + e.message); }
+  } catch(e) {
+    lastError = e;
+    console.warn(`Login attempt ${attempt}/3 failed:`, e.name, e.message);
+    if (attempt < 3) await new Promise(r => setTimeout(r, 2000));  // Wait 2s before retry
+  }
+  }
+  // All retries exhausted
+  showAuthError('Connection error: ' + (lastError?.message || 'Failed to fetch') + '. Server may be restarting — please wait 30 seconds and try again.');
 }
 
 async function authRegister() {

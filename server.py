@@ -317,6 +317,7 @@ def before_request():
     # with "fail to fetch" — this was breaking login on ALL browsers except the
     # one that had a cached token in localStorage.
     if request.method == "OPTIONS":
+        print(f"  [CORS] OPTIONS preflight: {request.path} from {request.headers.get('Origin', 'no-origin')}")
         resp = app.make_default_options_response()
         resp.headers["Access-Control-Allow-Origin"] = "*"
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
