@@ -84,13 +84,29 @@ class GWPlanner:
                         "venue": "H" if f["is_home"] else "A",
                     })
                 dgw_teams = get_dgw_teams(gw, self.fixtures)
+                is_blank = len(opponents) == 0
+                is_dgw = tid in dgw_teams and len(opponents) >= 2
+
+                # Avg FDR calculation:
+                # - BGW: treated as 6.0 (worse than hardest FDR=5, since no game = 0 pts)
+                # - DGW: sum FDR / num_fixtures (low avg = good two games), but
+                #        bonus: subtract 0.5 to reward having double fixture
+                # - SGW: plain average
+                if is_blank:
+                    effective_fdr = 6.0
+                elif is_dgw:
+                    raw_avg = sum(o["fdr"] for o in opponents) / len(opponents)
+                    effective_fdr = round(max(1.0, raw_avg - 0.5), 1)  # DGW bonus
+                else:
+                    effective_fdr = round(sum(o["fdr"] for o in opponents) / max(len(opponents), 1), 1)
+
                 team_fixtures.append({
                     "gw": gw,
                     "opponents": opponents,
-                    "is_dgw": tid in dgw_teams,
-                    "is_blank": len(opponents) == 0,
+                    "is_dgw": is_dgw,
+                    "is_blank": is_blank,
                     "fixture_count": len(opponents),
-                    "avg_fdr": round(sum(o["fdr"] for o in opponents) / max(len(opponents), 1), 1),
+                    "avg_fdr": effective_fdr,
                 })
             ticker[tid] = {
                 "team_name": self.teams.get(tid, {}).get("name", "Unknown"),

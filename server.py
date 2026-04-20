@@ -235,10 +235,11 @@ def api_predictions():
     is_premium = user and user.get("plan") in ("premium", "admin")
 
     if not is_premium:
+        import random
         data["user_plan"] = "free" if user else "guest"
-        # Keep predictions SORTED (don't shuffle). Lock specific fields only.
-        # Free users see: name, team, position, price, form, fixtures list, ownership
-        # Locked: predicted_points, raw_xpts, confidence, win_probability (inside fixtures), tier
+        # Shuffle predictions for free users so the sort order doesn't reveal xPts ranking.
+        # (xPts is locked with 🔒 — leaving them sorted would leak the ranking)
+        random.shuffle(preds)
         data["predictions"] = preds
         for p in preds:
             # Lock premium numeric fields
@@ -271,9 +272,17 @@ def api_predictions():
                     f["xp_adjusted"] = "🔒"
         sq["predicted_total_points"] = "🔒"
         sq["squad_total_xpts"] = "🔒"
+        # Lock captain info — free users shouldn't see the captain pick
+        if sq.get("captain"):
+            sq["captain"] = {"name": "🔒 Upgrade to see", "predicted_points": "🔒", "player_id": None}
+        if sq.get("vice_captain"):
+            sq["vice_captain"] = {"name": "🔒", "predicted_points": "🔒", "player_id": None}
+        # Lock chip analysis — free users shouldn't see best chip recommendation
         chip = data.get("chip_analysis", {})
-        if chip.get("best_chip"): chip["best_chip"]["score"] = "🔒"
-        for rec in chip.get("recommendations", []): rec["score"] = "🔒"
+        if chip.get("best_chip"):
+            chip["best_chip"] = {"code": "🔒", "name": "Premium only", "score": "🔒"}
+        for rec in chip.get("recommendations", []):
+            rec["score"] = "🔒"; rec["code"] = "🔒"
         for key in ("top_picks", "differentials", "value_picks"):
             for p in data.get(key, []):
                 p["predicted_points"] = "🔒"
@@ -693,8 +702,12 @@ def api_stripe_checkout():
         import stripe
         stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
         if not stripe.api_key:
-            from auth import upgrade_to_premium
-            return jsonify({"ok": True, "message": "Upgraded (test mode)", "user": upgrade_to_premium(user["email"]).get("user")})
+            # No Stripe key configured — do NOT auto-upgrade; inform user to contact admin
+            return jsonify({
+                "ok": False,
+                "error": "Payment system not configured. Please contact the admin to manually upgrade your account.",
+                "contact_admin": True,
+            })
         s = stripe.checkout.Session.create(
             payment_method_types=["card"],
             line_items=[{"price_data":{"currency":"usd","product_data":{"name":"FPL Predictor Premium"},

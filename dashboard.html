@@ -438,7 +438,7 @@ input:focus, select:focus {
 /* Custom select styling (native <select> dropdown is hard to theme, but we can
    force a solid theme-colored background + chevron and style <option>s) */
 select {
-  appearance:none; -webkit-appearance:none; -moz-appearance:none;
+  appearance:none !important; -webkit-appearance:none !important; -moz-appearance:none !important;
   padding-right:32px;
   background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%238892a8' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
   background-repeat:no-repeat;
@@ -446,6 +446,7 @@ select {
   background-size:12px 8px;
   cursor:pointer;
 }
+select::-ms-expand { display:none; }
 select option {
   background:var(--surface);
   color:var(--text);
@@ -458,6 +459,10 @@ select option:checked, select option:hover {
 }
 [data-theme="light"] select {
   background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a5878' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+}
+[data-theme="light"] select option {
+  background:#ffffff;
+  color:#14203a;
 }
 
 /* My Team */
@@ -1549,13 +1554,12 @@ async function upgradeToPremium() {
     const r = await fetch('/api/stripe/create-checkout', {method: 'POST', headers: authHeaders()});
     const d = await r.json();
     if (d.checkout_url) {
+      // Redirect to Stripe payment page
       window.location.href = d.checkout_url;
-    } else if (d.ok && d.user) {
-      // Test mode — instant upgrade
-      AUTH_USER = d.user;
-      document.getElementById('premium-banner').style.display = 'none';
-      alert('Upgraded to Premium! Refreshing...');
-      location.reload();
+    } else if (d.contact_admin) {
+      alert('💳 Premium Upgrade\n\nPayment system is not yet configured on this server.\n\nTo upgrade, please contact the admin:\n• Email: admin@fplpredictor.com\n• They can manually upgrade your account.');
+    } else if (!d.ok) {
+      alert(d.error || 'Failed to start checkout. Please try again.');
     } else {
       alert(d.error || 'Failed to start checkout');
     }
@@ -1938,13 +1942,37 @@ function render() {
 function renderOverviewStats(squad, gwInfo, chips) {
   const best = chips.best_chip;
   const squadTotal = squad.squad_total_xpts || 0;
+  const isLocked = v => v === '🔒' || v === '\uD83D\uDD12';
+  const lockUpgrade = `<span class="lock-cell" onclick="upgradeToPremium()" title="Upgrade to unlock" style="font-size:12px;">🔒 Unlock</span>`;
+
+  // Best chip display
+  let chipDisplay, chipSub;
+  if (!best || isLocked(best.code)) {
+    chipDisplay = lockUpgrade;
+    chipSub = 'Premium feature';
+  } else {
+    const chipColor = best.score >= 50 ? 'var(--accent)' : 'var(--text3)';
+    chipDisplay = `<span style="color:${chipColor};">${best.code}</span>`;
+    chipSub = `${best.name} (${best.score}/100)`;
+  }
+
+  // Captain display
+  let capDisplay, capSub;
+  if (!squad.captain || isLocked(squad.captain.name)) {
+    capDisplay = lockUpgrade;
+    capSub = 'Premium feature';
+  } else {
+    capDisplay = `<span style="font-size:16px;color:var(--gold);">${squad.captain.name}</span>`;
+    capSub = `${squad.captain.predicted_points} xPts${squad.captain.is_dgw ? ' [DGW]' : ''}`;
+  }
+
   const html = `
-    <div class="stat-box"><div class="label">XI + Captain</div><div class="value" style="color:var(--accent);">${squad.predicted_total_points || '--'}</div><div class="sub">Starting XI points</div></div>
-    <div class="stat-box"><div class="label">Squad Total</div><div class="value" style="color:var(--blue);">${squadTotal || '--'}</div><div class="sub">All 15 players xPts</div></div>
+    <div class="stat-box"><div class="label">XI + Captain</div><div class="value">${isLocked(squad.predicted_total_points) ? lockUpgrade : squad.predicted_total_points || '--'}</div><div class="sub">Starting XI points</div></div>
+    <div class="stat-box"><div class="label">Squad Total</div><div class="value">${isLocked(squadTotal) ? lockUpgrade : (squadTotal || '--')}</div><div class="sub">All 15 players xPts</div></div>
     <div class="stat-box"><div class="label">Formation</div><div class="value">${squad.formation || '--'}</div><div class="sub">Cost: &pound;${squad.total_cost || '--'}m</div></div>
     <div class="stat-box"><div class="label">DGW Players</div><div class="value" style="color:var(--dgw);">${squad.dgw_players || 0}</div><div class="sub">${squad.dgw_in_xi || 0} in Starting XI</div></div>
-    <div class="stat-box"><div class="label">Best Chip</div><div class="value" style="color:${best && best.score >= 50 ? 'var(--accent)' : 'var(--text3)'};">${best ? best.code : 'SAVE'}</div><div class="sub">${best ? best.name + ' (' + best.score + '/100)' : 'No chip recommended'}</div></div>
-    <div class="stat-box"><div class="label">Captain</div><div class="value" style="font-size:16px;color:var(--gold);">${squad.captain ? squad.captain.name : '--'}</div><div class="sub">${squad.captain ? squad.captain.predicted_points + ' xPts' + (squad.captain.is_dgw ? ' [DGW]' : '') : ''}</div></div>
+    <div class="stat-box"><div class="label">Best Chip</div><div class="value">${chipDisplay}</div><div class="sub">${chipSub}</div></div>
+    <div class="stat-box"><div class="label">Captain</div><div class="value">${capDisplay}</div><div class="sub">${capSub}</div></div>
   `;
   document.getElementById('overview-stats').innerHTML = html;
   document.getElementById('formation-badge').textContent = squad.formation;
@@ -3318,11 +3346,13 @@ function renderFixturesTable() {
   for (let gw = fromGw; gw <= toGw; gw++) gws.push(gw);
 
   const teamEntries = Object.entries(ticker);
-  // Compute avg FDR per team for sorting
+  // Use backend-computed avg_fdr per GW which already accounts for BGW (6.0) and DGW (-0.5 bonus)
   teamEntries.forEach(([tid, team]) => {
     const fixes = team.fixtures || [];
-    const valid = fixes.filter(f => !f.is_blank);
-    team._avgFdr = valid.length ? valid.reduce((s, f) => s + f.avg_fdr, 0) / valid.length : 5;
+    // Include all GWs: blanks contribute high FDR (penalized on backend), DGWs contribute low
+    team._avgFdr = fixes.length
+      ? fixes.reduce((s, f) => s + f.avg_fdr, 0) / fixes.length
+      : 5;
   });
 
   if (_fixturesSort === 'easy') teamEntries.sort((a, b) => a[1]._avgFdr - b[1]._avgFdr);
@@ -3335,10 +3365,10 @@ function renderFixturesTable() {
 
   teamEntries.forEach(([tid, team]) => {
     const avgFdr = team._avgFdr.toFixed(2);
-    const fdrColor = team._avgFdr <= 2.5 ? 'var(--accent)' :
-                     team._avgFdr <= 3.0 ? '#66bb6a' :
+    const fdrColor = team._avgFdr <= 2.3 ? 'var(--accent)' :
+                     team._avgFdr <= 2.8 ? '#66bb6a' :
                      team._avgFdr <= 3.5 ? 'var(--text2)' :
-                     team._avgFdr <= 4.0 ? 'var(--orange)' : 'var(--red)';
+                     team._avgFdr <= 4.5 ? 'var(--orange)' : 'var(--red)';
     html += `<tr><td class="team-cell" style="font-weight:700;padding:10px;">${team.short_name}</td>`;
     html += `<td style="text-align:center;color:${fdrColor};font-weight:700;">${avgFdr}</td>`;
     (team.fixtures || []).forEach(f => {
