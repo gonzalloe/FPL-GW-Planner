@@ -61,20 +61,19 @@ POSITION_LIMITS = {
 # ── Prediction Weights ────────────────────────────────────────
 # These weights tune how different factors influence the prediction
 PREDICTION_WEIGHTS = {
-    "form": 0.20,                # Recent form (last 5 GWs)
-    "fixture_difficulty": 0.15,  # Opponent difficulty (FDR)
-    "season_avg": 0.08,          # Season average ppg
-    "home_away": 0.07,           # Home/away advantage
-    "ict_index": 0.10,           # Influence, Creativity, Threat
-    "minutes_consistency": 0.07, # Consistent starter?
-    "team_strength": 0.05,       # FPL team strength ratings
-    "set_pieces": 0.05,          # Set piece duties
-    "ownership_momentum": 0.03,  # Transfer trends
-    "bonus_tendency": 0.02,      # Historical bonus points tendency
-    # NEW: Team-level factors derived from actual match results
-    "team_form": 0.10,           # Team last-5 win rate + momentum + goals
-    "h2h_factor": 0.08,          # H2H record + fixture-specific xG/xGC
-    "win_probability": 0.08,     # Team win probability from Poisson(xG)
+    "form": 0.177,  # Form
+    "fixture_difficulty": 0.159,  # Fixture Difficulty
+    "season_avg": 0.071,  # Season Avg
+    "home_away": 0.062,  # Home Away
+    "ict_index": 0.106,  # Ict Index
+    "minutes_consistency": 0.062,  # Minutes Consistency
+    "team_strength": 0.044,  # Team Strength
+    "set_pieces": 0.044,  # Set Pieces
+    "ownership_momentum": 0.027,  # Ownership Momentum
+    "bonus_tendency": 0.018,  # Bonus Tendency
+    "team_form": 0.088,  # Team Form
+    "h2h_factor": 0.071,  # H2H Factor
+    "win_probability": 0.071,  # Win Probability
 }
 
 # ── Fixture Difficulty Modifier ───────────────────────────────

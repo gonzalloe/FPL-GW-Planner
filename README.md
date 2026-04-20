@@ -5,16 +5,19 @@ An intelligent prediction and squad optimization system for Fantasy Premier Leag
 **Live Demo**: Deploy on [Render.com](https://render.com) in 2 minutes (free tier). See [Deployment](#-deployment).
 
 ### Highlights
-- 🧠 **12-factor Poisson model** — xG, xA, CS probability, bonus points, negative events
-- 🔬 **Model Optimization** — Analyze prediction accuracy, auto-suggest weight adjustments (Admin feature)
-- 🏥 **Injury-aware** — teammate injury boosts, team penalty, opponent weakness detection
+- 🧠 **13-factor Poisson model** — xG, xA, CS probability, bonus points, negative events, **win probability**
+- 🎲 **Win Probability** — Poisson-based match outcome model, displayed per fixture with DGW support
+- 🏥 **Realistic injury penalty** — 75% chance = 8% haircut, 50% = 45%, 25% = 78%, <25% = 92%
+- 🔬 **Model Optimization** — Analyze accuracy, auto-suggest weights, **one-click apply + hot reload** (Admin)
 - 📰 **Real-time news** — Google News RSS pulls Fabrizio Romano, Ben Dinnery, David Ornstein updates
 - ⚡ **Transfer Simulator** — FPL-style pitch, drag-to-swap, double-click-to-buy, Optimize XI button
 - 🎯 **Chip Planner** — Season-wide analysis, 1 chip per GW, dual chip sets (FPL 25/26)
-- 🤖 **AI Chat** — 12 intents, what-if scenarios, per-fixture breakdown
+- 📅 **Fixture Ticker** — All 20 teams × 5-15 GW horizon, sortable by difficulty (**FREE for all users**)
+- 🤖 **AI Chat** — 12 intents, what-if scenarios, per-fixture breakdown, risk-aware comparisons
 - 👤 **User accounts** — Free/Premium ($2.50/mo)/Admin tiers with Stripe payments
-- 📊 **All FPL players** — 600+ players including injured/suspended/youngsters
-- 🎨 **Enhanced UI** — Smooth animations, responsive design, modern dark theme
+- 📊 **All FPL players** — 800+ players including injured/suspended/youngsters
+- 🎨 **Modern UI** — Glassmorphism, vibrant gradients, **light/dark theme toggle**, loading states
+- 🌓 **Theme toggle** — Sidebar switch with localStorage persistence, no FOUC
 
 ---
 
@@ -29,6 +32,7 @@ An intelligent prediction and squad optimization system for Fantasy Premier Leag
 - [Transfer Simulator](#-transfer-simulator)
 - [Season Chip Planner](#-season-chip-planner)
 - [GW Planner](#-gw-planner)
+- [Fixture Ticker](#-fixture-ticker)
 - [Dashboard Features](#-dashboard-features)
 - [API Reference](#-api-reference)
 - [AI Chat](#-ai-chat)
@@ -130,11 +134,13 @@ Recommendations:
 
 1. Review suggested weights in the comparison table
 2. Click **"Apply Suggested Weights"**
-3. System updates `config.py` with new PREDICTION_WEIGHTS
-4. **Restart server** for changes to take effect:
-   ```bash
-   python server.py
-   ```
+3. System:
+   - Updates `config.py` with new `PREDICTION_WEIGHTS`
+   - **Hot-reloads** the config and prediction_engine modules
+   - **Auto-regenerates** predictions in the background
+4. Page auto-reloads in ~12 seconds showing updated xPts
+
+No manual restart needed.
 
 ### When to Use
 
@@ -145,7 +151,7 @@ Recommendations:
 
 ### Weight Tuning Philosophy
 
-The 12 prediction factors have different impacts:
+The 13 prediction factors have different impacts:
 
 | Factor | Current Weight | Effect |
 |--------|----------------|--------|
@@ -154,7 +160,8 @@ The 12 prediction factors have different impacts:
 | **Team Form** | 0.10 | Team-level context |
 | **ICT Index** | 0.10 | FPL's own metric |
 | **H2H Factor** | 0.08 | Head-to-head + fixture xG |
-| Others | 0.37 | Season avg, home/away, minutes, etc. |
+| **Win Probability** | 0.08 | Team's chance to win (Poisson) |
+| Others | 0.29 | Season avg, home/away, minutes, etc. |
 
 **Principle**: If the model consistently over/under-predicts, nudge the dominant weights (form, fixture_difficulty) in the opposite direction.
 
@@ -195,9 +202,11 @@ Users must register/login to access the dashboard. Accounts stored in `data/user
 |---------|------|---------------------|-------|
 | Import FPL Team | ✅ | ✅ | ✅ |
 | View Squad & Formation | ✅ | ✅ | ✅ |
-| Basic Fixture Ticker | ✅ | ✅ | ✅ |
+| **Fixture Ticker (all 20 teams, 5-15 GW horizon)** | ✅ | ✅ | ✅ |
+| Light/Dark Theme | ✅ | ✅ | ✅ |
 | AI Chat | 3/day | Unlimited | Unlimited |
 | **xPts Predictions** | 🔒 | ✅ | ✅ |
+| **Win Probability Display** | 🔒 | ✅ | ✅ |
 | **Transfer Simulator** | 🔒 | ✅ | ✅ |
 | **Optimize XI** | 🔒 | ✅ | ✅ |
 | **Season Chip Planner** | 🔒 | ✅ | ✅ |
@@ -256,7 +265,7 @@ print('Done!')
 
 The engine uses a **Poisson-based probabilistic model** inspired by FPL Review, FPL Optimized, FPL Vault, SmartDraftBoard, and XGBoost research papers.
 
-### 12 Prediction Factors
+### 13 Prediction Factors
 
 | # | Factor | Weight | Description |
 |---|--------|--------|-------------|
@@ -266,20 +275,22 @@ The engine uses a **Poisson-based probabilistic model** inspired by FPL Review, 
 | 4 | **ICT Index** | 10% | FPL's Influence, Creativity, Threat |
 | 5 | **Season Average** | 8% | Points per game, normalized |
 | 6 | **H2H Factor** | 8% | Head-to-head record + fixture-specific xG |
-| 7 | **Home/Away** | 7% | +12% home, -10% away |
-| 8 | **Minutes Consistency** | 7% | With volatility penalty |
-| 9 | **Team Strength** | 5% | FPL team ratings |
-| 10 | **Set Pieces** | 5% | Penalty/corner/FK duties |
-| 11 | **Transfer Momentum** | 3% | Community transfer trends |
-| 12 | **Bonus Tendency** | 2% | Historical bonus persistence |
+| 7 | **Win Probability** | 8% | Poisson-based team win probability from xG |
+| 8 | **Home/Away** | 7% | +12% home, -10% away |
+| 9 | **Minutes Consistency** | 7% | With volatility penalty |
+| 10 | **Team Strength** | 5% | FPL team ratings |
+| 11 | **Set Pieces** | 5% | Penalty/corner/FK duties |
+| 12 | **Transfer Momentum** | 3% | Community transfer trends |
+| 13 | **Bonus Tendency** | 2% | Historical bonus persistence |
 
 ### Key Techniques
 
 - **Poisson goal model**: `P(k goals) = (λ^k × e^(-λ)) / k!` — multi-goal EV, not linear
 - **Poisson CS probability**: `P(CS) = e^(-opponent_xG)` blended with FDR and defensive form
+- **Win probability**: `Σ P(team_goals > opp_goals)` via independent Poissons, clamped [5%, 95%]
 - **xG delta regression**: Overperformers dampened (0.78-0.92x), underperformers boosted (1.05-1.10x)
 - **DGW-aware starter tiers**: Probability of starting BOTH matches (nailed=88%, rotation=25%)
-- **Availability rules**: ≥75% chance → full xPts (just flagged), <75% → discounted
+- **Realistic availability penalty**: 75% chance → 0.92x, 50% → 0.55x, 25% → 0.22x, <25% → 0.08x
 - **Teammate injury boost**: When same-position teammates are injured, remaining players get tier promotion (fringe→rotation→regular)
 - **Team injury penalty**: Teams with many injured starters get dampened form/strength/xG (up to -30%)
 - **Opponent injury penalty**: Playing a weakened team → higher scoring context + higher CS probability
@@ -392,29 +403,62 @@ Multi-GW transfer planning with rolling state simulation.
 
 ---
 
+## 📅 Fixture Ticker
+
+**Free for all users.** Standalone page showing upcoming fixtures across all 20 Premier League teams.
+
+### Features
+- **Configurable horizon**: Next 5, 8, or 10 GWs
+- **Sortable**: By team name, easiest fixtures, or hardest fixtures
+- **Color-coded FDR**: Green (1-2), grey (3), orange (4), red (5) with gradient chips
+- **Avg FDR column**: Per team across the horizon, color-indicates overall difficulty
+- **DGW indicator**: Stacks multiple opponents in one cell with "DGW" label
+- **BGW indicator**: Red "BLANK" label for teams not playing
+- **Home/Away**: `(H)` or `(A)` shown next to each opponent
+
+### Use Cases
+- **Plan transfers**: Target teams with green runs
+- **Chip timing**: Identify DGW/BGW weeks at a glance
+- **Captain rotations**: Find easy fixtures for premium captains
+- **Differentials**: Spot under-owned teams with favorable schedules
+
+### API
+```bash
+GET /api/fixture-ticker?horizon=5
+# Returns: {from_gw, to_gw, teams: {team_id: {short_name, fixtures: [...]}}}
+```
+
+---
+
 ## 🌐 Dashboard Features
 
-7 pages, accessible via sidebar (premium tabs hidden for free users):
+8 pages, accessible via sidebar (premium tabs hidden for free users):
 
 | Tab | What it shows | Free | Premium |
 |-----|---------------|------|---------|
 | **📊 Overview** | GW hero card with DGW/BGW alerts, pitch view, stats, chip rec | 🔒 | ✅ |
-| **⚽ Best Squad** | Starting XI + bench with full stats, fixtures, form | 🔒 | ✅ |
-| **🏆 Players** | Top 30, All, DGW, Differentials, Value — 600+ players | 🔒 | ✅ |
+| **⚽ Best Squad** | Starting XI + bench with full stats, fixtures, form, win prob | 🔒 | ✅ |
+| **🏆 Players** | Top 30, All, DGW, Differentials, Value — 800+ players with win prob column | 🔒 | ✅ |
 | **🎯 Chip Strategy** | Season-wide analysis, heatmap, half-season chip tracking | 🔒 | ✅ |
+| **📅 Fixtures** | All 20 teams × 5-15 GW horizon, sort by ease/difficulty | ✅ | ✅ |
 | **👤 My Team** | My Squad + Fixture Ticker (free) / + Transfer Sim + GW Planner (premium) | ✅* | ✅ |
-| **🤖 AI Chat** | 12-intent NLU, what-if scenarios, per-fixture breakdown | 🔒 | ✅ |
-| **🛡️ Admin** | User management, plan upgrades, bulk actions (admin only) | ❌ | ❌/✅ |
+| **🤖 AI Chat** | 12-intent NLU, what-if scenarios, per-fixture breakdown, risk-aware comparisons | 🔒 | ✅ |
+| **🛡️ Admin** | User management, plan upgrades, model optimization (admin only) | ❌ | ❌/✅ |
 
 ### Key UI Features
+- **🌓 Light/Dark theme toggle**: Sidebar switch with localStorage persistence
+- **Glassmorphism design**: Blurred backgrounds, gradient cards, animated transitions
 - **GW Hero header**: Gradient card with large GW number + DGW/BGW/Normal alerts
 - **FPL-style pitch**: Gradient jerseys with team shortnames, captain/DGW/injury badges, opponent/xG/form info
+- **Win Probability badges**: Per-fixture % with color coding (green ≥50%, orange 30-49%, red <30%), DGW shows both
 - **⚡ Optimize XI**: One-click auto-pick best starting 11 + captain + vice-captain
 - **Drag & drop**: Swap players by dragging between positions
 - **Double-click to buy**: Instantly confirm transfers in replacement list
 - **Save & restore**: Transfer plans persist across sessions via localStorage
 - **Live transfer updates**: Pitch reflects changes instantly after confirming transfers
 - **Refresh status**: Shows "Updated Xh Ym ago" with manual refresh button
+- **Loading states**: Best Squad & Players pages show spinner with subtitle on first load
+- **Larger AI Chat**: `calc(100vh - 180px)` minimum 600px, wider bubbles (92%)
 
 ---
 
@@ -431,7 +475,7 @@ Multi-GW transfer planning with rolling state simulation.
 | `/api/simulate-transfer` | POST | `{squad_ids, out_id, in_id, gw}` → impact analysis |
 | `/api/gw-planner?id=12345&horizon=5` | GET | Multi-GW transfer plan |
 | `/api/season-chips` | GET | Season-wide chip analysis (all remaining GWs) |
-| `/api/fixture-ticker` | GET | All 20 teams' fixtures |
+| `/api/fixture-ticker?horizon=5` | GET | All 20 teams' fixtures (horizon 3-15 GWs, free for all) |
 | `/api/fixture-rankings?gws=5` | GET | Teams ranked by FDR |
 | `/api/chip-analysis` | GET | Current GW chip scoring |
 | `/api/chat` | POST | `{"question": "Who should I captain?"}` |
@@ -503,6 +547,7 @@ All tunable parameters in `config.py`:
 PREDICTION_WEIGHTS = {
     "form": 0.20, "fixture_difficulty": 0.15, "team_form": 0.10,
     "ict_index": 0.10, "season_avg": 0.08, "h2h_factor": 0.08,
+    "win_probability": 0.08,  # Poisson-based win probability factor
     "home_away": 0.07, "minutes_consistency": 0.07, "team_strength": 0.05,
     "set_pieces": 0.05, "ownership_momentum": 0.03, "bonus_tendency": 0.02,
 }

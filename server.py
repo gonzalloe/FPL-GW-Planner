@@ -235,21 +235,42 @@ def api_predictions():
     is_premium = user and user.get("plan") in ("premium", "admin")
 
     if not is_premium:
-        import random
         data["user_plan"] = "free" if user else "guest"
-        random.shuffle(preds)
+        # Keep predictions SORTED (don't shuffle). Lock specific fields only.
+        # Free users see: name, team, position, price, form, fixtures list, ownership
+        # Locked: predicted_points, raw_xpts, confidence, win_probability (inside fixtures), tier
         data["predictions"] = preds
         for p in preds:
-            for k in ["predicted_points","raw_xpts","confidence","team_last5_wr","team_season_wr","team_momentum","team_injury_penalty"]:
+            # Lock premium numeric fields
+            for k in ["predicted_points", "raw_xpts", "confidence",
+                      "team_last5_wr", "team_season_wr", "team_momentum", "team_injury_penalty"]:
                 p[k] = "🔒"
-            for k in ["fixtures","factors","starter_quality"]:
-                p.pop(k, None)
+            # Lock starter tier but keep the key so frontend can render the lock
+            if isinstance(p.get("starter_quality"), dict):
+                p["starter_quality"] = {"tier": "🔒"}
+            # Keep fixtures but lock win_probability within
+            for f in (p.get("fixtures") or []):
+                if isinstance(f, dict):
+                    f["win_probability"] = "🔒"
+                    f["xp_single"] = "🔒"
+                    f["xp_adjusted"] = "🔒"
+            # Drop raw factors (advanced data)
+            p.pop("factors", None)
+        # Squad data — keep structure but lock xPts & confidence, keep fixtures
         sq = data.get("squad", {})
         for p in sq.get("starting_xi", []) + sq.get("bench", []):
             p["predicted_points"] = "🔒"
-            p.pop("confidence", None)
-            p.pop("fixtures", None)
+            p["raw_xpts"] = "🔒" if "raw_xpts" in p else p.get("raw_xpts")
+            p["confidence"] = "🔒"
+            if isinstance(p.get("starter_quality"), dict):
+                p["starter_quality"] = {"tier": "🔒"}
+            for f in (p.get("fixtures") or []):
+                if isinstance(f, dict):
+                    f["win_probability"] = "🔒"
+                    f["xp_single"] = "🔒"
+                    f["xp_adjusted"] = "🔒"
         sq["predicted_total_points"] = "🔒"
+        sq["squad_total_xpts"] = "🔒"
         chip = data.get("chip_analysis", {})
         if chip.get("best_chip"): chip["best_chip"]["score"] = "🔒"
         for rec in chip.get("recommendations", []): rec["score"] = "🔒"
@@ -257,7 +278,6 @@ def api_predictions():
             for p in data.get(key, []):
                 p["predicted_points"] = "🔒"
                 p["raw_xpts"] = "🔒"
-            random.shuffle(data.get(key, []))
     else:
         data["user_plan"] = user.get("plan", "premium")  # 'premium' or 'admin'
 

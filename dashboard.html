@@ -556,6 +556,52 @@ input:focus, select:focus {
   display:inline-block; white-space:nowrap; letter-spacing:.3px;
   transition:var(--transition);
 }
+
+/* Free-user blur + lock overlay on pitch */
+.pitch-blur-wrap { position:relative; }
+.pitch-blur-wrap.blurred .pitch { filter:blur(10px) saturate(0.6); opacity:.85; pointer-events:none; transition:filter .3s ease; }
+.pitch-lock-overlay {
+  position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:14px; z-index:5; pointer-events:auto;
+  background:radial-gradient(ellipse at center, rgba(0,0,0,.35) 0%, rgba(0,0,0,.55) 100%);
+  border-radius:var(--radius);
+}
+.pitch-lock-overlay .lock-icon {
+  font-size:48px;
+  filter:drop-shadow(0 4px 16px rgba(255,213,79,.5));
+  animation:pulse-lock 2.5s ease-in-out infinite;
+}
+@keyframes pulse-lock {
+  0%,100% { transform:scale(1); opacity:.9; }
+  50% { transform:scale(1.08); opacity:1; }
+}
+.pitch-lock-overlay .lock-title {
+  font-size:18px; font-weight:800; color:#fff; letter-spacing:-.3px;
+  text-shadow:0 2px 8px rgba(0,0,0,.6);
+}
+.pitch-lock-overlay .lock-subtitle {
+  font-size:12px; color:rgba(255,255,255,.75); max-width:360px; text-align:center; line-height:1.5;
+  text-shadow:0 1px 4px rgba(0,0,0,.5);
+}
+.pitch-lock-overlay button {
+  padding:10px 26px; border-radius:22px;
+  background:var(--gradient-gold); color:#000; border:none;
+  font-weight:800; font-size:13px; letter-spacing:.3px; cursor:pointer;
+  box-shadow:0 4px 20px rgba(255,213,79,.5);
+  transition:var(--transition-bounce);
+}
+.pitch-lock-overlay button:hover { transform:translateY(-2px) scale(1.04); box-shadow:0 8px 28px rgba(255,213,79,.7); }
+
+/* Locked cell in tables (free users) */
+.lock-cell {
+  display:inline-flex; align-items:center; justify-content:center; gap:4px;
+  font-size:11px; font-weight:700;
+  padding:3px 8px; border-radius:8px;
+  background:linear-gradient(135deg, rgba(255,213,79,.15), rgba(255,213,79,.05));
+  color:var(--gold); border:1px solid rgba(255,213,79,.3);
+  cursor:pointer; transition:var(--transition);
+}
+.lock-cell:hover { background:linear-gradient(135deg, rgba(255,213,79,.25), rgba(255,213,79,.12)); transform:scale(1.05); }
 .winp-high {
   background:linear-gradient(135deg, rgba(0,230,118,.2), rgba(0,230,118,.08));
   color:var(--accent);
@@ -851,7 +897,9 @@ table tr:hover { background:var(--surface2); }
   <div class="stats-row" id="overview-stats"></div>
   <div class="card">
     <div class="card-header"><h3>Optimal Starting XI</h3><span id="formation-badge" style="color:var(--accent);font-size:13px;"></span></div>
-    <div class="pitch" id="pitch-view"><div class="loading">Loading...</div></div>
+    <div class="pitch-blur-wrap" id="pitch-blur-wrap">
+      <div class="pitch" id="pitch-view"><div class="loading">Loading...</div></div>
+    </div>
   </div>
   <div class="card">
     <div class="card-header"><h3>Chip Recommendation</h3></div>
@@ -1429,7 +1477,9 @@ function onAuthSuccess() {
 
   // ── Nav gating by plan ──
   const isPremiumOrAdmin = AUTH_USER.plan === 'premium' || AUTH_USER.plan === 'admin';
-  const premiumOnlyNavs = ['nav-overview', 'nav-squad', 'nav-players', 'nav-chips', 'nav-chat'];
+  // Free users can access: Overview (blurred pitch), Players (locked cols), Fixtures, My Team, AI Chat (3/day)
+  // Premium-only: Best Squad, Chip Strategy
+  const premiumOnlyNavs = ['nav-squad', 'nav-chips'];
   premiumOnlyNavs.forEach(id => {
     const el = document.getElementById(id);
     if (el) {
@@ -1442,15 +1492,8 @@ function onAuthSuccess() {
     }
   });
 
-  // Free users: default to My Team page instead of Overview
+  // Free users: stay on Overview (but with locked xPts + blurred pitch)
   if (!isPremiumOrAdmin) {
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    const myteamNav = document.getElementById('nav-myteam');
-    if (myteamNav) myteamNav.classList.add('active');
-    const myteamPage = document.getElementById('page-myteam');
-    if (myteamPage) myteamPage.classList.add('active');
-
     // Hide premium sub-tabs within My Team
     const simBtn = document.getElementById('mtab-btn-simulator');
     const planBtn = document.getElementById('mtab-btn-planner');
@@ -1588,10 +1631,14 @@ async function analyzeModelPerformance() {
       return;
     }
     
-    // Display metrics
-    document.getElementById('model-mae').textContent = d.averages?.mae || '--';
-    document.getElementById('model-rmse').textContent = d.averages?.rmse || '--';
-    document.getElementById('model-corr').textContent = d.averages?.correlation || '--';
+    // Display metrics (defensive: check multiple possible locations)
+    const avg = d.averages || d.analysis?.averages || {};
+    const mae = avg.mae ?? d.analysis?.individual_results?.[0]?.mae;
+    const rmse = avg.rmse ?? d.analysis?.individual_results?.[0]?.rmse;
+    const corr = avg.correlation ?? d.analysis?.individual_results?.[0]?.correlation;
+    document.getElementById('model-mae').textContent = (mae !== undefined && mae !== null) ? mae : '--';
+    document.getElementById('model-rmse').textContent = (rmse !== undefined && rmse !== null) ? rmse : '--';
+    document.getElementById('model-corr').textContent = (corr !== undefined && corr !== null) ? corr : '--';
     document.getElementById('model-grade').textContent = d.performance_grade || '--';
     
     // Display suggestions
@@ -1822,19 +1869,22 @@ function render() {
   try { renderChipPage(chips, gwInfo); } catch(e) { console.error('renderChipPage:', e); }
   try { renderPlayersPage(ALL_PREDICTIONS, gwInfo); } catch(e) { console.error('renderPlayersPage:', e); }
 
-  // Free user upgrade prompt on locked sections (NEVER shown to admin or premium)
-  // First, always clear any pre-existing lock notice to prevent stale state
-  document.querySelectorAll('.free-lock-notice').forEach(el => el.remove());
+  // Free user experience: blur pitch + overlay lock on Overview
+  // Always clean stale overlay first
+  document.querySelectorAll('.pitch-lock-overlay, .free-lock-notice').forEach(el => el.remove());
+  const wrap = document.getElementById('pitch-blur-wrap');
   const isPaidUser = USER_PLAN === 'premium' || USER_PLAN === 'admin' || AUTH_USER?.plan === 'premium' || AUTH_USER?.plan === 'admin';
-  if (!isPaidUser && (USER_PLAN === 'free' || USER_PLAN === 'guest')) {
-    const lockHtml = `<div class="free-lock-notice" style="text-align:center;padding:24px;background:rgba(0,0,0,.3);border-radius:var(--radius);margin-top:8px;">
-      <div style="font-size:28px;margin-bottom:8px;">🔒</div>
-      <p style="color:var(--text2);font-size:13px;margin-bottom:12px;">xPts predictions are a Premium feature</p>
-      <button onclick="upgradeToPremium()" style="padding:8px 20px;border-radius:16px;background:var(--gold);color:#000;border:none;font-weight:700;font-size:12px;cursor:pointer;">⭐ Upgrade — $2.50/month</button>
-    </div>`;
-    // Add lock notice to pitch view
-    const pitchEl = document.getElementById('pitch-view');
-    if (pitchEl) pitchEl.insertAdjacentHTML('beforeend', lockHtml);
+  if (wrap) wrap.classList.toggle('blurred', !isPaidUser);
+  if (!isPaidUser && (USER_PLAN === 'free' || USER_PLAN === 'guest') && wrap) {
+    const overlay = document.createElement('div');
+    overlay.className = 'pitch-lock-overlay';
+    overlay.innerHTML = `
+      <div class="lock-icon">🔒</div>
+      <div class="lock-title">Unlock the Optimal Starting XI</div>
+      <div class="lock-subtitle">See AI-picked captain, formation, xPts predictions, and win probabilities for every fixture.</div>
+      <button onclick="upgradeToPremium()">⭐ Upgrade to Premium — $2.50/month</button>
+    `;
+    wrap.appendChild(overlay);
   }
 
   } catch(e) { console.error('render() fatal:', e); }
@@ -1970,13 +2020,22 @@ function playerTableHTML(players, captain, vice) {
       statusHtml = '<span class="avail-badge avail-available">\u2713</span>';
     }
 
+    // Helper: render a locked cell (clickable to upgrade) vs a value
+    const isLocked = (v) => v === '🔒' || v === '\uD83D\uDD12';
+    const lockCell = (label) => `<span class="lock-cell" onclick="upgradeToPremium()" title="Upgrade to unlock">🔒</span>`;
+
     // xPts display
-    const rawXpts = p.raw_xpts || p.predicted_points;
-    const isDiscounted = rawXpts > 0 && Math.abs(rawXpts - p.predicted_points) > 0.1;
-    let xptsHtml = `<strong style="color:var(--accent);">${p.predicted_points}</strong>`;
-    if (isDiscounted) {
-      xptsHtml += `<span class="raw-xpts">${rawXpts}</span>`;
-      xptsHtml += `<span class="risk-label">risk-adj</span>`;
+    let xptsHtml;
+    if (isLocked(p.predicted_points)) {
+      xptsHtml = lockCell('xPts');
+    } else {
+      const rawXpts = p.raw_xpts || p.predicted_points;
+      const isDiscounted = rawXpts > 0 && Math.abs(rawXpts - p.predicted_points) > 0.1;
+      xptsHtml = `<strong style="color:var(--accent);">${p.predicted_points}</strong>`;
+      if (isDiscounted) {
+        xptsHtml += `<span class="raw-xpts">${rawXpts}</span>`;
+        xptsHtml += `<span class="risk-label">risk-adj</span>`;
+      }
     }
 
     // Team last 5 form string with colored letters
@@ -1985,21 +2044,42 @@ function playerTableHTML(players, captain, vice) {
     ).join('');
 
     // Win rate badge
-    const wr = p.team_season_wr || 0;
-    const wrPct = Math.round(wr * 100);
-    const wrClass = wr >= 0.5 ? 'wr-high' : wr >= 0.35 ? 'wr-mid' : 'wr-low';
+    const wr = p.team_season_wr;
+    let wrHtml;
+    if (isLocked(wr)) {
+      wrHtml = lockCell('WR');
+    } else {
+      const wrNum = wr || 0;
+      const wrPct = Math.round(wrNum * 100);
+      const wrClass = wrNum >= 0.5 ? 'wr-high' : wrNum >= 0.35 ? 'wr-mid' : 'wr-low';
+      wrHtml = `<span class="wr-badge ${wrClass}">${wrPct}%</span>`;
+    }
 
-    // Win Probability - DGW support
+    // Win Probability - DGW support (lock if fixture win_probability is locked)
     let winProbHtml = '--';
     if (p.fixtures && p.fixtures.length > 0) {
-      const winProbs = p.fixtures.map(f => {
-        const wp = f.win_probability || 0;
-        const wpPct = Math.round(wp * 100);
-        const wpClass = wp >= 0.5 ? 'winp-high' : wp >= 0.3 ? 'winp-mid' : 'winp-low';
-        return `<span class="winp-badge ${wpClass}">${wpPct}%</span>`;
-      });
-      winProbHtml = winProbs.join(' ');
+      const firstWp = p.fixtures[0]?.win_probability;
+      if (isLocked(firstWp)) {
+        winProbHtml = lockCell('WinProb');
+      } else {
+        const winProbs = p.fixtures.map(f => {
+          const wp = f.win_probability || 0;
+          const wpPct = Math.round(wp * 100);
+          const wpClass = wp >= 0.5 ? 'winp-high' : wp >= 0.3 ? 'winp-mid' : 'winp-low';
+          return `<span class="winp-badge ${wpClass}">${wpPct}%</span>`;
+        });
+        winProbHtml = winProbs.join(' ');
+      }
     }
+
+    // Tier
+    const tier = p.starter_quality?.tier;
+    const tierHtml = isLocked(tier)
+      ? lockCell('Tier')
+      : `<span class="tier-badge tier-${tier || 'unknown'}">${tier || '?'}</span>`;
+
+    // Confidence
+    const confHtml = isLocked(p.confidence) ? lockCell('Conf') : confBar(p.confidence);
 
     html += `<tr>
       <td><span class="pos-badge pos-${p.position}">${p.position}</span></td>
@@ -2010,11 +2090,11 @@ function playerTableHTML(players, captain, vice) {
       <td>${winProbHtml}</td>
       <td>${xptsHtml}</td>
       <td>&pound;${p.price}m</td>
-      <td><span class="tier-badge tier-${p.starter_quality?.tier || 'unknown'}">${p.starter_quality?.tier || '?'}</span></td>
+      <td>${tierHtml}</td>
       <td>${p.form || '--'}</td>
       <td><span class="form-str">${formStr || '--'}</span></td>
-      <td><span class="wr-badge ${wrClass}">${wrPct}%</span></td>
-      <td>${confBar(p.confidence)}</td>
+      <td>${wrHtml}</td>
+      <td>${confHtml}</td>
     </tr>`;
   });
   return html + '</tbody>';
