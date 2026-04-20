@@ -668,6 +668,27 @@ def api_admin_delete_user():
     d = request.get_json(silent=True) or {}
     return jsonify(admin_delete_user(user["email"], d.get("email","")))
 
+@app.route("/api/admin/model-analysis", methods=["GET"])
+def api_admin_model_analysis():
+    """Admin: Get model performance analysis and weight suggestions."""
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin": return jsonify({"error": "Admin access required"}), 403
+    from model_optimizer import suggest_weight_adjustments
+    return jsonify(suggest_weight_adjustments())
+
+@app.route("/api/admin/apply-weights", methods=["POST"])
+def api_admin_apply_weights():
+    """Admin: Apply new weight configuration."""
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin": return jsonify({"error": "Admin access required"}), 403
+    from model_optimizer import apply_weight_adjustments
+    d = request.get_json(silent=True) or {}
+    weights = d.get("weights", {})
+    if not weights:
+        return jsonify({"error": "No weights provided"}), 400
+    success = apply_weight_adjustments(weights)
+    return jsonify({"ok": success, "message": "Weights updated" if success else "Failed to update weights"})
+
 @app.route("/api/setup-accounts")
 def api_setup_accounts():
     sk = os.environ.get("SETUP_KEY", "")

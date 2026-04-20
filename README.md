@@ -6,6 +6,7 @@ An intelligent prediction and squad optimization system for Fantasy Premier Leag
 
 ### Highlights
 - 🧠 **12-factor Poisson model** — xG, xA, CS probability, bonus points, negative events
+- 🔬 **Model Optimization** — Analyze prediction accuracy, auto-suggest weight adjustments (Admin feature)
 - 🏥 **Injury-aware** — teammate injury boosts, team penalty, opponent weakness detection
 - 📰 **Real-time news** — Google News RSS pulls Fabrizio Romano, Ben Dinnery, David Ornstein updates
 - ⚡ **Transfer Simulator** — FPL-style pitch, drag-to-swap, double-click-to-buy, Optimize XI button
@@ -13,6 +14,7 @@ An intelligent prediction and squad optimization system for Fantasy Premier Leag
 - 🤖 **AI Chat** — 12 intents, what-if scenarios, per-fixture breakdown
 - 👤 **User accounts** — Free/Premium ($2.50/mo)/Admin tiers with Stripe payments
 - 📊 **All FPL players** — 600+ players including injured/suspended/youngsters
+- 🎨 **Enhanced UI** — Smooth animations, responsive design, modern dark theme
 
 ---
 
@@ -62,6 +64,7 @@ fpl-predictor/
 ├── data_fetcher.py        # FPL API client with local caching + offline fallback
 ├── team_analysis.py       # Team-level stats: win rates, H2H, fixture xG, momentum
 ├── prediction_engine.py   # Poisson-based prediction model (v4) — the brain
+├── model_optimizer.py     # NEW: Analyze accuracy & suggest weight adjustments
 ├── squad_optimizer.py     # Beam search + local search optimizer
 ├── gw_planner.py          # Multi-GW transfer planner with fixture ticker
 ├── chip_planner.py        # Season-wide chip deployment optimizer
@@ -72,14 +75,88 @@ fpl-predictor/
 ├── auth.py                # User authentication + subscription tiers (free/premium/admin)
 ├── main.py                # CLI runner
 ├── server.py              # HTTP server + REST API (port 8888, auto-refresh every 2h)
-├── dashboard.html         # Full interactive web dashboard (single-file SPA, ~140KB)
+├── dashboard.html         # Full interactive web dashboard (single-file SPA, ~160KB)
 ├── requirements.txt       # Python dependencies
 ├── render.yaml            # Render.com deployment config
+├── AUDIT_REPORT.md        # NEW: Code security & quality audit report
 ├── .gitignore             # Excludes cache, output, data, debug files
 ├── cache/                 # API response cache (auto-managed)
 ├── output/                # Generated prediction JSON files
 └── data/                  # User accounts & sessions (auto-created, gitignored)
 ```
+
+---
+
+## 🔬 Model Optimization (Admin Feature)
+
+**NEW**: Analyze prediction accuracy and fine-tune the xPts model based on real match results.
+
+### How It Works
+
+1. Go to **Admin Dashboard** → **Model Optimization** section
+2. Click **"Analyze Performance"** button
+3. System will:
+   - Load recent gameweek predictions (GW33, GW34, etc.)
+   - Compare predicted xPts vs actual points scored
+   - Calculate accuracy metrics: MAE, RMSE, correlation
+   - Detect systematic biases (over/under-prediction)
+   - Suggest weight adjustments based on performance
+
+### Metrics Explained
+
+| Metric | Description | Good Range |
+|--------|-------------|------------|
+| **MAE** (Mean Absolute Error) | Average prediction error | < 3.0 pts |
+| **RMSE** (Root Mean Squared Error) | Penalizes large errors more | < 4.0 pts |
+| **Correlation** | How well predictions rank players | > 0.5 |
+| **Grade** | Overall performance rating | A or B |
+
+### Example Output
+
+```
+GW33 Accuracy Metrics:
+  MAE: 2.8 pts
+  RMSE: 3.6 pts
+  Correlation: 0.62
+  Grade: B (Good)
+
+Recommendations:
+  ✓ Model is slightly over-predicting goals
+  → Reduce bonus_tendency weight by 0.02
+  → Increase form weight by 0.03
+```
+
+### Applying Weight Adjustments
+
+1. Review suggested weights in the comparison table
+2. Click **"Apply Suggested Weights"**
+3. System updates `config.py` with new PREDICTION_WEIGHTS
+4. **Restart server** for changes to take effect:
+   ```bash
+   python server.py
+   ```
+
+### When to Use
+
+- **After each gameweek**: Check if predictions matched reality
+- **When MAE > 3.5**: Model needs recalibration
+- **When correlation < 0.5**: Prediction factors aren't aligned with outcomes
+- **Mid-season**: Adjust for changing meta (DGWs, fixture congestion, etc.)
+
+### Weight Tuning Philosophy
+
+The 12 prediction factors have different impacts:
+
+| Factor | Current Weight | Effect |
+|--------|----------------|--------|
+| **Form** | 0.20 | Most important — recent performance |
+| **Fixture Difficulty** | 0.15 | Opponent strength matters |
+| **Team Form** | 0.10 | Team-level context |
+| **ICT Index** | 0.10 | FPL's own metric |
+| **H2H Factor** | 0.08 | Head-to-head + fixture xG |
+| Others | 0.37 | Season avg, home/away, minutes, etc. |
+
+**Principle**: If the model consistently over/under-predicts, nudge the dominant weights (form, fixture_difficulty) in the opposite direction.
 
 ---
 
@@ -128,6 +205,7 @@ Users must register/login to access the dashboard. Accounts stored in `data/user
 | **Per-fixture Breakdown** | 🔒 | ✅ | ✅ |
 | **What-If Scenarios** | 🔒 | ✅ | ✅ |
 | **User Management** | ❌ | ❌ | ✅ |
+| **Model Optimization** | ❌ | ❌ | ✅ |
 
 ### Payment (Stripe)
 - Premium subscription: **$2.50/month** via Stripe Checkout
@@ -379,6 +457,8 @@ Multi-GW transfer planning with rolling state simulation.
 | `/api/admin/users` | POST | List all users |
 | `/api/admin/set-plan` | POST | `{email, plan, months}` → change user plan |
 | `/api/admin/delete-user` | POST | `{email}` → delete user |
+| `/api/admin/model-analysis` | GET | Get prediction accuracy metrics & weight suggestions |
+| `/api/admin/apply-weights` | POST | `{weights}` → apply new prediction weights |
 
 ---
 
