@@ -476,6 +476,59 @@ def api_fixture_ticker():
         import traceback; traceback.print_exc()
         return jsonify({"error": "Internal server error"}), 500
 
+@app.route("/api/top-transfers")
+def api_top_transfers():
+    """Top 15 transfers in/out this GW from FPL API bootstrap (free for all users)."""
+    try:
+        from data_fetcher import fetch_bootstrap, get_current_gameweek
+        bootstrap = fetch_bootstrap()
+        teams = {t["id"]: t for t in bootstrap.get("teams", [])}
+        pos_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
+        current_gw = get_current_gameweek(bootstrap)
+
+        def build_row(p):
+            return {
+                "id": p["id"],
+                "name": p.get("web_name", "Unknown"),
+                "team": teams.get(p.get("team"), {}).get("short_name", "???"),
+                "team_name": teams.get(p.get("team"), {}).get("name", "Unknown"),
+                "position": pos_map.get(p.get("element_type"), "?"),
+                "price": round(p.get("now_cost", 0) / 10, 1),
+                "price_change": p.get("cost_change_event", 0),  # × 0.1
+                "selected_by_percent": float(p.get("selected_by_percent", 0)),
+                "transfers_in_event": int(p.get("transfers_in_event", 0)),
+                "transfers_out_event": int(p.get("transfers_out_event", 0)),
+                "net_transfers": int(p.get("transfers_in_event", 0)) - int(p.get("transfers_out_event", 0)),
+                "form": float(p.get("form", 0)),
+                "total_points": int(p.get("total_points", 0)),
+                "news": p.get("news", ""),
+                "status": p.get("status", "a"),
+            }
+
+        rows = [build_row(p) for p in bootstrap.get("elements", [])]
+
+        top_in = sorted(rows, key=lambda x: x["transfers_in_event"], reverse=True)[:15]
+        top_out = sorted(rows, key=lambda x: x["transfers_out_event"], reverse=True)[:15]
+        top_net_in = sorted(rows, key=lambda x: x["net_transfers"], reverse=True)[:15]
+        top_net_out = sorted(rows, key=lambda x: x["net_transfers"])[:15]
+        price_risers = sorted([r for r in rows if r["price_change"] > 0],
+                              key=lambda x: x["price_change"], reverse=True)[:10]
+        price_fallers = sorted([r for r in rows if r["price_change"] < 0],
+                               key=lambda x: x["price_change"])[:10]
+
+        return jsonify({
+            "current_gw": current_gw,
+            "top_transfers_in": top_in,
+            "top_transfers_out": top_out,
+            "top_net_in": top_net_in,
+            "top_net_out": top_net_out,
+            "price_risers": price_risers,
+            "price_fallers": price_fallers,
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": "Internal server error"}), 500
+
 @app.route("/api/fixture-rankings")
 def api_fixture_rankings():
     try:

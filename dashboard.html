@@ -435,6 +435,30 @@ input:focus, select:focus {
   box-shadow:0 0 0 3px var(--accent-dim);
   background:var(--accent-dim);
 }
+/* Custom select styling (native <select> dropdown is hard to theme, but we can
+   force a solid theme-colored background + chevron and style <option>s) */
+select {
+  appearance:none; -webkit-appearance:none; -moz-appearance:none;
+  padding-right:32px;
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%238892a8' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 12px center;
+  background-size:12px 8px;
+  cursor:pointer;
+}
+select option {
+  background:var(--surface);
+  color:var(--text);
+  padding:8px;
+}
+/* Firefox handles :checked option background */
+select option:checked, select option:hover {
+  background:linear-gradient(var(--accent-dim), var(--accent-dim));
+  color:var(--accent);
+}
+[data-theme="light"] select {
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a5878' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+}
 
 /* My Team */
 .team-input { display:flex; gap:10px; margin-bottom:20px; }
@@ -866,6 +890,7 @@ table tr:hover { background:var(--surface2); }
   <div class="nav-item" data-page="players" id="nav-players">🏆 Players</div>
   <div class="nav-item" data-page="chips" id="nav-chips">🎯 Chip Strategy</div>
   <div class="nav-item" data-page="fixtures" id="nav-fixtures">📅 Fixtures</div>
+  <div class="nav-item" data-page="transfers" id="nav-transfers">🔄 Top Transfers</div>
   <div class="nav-item" data-page="myteam" id="nav-myteam">👤 My Team & Planner</div>
   <div style="border-top:1px solid var(--border);margin:12px 0;"></div>
   <div class="nav-item" data-page="chat" id="nav-chat" style="color:var(--accent);">🤖 AI Chat</div>
@@ -987,10 +1012,27 @@ table tr:hover { background:var(--surface2); }
       <span><span class="fdr fdr-3">3</span> Neutral</span>
       <span><span class="fdr fdr-4">4</span> Hard</span>
       <span><span class="fdr fdr-5">5</span> Very Hard</span>
-      <span style="color:var(--dgw);font-weight:700;">DGW</span> — Double Gameweek
-      <span style="color:var(--red);font-weight:700;">BGW</span> — Blank Gameweek
     </div>
   </div>
+</div>
+
+<!-- Top Transfers (free for all users) -->
+<div class="page" id="page-transfers">
+  <h2>🔄 Top Transfers <span style="background:var(--gradient-accent);color:#000;font-size:10px;padding:3px 10px;border-radius:12px;font-weight:800;letter-spacing:.5px;">FREE</span> <span id="transfers-gw-badge" style="color:var(--text3);font-size:14px;font-weight:400;"></span></h2>
+  <p style="color:var(--text3);font-size:13px;margin-bottom:16px;">See what the FPL community is doing — most-bought and most-sold players this gameweek, plus price changes.</p>
+
+  <div class="filters" style="margin-bottom:16px;">
+    <button class="filter-btn active" data-ttab="net" onclick="switchTransferTab(this,'net')">🔥 Net Movers</button>
+    <button class="filter-btn" data-ttab="in" onclick="switchTransferTab(this,'in')">📈 Top Transfers In</button>
+    <button class="filter-btn" data-ttab="out" onclick="switchTransferTab(this,'out')">📉 Top Transfers Out</button>
+    <button class="filter-btn" data-ttab="prices" onclick="switchTransferTab(this,'prices')">💰 Price Changes</button>
+  </div>
+
+  <div id="transfers-loading" class="card" style="text-align:center;padding:60px 20px;">
+    <div class="loading-spinner-lg"></div>
+    <h3 style="margin-top:20px;font-size:16px;color:var(--text2);">Loading Transfer Data...</h3>
+  </div>
+  <div id="transfers-content" style="display:none;"></div>
 </div>
 
 <!-- Players (unified) -->
@@ -1746,6 +1788,8 @@ document.querySelectorAll('.nav-item').forEach(el => {
     if (el.dataset.page === 'admin') loadAdminUsers();
     // Auto-load fixtures page on first visit
     if (el.dataset.page === 'fixtures' && !_fixturesData) loadFixturesPage();
+    // Auto-load transfers page on first visit
+    if (el.dataset.page === 'transfers' && !_transfersData) loadTransfersPage();
   });
 });
 
@@ -3317,6 +3361,147 @@ function renderFixturesTable() {
   });
   html += '</tbody>';
   document.getElementById('fixtures-ticker-table').innerHTML = html;
+}
+
+// ── Top Transfers Page (free for all users) ──
+let _transfersData = null;
+let _transfersTab = 'net';
+
+async function loadTransfersPage() {
+  const loadingEl = document.getElementById('transfers-loading');
+  const contentEl = document.getElementById('transfers-content');
+  if (loadingEl) loadingEl.style.display = '';
+  if (contentEl) contentEl.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/top-transfers');
+    const data = await r.json();
+    if (data.error) {
+      if (loadingEl) loadingEl.innerHTML = `<p style="color:var(--red);">Error: ${data.error}</p>`;
+      return;
+    }
+    _transfersData = data;
+    const gwBadge = document.getElementById('transfers-gw-badge');
+    if (gwBadge) gwBadge.textContent = '— GW' + data.current_gw;
+    renderTransfersTab();
+    if (loadingEl) loadingEl.style.display = 'none';
+    if (contentEl) contentEl.style.display = 'block';
+  } catch(e) {
+    if (loadingEl) loadingEl.innerHTML = `<p style="color:var(--red);">Failed to load: ${e.message}</p>`;
+  }
+}
+
+function switchTransferTab(btn, tab) {
+  document.querySelectorAll('#page-transfers [data-ttab]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _transfersTab = tab;
+  if (_transfersData) renderTransfersTab();
+}
+
+function fmtNumber(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+  return String(n);
+}
+
+function renderTransferRow(p, idx, mode) {
+  const posColor = {GKP: 'var(--gkp)', DEF: 'var(--def)', MID: 'var(--mid)', FWD: 'var(--fwd)'}[p.position] || 'var(--text3)';
+  const statusIcon = p.status === 'd' ? '⚠️' : p.status === 'i' || p.status === 's' ? '❌' : '';
+  let mainVal = '', mainColor = 'var(--text)';
+  if (mode === 'in') { mainVal = '+' + fmtNumber(p.transfers_in_event); mainColor = 'var(--accent)'; }
+  else if (mode === 'out') { mainVal = '−' + fmtNumber(p.transfers_out_event); mainColor = 'var(--red)'; }
+  else if (mode === 'net_in') { mainVal = (p.net_transfers >= 0 ? '+' : '') + fmtNumber(Math.abs(p.net_transfers)); mainColor = p.net_transfers >= 0 ? 'var(--accent)' : 'var(--red)'; if (p.net_transfers < 0) mainVal = '−' + mainVal.replace('−',''); }
+  else if (mode === 'net_out') { mainVal = '−' + fmtNumber(Math.abs(p.net_transfers)); mainColor = 'var(--red)'; }
+  const priceChangeHtml = p.price_change !== 0
+    ? `<span style="color:${p.price_change > 0 ? 'var(--accent)' : 'var(--red)'};font-weight:700;">${p.price_change > 0 ? '↑' : '↓'}£${Math.abs(p.price_change * 0.1).toFixed(1)}m</span>`
+    : '<span style="color:var(--text3);">—</span>';
+  return `<tr>
+    <td style="text-align:center;color:var(--text3);font-weight:700;">${idx}</td>
+    <td><span class="pos-badge pos-${p.position}">${p.position}</span></td>
+    <td><strong>${p.name}</strong> ${statusIcon}</td>
+    <td>${p.team}</td>
+    <td>£${p.price}m ${priceChangeHtml}</td>
+    <td>${p.selected_by_percent}%</td>
+    <td style="text-align:right;color:${mainColor};font-weight:800;font-size:15px;">${mainVal}</td>
+    <td style="text-align:right;color:var(--accent);">+${fmtNumber(p.transfers_in_event)}</td>
+    <td style="text-align:right;color:var(--red);">−${fmtNumber(p.transfers_out_event)}</td>
+  </tr>`;
+}
+
+function renderTransfersTab() {
+  if (!_transfersData) return;
+  const content = document.getElementById('transfers-content');
+  if (!content) return;
+
+  if (_transfersTab === 'prices') {
+    const risers = _transfersData.price_risers || [];
+    const fallers = _transfersData.price_fallers || [];
+
+    const priceRow = (p, i, dir) => {
+      const color = dir === 'up' ? 'var(--accent)' : 'var(--red)';
+      const arrow = dir === 'up' ? '↑' : '↓';
+      const change = Math.abs(p.price_change * 0.1).toFixed(1);
+      return `<tr>
+        <td style="text-align:center;color:var(--text3);">${i}</td>
+        <td><span class="pos-badge pos-${p.position}">${p.position}</span></td>
+        <td><strong>${p.name}</strong></td>
+        <td>${p.team}</td>
+        <td>£${p.price}m</td>
+        <td style="text-align:right;color:${color};font-weight:800;">${arrow} £${change}m</td>
+        <td style="text-align:right;color:var(--accent);">+${fmtNumber(p.transfers_in_event)}</td>
+        <td style="text-align:right;color:var(--red);">−${fmtNumber(p.transfers_out_event)}</td>
+      </tr>`;
+    };
+
+    const header = `<thead><tr><th>#</th><th>Pos</th><th>Player</th><th>Team</th><th>Price</th><th style="text-align:right;">Change</th><th style="text-align:right;">In</th><th style="text-align:right;">Out</th></tr></thead>`;
+
+    content.innerHTML = `
+      <div class="card">
+        <h3 style="margin-bottom:12px;color:var(--accent);">📈 Price Risers (${risers.length})</h3>
+        ${risers.length ? `<div class="tbl-wrap"><table>${header}<tbody>${risers.map((p,i) => priceRow(p, i+1, 'up')).join('')}</tbody></table></div>` : '<p style="color:var(--text3);font-size:13px;padding:12px 0;">No price rises this GW yet.</p>'}
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:12px;color:var(--red);">📉 Price Fallers (${fallers.length})</h3>
+        ${fallers.length ? `<div class="tbl-wrap"><table>${header}<tbody>${fallers.map((p,i) => priceRow(p, i+1, 'down')).join('')}</tbody></table></div>` : '<p style="color:var(--text3);font-size:13px;padding:12px 0;">No price falls this GW yet.</p>'}
+      </div>
+    `;
+    return;
+  }
+
+  let rows = [];
+  let mode = '';
+  let title = '';
+  let mainColTitle = '';
+  if (_transfersTab === 'net') {
+    const topIn = _transfersData.top_net_in || [];
+    const topOut = _transfersData.top_net_out || [];
+    const header = (mcol) => `<thead><tr><th>#</th><th>Pos</th><th>Player</th><th>Team</th><th>Price</th><th>Owned</th><th style="text-align:right;">${mcol}</th><th style="text-align:right;">In</th><th style="text-align:right;">Out</th></tr></thead>`;
+    content.innerHTML = `
+      <div class="card">
+        <h3 style="margin-bottom:12px;color:var(--accent);">🔥 Top Net-Transfers In</h3>
+        <div class="tbl-wrap"><table>${header('Net In')}<tbody>${topIn.map((p,i) => renderTransferRow(p, i+1, 'net_in')).join('')}</tbody></table></div>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:12px;color:var(--red);">🧊 Top Net-Transfers Out</h3>
+        <div class="tbl-wrap"><table>${header('Net Out')}<tbody>${topOut.map((p,i) => renderTransferRow(p, i+1, 'net_out')).join('')}</tbody></table></div>
+      </div>
+    `;
+    return;
+  } else if (_transfersTab === 'in') {
+    rows = _transfersData.top_transfers_in || [];
+    mode = 'in'; title = '📈 Top Transfers In — Most Bought'; mainColTitle = 'Transfers In';
+  } else if (_transfersTab === 'out') {
+    rows = _transfersData.top_transfers_out || [];
+    mode = 'out'; title = '📉 Top Transfers Out — Most Sold'; mainColTitle = 'Transfers Out';
+  }
+
+  const header = `<thead><tr><th>#</th><th>Pos</th><th>Player</th><th>Team</th><th>Price</th><th>Owned</th><th style="text-align:right;">${mainColTitle}</th><th style="text-align:right;">In</th><th style="text-align:right;">Out</th></tr></thead>`;
+  content.innerHTML = `
+    <div class="card">
+      <h3 style="margin-bottom:12px;">${title}</h3>
+      <div class="tbl-wrap"><table>${header}<tbody>${rows.map((p,i) => renderTransferRow(p, i+1, mode)).join('')}</tbody></table></div>
+    </div>
+  `;
 }
 
 // Refresh functions
