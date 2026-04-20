@@ -3,6 +3,8 @@ Model Optimizer - Analyze prediction accuracy and suggest weight refinements
 """
 import json
 import math
+import os
+import re
 from typing import Dict, List, Tuple
 from data_fetcher import fetch_bootstrap, get_current_gameweek
 from config import PREDICTION_WEIGHTS
@@ -18,11 +20,41 @@ def load_predictions(gw: int) -> Dict:
         return None
 
 
+def find_available_prediction_gws() -> List[int]:
+    """Find all GW prediction files available on disk."""
+    if not os.path.isdir('output'):
+        return []
+    gws = []
+    for fname in os.listdir('output'):
+        m = re.match(r'gw(\d+)_predictions\.json$', fname)
+        if m:
+            gws.append(int(m.group(1)))
+    return sorted(gws)
+
+
+def find_analyzable_gw() -> int:
+    """Find the most recent GW that has BOTH predictions on disk AND completed results.
+    
+    FPL event_points contains the LAST FINISHED GW's points.
+    If current_gw is ongoing (33), event_points has GW32 data.
+    We need predictions for GW32 to compare.
+    """
+    current_gw = get_current_gameweek()
+    available = find_available_prediction_gws()
+    
+    # Most recent completed GW = current_gw - 1 (if current is ongoing)
+    # Try current_gw - 1 first, then older ones
+    for candidate in range(current_gw - 1, 0, -1):
+        if candidate in available:
+            return candidate
+    return None
+
+
 def calculate_accuracy_metrics(gw: int) -> Dict:
     """Calculate MAE, RMSE, and correlation for a specific GW.
     
-    Note: FPL API's event_points contains the PREVIOUS gameweek's actual points,
-    not the current ongoing GW. So we compare GW predictions with event_points data.
+    Note: FPL API's event_points contains the LAST FINISHED gameweek's points.
+    We compare predictions with event_points and validate via non-zero actuals.
     """
     predictions = load_predictions(gw)
     if not predictions:
@@ -32,11 +64,11 @@ def calculate_accuracy_metrics(gw: int) -> Dict:
     player_map = {p['id']: p for p in bootstrap['elements']}
     current_gw = get_current_gameweek()
     
-    # event_points contains previous GW's actual points
-    # So if current_gw is 33, event_points has GW32 data
-    # We can only analyze GW predictions if they match the event_points GW
-    if gw != current_gw - 1:
-        return {"error": f"Can only analyze GW{current_gw-1} (event_points data available). Requested GW{gw}."}
+    # Warn if this isn't the last-completed GW, but still try to analyze
+    last_completed = current_gw - 1
+    mismatch_warning = None
+    if gw != last_completed:
+        mismatch_warning = f"Analyzing GW{gw} but event_points data is for GW{last_completed}. Results may be stale."
     
     errors = []
     abs_errors = []
@@ -89,7 +121,7 @@ def calculate_accuracy_metrics(gw: int) -> Dict:
     over_predictions = [e for e in errors if e < 0]
     under_predictions = [e for e in errors if e > 0]
     
-    return {
+    result = {
         "gw": gw,
         "total_analyzed": len(errors),
         "mae": round(mae, 2),
@@ -105,6 +137,9 @@ def calculate_accuracy_metrics(gw: int) -> Dict:
             "avg": round(sum(under_predictions) / len(under_predictions), 2) if under_predictions else 0
         }
     }
+    if mismatch_warning:
+        result["warning"] = mismatch_warning
+    return result
 
 
 def analyze_position_accuracy(gw: int) -> Dict:
@@ -115,10 +150,6 @@ def analyze_position_accuracy(gw: int) -> Dict:
     
     bootstrap = fetch_bootstrap()
     player_map = {p['id']: p for p in bootstrap['elements']}
-    
-    current_gw = get_current_gameweek()
-    if gw != current_gw - 1:
-        return {"error": f"Can only analyze GW{current_gw-1}"}
     
     position_stats = {1: [], 2: [], 3: [], 4: []}  # GKP, DEF, MID, FWD
     
@@ -153,22 +184,37 @@ def analyze_position_accuracy(gw: int) -> Dict:
 
 
 def analyze_recent_gameweeks(num_gws: int = 3) -> Dict:
-    """Analyze accuracy for the most recent completed gameweek.
+    """Analyze accuracy for the most recent completed gameweek with predictions available.
     
     FPL API behavior:
-    - current_gw returns the NEXT upcoming GW number
-    - event_points contains the PREVIOUS GW's actual points
-    - So we analyze GW(current-1) predictions vs event_points
+    - current_gw returns the currently ongoing GW (or next if none active)
+    - event_points contains the LAST FINISHED GW's actual points
+    - We need predictions for that GW to compare
+    
+    Falls back gracefully if the expected GW's predictions aren't on disk.
     """
     current_gw = get_current_gameweek()
-    gw_to_analyze = current_gw - 1
+    available = find_available_prediction_gws()
     
-    # Check if we have predictions for the GW that matches event_points
-    predictions = load_predictions(gw_to_analyze)
-    if not predictions:
+    if not available:
         return {
-            "error": f"No predictions found for GW{gw_to_analyze}",
-            "suggestion": f"Generate predictions for GW{gw_to_analyze} first to enable model analysis."
+            "error": "No prediction files found on disk",
+            "suggestion": "Run the prediction engine first to generate prediction data.",
+        }
+    
+    # Try to find the best GW to analyze
+    gw_to_analyze = find_analyzable_gw()
+    
+    if gw_to_analyze is None:
+        return {
+            "error": f"No analyzable GW found. Current GW is {current_gw}, "
+                     f"available prediction files: {available}",
+            "suggestion": (
+                f"Generate predictions for GW{current_gw - 1} (the last completed GW) "
+                f"to enable model analysis."
+            ),
+            "available_prediction_gws": available,
+            "current_gw": current_gw,
         }
     
     metrics = calculate_accuracy_metrics(gw_to_analyze)
@@ -176,7 +222,9 @@ def analyze_recent_gameweeks(num_gws: int = 3) -> Dict:
     if "error" in metrics:
         return {
             **metrics,
-            "suggestion": "Model analysis requires prediction data matching the event_points GW."
+            "available_prediction_gws": available,
+            "current_gw": current_gw,
+            "suggestion": "Model analysis requires prediction data that matches actual GW results.",
         }
     
     results = [metrics]
@@ -189,6 +237,8 @@ def analyze_recent_gameweeks(num_gws: int = 3) -> Dict:
             "rmse": round(metrics['rmse'], 2),
             "correlation": round(metrics['correlation'], 3)
         },
+        "current_gw": current_gw,
+        "available_prediction_gws": available,
         "note": f"Analysis based on GW{gw_to_analyze} predictions vs actual event_points data."
     }
 

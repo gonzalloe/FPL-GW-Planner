@@ -170,6 +170,15 @@ class PredictionEngine:
             fix_xp = fix_ev * (1.0 + weighted_mod)
             fix_xp = max(0.0, fix_xp)
 
+            # ── Win Probability adjustment ──
+            # Teams that are more likely to win score more goals, keep more clean sheets,
+            # and earn more bonus points. Apply a modest scaling factor based on win prob.
+            # Baseline is 0.35 (league avg win prob ~35%); scale ±15% around that.
+            win_prob = fix_xg_data.get("win_probability", 0.35)
+            win_prob_multiplier = 1.0 + (win_prob - 0.35) * 0.30  # ±10.5% at extremes
+            win_prob_multiplier = max(0.85, min(win_prob_multiplier, 1.20))
+            fix_xp *= win_prob_multiplier
+
             total_raw += fix_xp
 
             # Availability discount

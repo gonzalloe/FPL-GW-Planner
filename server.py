@@ -79,6 +79,18 @@ def _refresh_data():
                 except: pass
         print(f"  [REFRESH] {datetime.now().strftime('%H:%M:%S')} — Running predictions...")
         _run_predictions()
+        # Also ensure last-completed GW predictions exist (needed by model optimizer)
+        try:
+            from data_fetcher import get_current_gameweek
+            current_gw = get_current_gameweek()
+            last_completed = current_gw - 1
+            if last_completed > 0:
+                last_file = OUTPUT_DIR / f"gw{last_completed}_predictions.json"
+                if not last_file.exists():
+                    print(f"  [REFRESH] Generating GW{last_completed} predictions for model analysis...")
+                    _run_predictions(gw=last_completed)
+        except Exception as e:
+            print(f"  [REFRESH] Could not generate last-completed GW predictions: {e}")
         _last_refresh = time.time()
         print(f"  [REFRESH] {datetime.now().strftime('%H:%M:%S')} — Done.")
     except Exception as e:
@@ -247,7 +259,7 @@ def api_predictions():
                 p["raw_xpts"] = "🔒"
             random.shuffle(data.get(key, []))
     else:
-        data["user_plan"] = "premium"
+        data["user_plan"] = user.get("plan", "premium")  # 'premium' or 'admin'
 
     return jsonify(data)
 
@@ -673,7 +685,20 @@ def api_admin_model_analysis():
     """Admin: Get model performance analysis and weight suggestions."""
     user = _get_auth_user()
     if not user or user.get("plan") != "admin": return jsonify({"error": "Admin access required"}), 403
-    from model_optimizer import suggest_weight_adjustments
+    from model_optimizer import suggest_weight_adjustments, find_available_prediction_gws
+    from data_fetcher import get_current_gameweek
+    
+    # Auto-generate last-completed GW predictions if missing
+    try:
+        current_gw = get_current_gameweek()
+        last_completed = current_gw - 1
+        available = find_available_prediction_gws()
+        if last_completed > 0 and last_completed not in available:
+            print(f"  [ADMIN] Generating missing GW{last_completed} predictions for analysis...")
+            _run_predictions(gw=last_completed)
+    except Exception as e:
+        print(f"  [ADMIN] Could not auto-generate predictions: {e}")
+    
     return jsonify(suggest_weight_adjustments())
 
 @app.route("/api/admin/apply-weights", methods=["POST"])
