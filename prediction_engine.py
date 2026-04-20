@@ -194,6 +194,7 @@ class PredictionEngine:
                 "fixture_xg": fix_xg_data["team_xg"],
                 "fixture_xgc": fix_xg_data["team_xgc"],
                 "cs_probability": fix_xg_data["cs_probability"],
+                "win_probability": fix_xg_data.get("win_probability", 0),
                 "h2h": fix_xg_data["h2h"],
                 "team_form": team_summary["last5_form"],
                 "team_last5_wr": team_summary["last5_win_rate"],

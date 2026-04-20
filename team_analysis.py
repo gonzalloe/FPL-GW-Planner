@@ -120,6 +120,29 @@ def get_h2h(team_a_id: int, team_b_id: int, team_stats: dict) -> dict:
     return h2h
 
 
+def calculate_win_probability(team_xg: float, opp_xg: float) -> float:
+    """
+    Calculate win probability using Poisson distribution.
+    Returns probability of team winning (0.0 - 1.0).
+    """
+    import math
+    
+    # Poisson probability mass function
+    def poisson_pmf(k: int, lam: float) -> float:
+        return (lam ** k) * math.exp(-lam) / math.factorial(k)
+    
+    # Calculate probabilities for score outcomes (0-5 goals each team)
+    win_prob = 0.0
+    for team_goals in range(6):
+        for opp_goals in range(6):
+            if team_goals > opp_goals:
+                prob = poisson_pmf(team_goals, team_xg) * poisson_pmf(opp_goals, opp_xg)
+                win_prob += prob
+    
+    return min(0.95, max(0.05, win_prob))  # Clamp between 5% and 95%
+
+
+
 def get_fixture_xg(team_id: int, opponent_id: int, is_home: bool,
                    team_stats: dict) -> dict:
     """
@@ -182,12 +205,16 @@ def get_fixture_xg(team_id: int, opponent_id: int, is_home: bool,
     cs_prob = math.exp(-opp_xg)
     cs_prob = max(0.02, min(cs_prob, 0.65))
 
+    # Win probability using Poisson distribution
+    win_prob = calculate_win_probability(team_xg, opp_xg)
+    
     return {
         "team_xg": round(team_xg, 2),
         "team_xgc": round(opp_xg, 2),
         "opponent_xg": round(opp_xg, 2),
         "opponent_xgc": round(team_xg, 2),
         "cs_probability": round(cs_prob, 3),
+        "win_probability": round(win_prob, 3),
         "h2h": h2h,
     }
 
