@@ -79,11 +79,12 @@
 
 body {
   font-family:'Inter',-apple-system,'Segoe UI',sans-serif;
-  background:var(--bg); color:var(--text); display:flex; min-height:100vh;
+  background:var(--bg); color:var(--text); display:flex; flex-direction:column; min-height:100vh;
   background-image:var(--body-bg-image);
   background-attachment:fixed;
   transition:background .35s ease, color .35s ease;
 }
+.app-wrapper { display:flex; flex:1; width:100%; align-items:stretch; min-width:0; }
 body, .sidebar, .card, .stat-box, .chip-card, input, select, button, .filter-btn, td, th { transition:background .35s ease, color .35s ease, border-color .35s ease; }
 
 /* Sidebar */
@@ -149,7 +150,7 @@ body, .sidebar, .card, .stat-box, .chip-card, input, select, button, .filter-btn
 }
 
 /* Main */
-.main { flex:1; padding:28px 32px; max-width:1440px; width:100%; display:flex; flex-direction:column; }
+.main { flex:1 1 0; min-width:0; padding:28px 32px; max-width:1440px; width:100%; margin:0 auto; display:flex; flex-direction:column; }
 .page { display:none; animation:pageIn .4s cubic-bezier(.4,0,.2,1); } .page.active { display:block; flex:1; }
 @keyframes pageIn { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
 h2 {
@@ -899,55 +900,112 @@ table tr:hover { background:var(--surface2); }
 /* ── Site Footer ── */
 .site-footer {
   margin-top:auto;
-  padding:40px 32px 24px;
+  width:100%;
+  padding:56px 48px 20px;
   border-top:1px solid var(--border);
-  background:var(--surface);
-  backdrop-filter:blur(12px);
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(0,230,118,.06), transparent 70%),
+    linear-gradient(180deg, var(--surface), var(--bg2) 60%, var(--bg));
+  backdrop-filter:blur(16px);
   color:var(--text3);
-  font-size:12px;
+  font-size:13px;
+  position:relative;
+  overflow:hidden;
+}
+.site-footer::before {
+  content:'';
+  position:absolute; top:0; left:0; right:0; height:1px;
+  background:linear-gradient(90deg, transparent 0%, var(--accent) 30%, var(--accent) 70%, transparent 100%);
+  opacity:.45;
 }
 .footer-inner {
   display:grid;
-  grid-template-columns:1.5fr 1fr 1fr;
-  gap:32px;
-  max-width:1100px;
+  grid-template-columns:2fr 1fr 1fr 1fr;
+  gap:48px;
+  max-width:1400px;
   margin:0 auto;
+  padding-bottom:36px;
 }
-.footer-col { display:flex; flex-direction:column; gap:8px; }
+.footer-col { display:flex; flex-direction:column; gap:10px; min-width:0; }
+.footer-brand { max-width:360px; }
 .footer-brand .footer-logo {
-  font-size:16px; font-weight:800;
+  font-size:20px; font-weight:800; letter-spacing:-.3px;
   background:var(--gradient-accent); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
-  margin-bottom:4px;
+  margin-bottom:6px;
+  display:flex; align-items:center; gap:8px;
 }
-.footer-brand .footer-tagline { color:var(--text2); line-height:1.5; font-size:12px; }
-.footer-brand .footer-version { font-size:10px; color:var(--text3); margin-top:4px; opacity:.7; }
+.footer-brand .footer-tagline {
+  color:var(--text2); line-height:1.6; font-size:13px;
+  margin:0 0 8px;
+}
+.footer-brand .footer-version {
+  display:inline-flex; align-items:center; gap:6px;
+  font-size:10px; font-weight:600; letter-spacing:.5px; text-transform:uppercase;
+  color:var(--text3);
+  padding:4px 10px;
+  border:1px solid var(--border);
+  border-radius:999px;
+  background:rgba(255,255,255,.02);
+  width:fit-content;
+  margin-top:4px;
+}
+.footer-brand .footer-version::before {
+  content:''; width:6px; height:6px; border-radius:50%;
+  background:var(--accent); box-shadow:0 0 8px var(--accent-glow);
+}
 .footer-heading {
-  font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.8px;
-  color:var(--text2); margin-bottom:4px;
+  font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
+  color:var(--text); margin-bottom:8px;
+  position:relative; padding-bottom:8px;
+}
+.footer-heading::after {
+  content:''; position:absolute; left:0; bottom:0;
+  width:24px; height:2px; border-radius:2px;
+  background:var(--gradient-accent);
 }
 .footer-col a {
-  color:var(--text3); text-decoration:none; font-size:12px; padding:2px 0;
-  transition:color .2s;
+  color:var(--text3); text-decoration:none; font-size:13px; padding:3px 0;
+  transition:color .2s ease, transform .2s ease;
+  width:fit-content;
 }
-.footer-col a:hover { color:var(--accent); }
+.footer-col a:hover {
+  color:var(--accent);
+  transform:translateX(3px);
+}
 .footer-bottom {
-  max-width:1100px; margin:24px auto 0; padding-top:16px;
+  max-width:1400px; margin:0 auto; padding-top:20px;
   border-top:1px solid var(--border);
-  text-align:center; font-size:10px; color:var(--text3); opacity:.7;
+  display:flex; align-items:center; justify-content:space-between;
+  flex-wrap:wrap; gap:12px;
+  font-size:11px; color:var(--text3); opacity:.85;
   line-height:1.6;
 }
-.footer-sep { margin:0 6px; }
+.footer-bottom .footer-bottom-left,
+.footer-bottom .footer-bottom-right {
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+}
+.footer-sep { color:var(--border-light); }
+@media (max-width:1024px) {
+  .footer-inner { grid-template-columns:1.5fr 1fr 1fr; gap:32px; }
+  .footer-col.footer-col-extra { display:none; }
+}
 @media (max-width:768px) {
-  .footer-inner { grid-template-columns:1fr; gap:24px; text-align:center; }
+  .site-footer { padding:40px 20px 16px; }
+  .footer-inner { grid-template-columns:1fr; gap:28px; text-align:center; padding-bottom:28px; }
   .footer-col { align-items:center; }
-  .footer-bottom { font-size:9px; }
-  .footer-sep { display:none; }
-  .footer-bottom span { display:block; }
+  .footer-brand { max-width:none; }
+  .footer-brand .footer-logo { justify-content:center; }
+  .footer-heading::after { left:50%; transform:translateX(-50%); }
+  .footer-col a:hover { transform:none; }
+  .footer-bottom { justify-content:center; text-align:center; font-size:10px; }
+  .footer-bottom .footer-bottom-left,
+  .footer-bottom .footer-bottom-right { justify-content:center; }
 }
 </style>
 </head>
 <body>
 
+<div class="app-wrapper">
 <!-- Sidebar -->
 <nav class="sidebar">
   <div class="sidebar-logo">
@@ -1381,13 +1439,16 @@ table tr:hover { background:var(--surface2); }
   </div>
 </div>
 
-<!-- Site Footer -->
+</div><!-- /main -->
+</div><!-- /app-wrapper -->
+
+<!-- Site Footer (full bleed, spans whole width) -->
 <footer class="site-footer">
   <div class="footer-inner">
     <div class="footer-col footer-brand">
       <div class="footer-logo">⚽ FPL Predictor</div>
-      <p class="footer-tagline">AI-powered Fantasy Premier League predictions, transfer planning & chip strategy.</p>
-      <div class="footer-version">v9 · Powered by Poisson Model</div>
+      <p class="footer-tagline">AI-powered Fantasy Premier League predictions, transfer planning &amp; chip strategy. Built for managers who love data.</p>
+      <div class="footer-version">v9 · Poisson Model</div>
     </div>
     <div class="footer-col">
       <h4 class="footer-heading">Features</h4>
@@ -1398,17 +1459,31 @@ table tr:hover { background:var(--surface2); }
       <a href="#" onclick="document.querySelector('[data-page=myteam]')?.click();return false;">My Team</a>
       <a href="#" onclick="document.querySelector('[data-page=chat]')?.click();return false;">AI Chat</a>
     </div>
+    <div class="footer-col footer-col-extra">
+      <h4 class="footer-heading">Resources</h4>
+      <a href="#" onclick="document.querySelector('[data-page=chips]')?.click();return false;">Chip Strategy</a>
+      <a href="#" onclick="document.querySelector('[data-page=planner]')?.click();return false;">GW Planner</a>
+      <a href="#" onclick="document.querySelector('[data-page=team-analysis]')?.click();return false;">Team Analysis</a>
+      <a href="https://fantasy.premierleague.com/" target="_blank" rel="noopener">Official FPL ↗</a>
+    </div>
     <div class="footer-col">
-      <h4 class="footer-heading">Legal & Support</h4>
+      <h4 class="footer-heading">Legal &amp; Support</h4>
       <a href="#" onclick="showFooterModal('privacy');return false;">Privacy Policy</a>
       <a href="#" onclick="showFooterModal('terms');return false;">Terms of Use</a>
       <a href="mailto:admin@fplpredictor.com">Contact Us</a>
     </div>
   </div>
   <div class="footer-bottom">
-    <span>&copy; 2025–2026 FPL Predictor. All rights reserved.</span>
-    <span class="footer-sep">·</span>
-    <span>FPL data &copy; Premier League. Not affiliated with or endorsed by the Premier League.</span>
+    <div class="footer-bottom-left">
+      <span>&copy; 2025–2026 FPL Predictor</span>
+      <span class="footer-sep">·</span>
+      <span>All rights reserved.</span>
+    </div>
+    <div class="footer-bottom-right">
+      <span>FPL data &copy; Premier League</span>
+      <span class="footer-sep">·</span>
+      <span>Not affiliated with or endorsed by the Premier League.</span>
+    </div>
   </div>
 </footer>
 
@@ -1419,8 +1494,6 @@ table tr:hover { background:var(--surface2); }
     <div id="footer-modal-content"></div>
   </div>
 </div>
-
-</div><!-- /main -->
 
 
 
