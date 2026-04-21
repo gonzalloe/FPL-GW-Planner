@@ -1530,7 +1530,10 @@ function onAuthSuccess() {
       : '<span style="background:rgba(255,255,255,.08);color:var(--text2);padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:.5px;">FREE</span>';
     bar.innerHTML = `<div style="margin-bottom:6px;font-weight:600;color:var(--text2);">${AUTH_USER.name} ${planBadge}</div>
       <div style="font-size:10px;color:var(--text3);">${AUTH_USER.email}</div>
-      <a href="#" onclick="authLogout();return false;" style="color:var(--red);font-size:10px;">Logout</a>`;
+      <div style="margin-top:6px;display:flex;gap:8px;align-items:center;">
+        ${AUTH_USER.plan === 'premium' ? '<a href="#" onclick="manageSubscription();return false;" style="color:var(--accent);font-size:10px;">Manage Subscription</a> ·' : ''}
+        <a href="#" onclick="authLogout();return false;" style="color:var(--red);font-size:10px;">Logout</a>
+      </div>`;
     sidebar.appendChild(bar);
   }
   // Show premium banner ONLY for free users (never admin or premium)
@@ -1586,6 +1589,18 @@ async function upgradeToPremium() {
       alert(d.error || 'Failed to start checkout. Please try again.');
     } else {
       alert(d.error || 'Failed to start checkout');
+    }
+  } catch(e) { alert('Connection error'); }
+}
+
+async function manageSubscription() {
+  try {
+    const r = await fetch('/api/stripe/customer-portal', {method: 'POST', headers: authHeaders()});
+    const d = await r.json();
+    if (d.portal_url) {
+      window.location.href = d.portal_url;
+    } else {
+      alert(d.error || 'Unable to open billing portal. Your subscription may be managed by the admin.');
     }
   } catch(e) { alert('Connection error'); }
 }
@@ -1796,6 +1811,24 @@ async function applyWeightSuggestions() {
     if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply Suggested Weights'; }
   }
 }
+
+// ── Handle Stripe redirect URL params ──
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('upgraded')) {
+    // Stripe payment succeeded — show success message after page loads
+    setTimeout(() => {
+      alert('🎉 Welcome to Premium!\n\nYour account has been upgraded. Enjoy full access to xPts predictions, Transfer Simulator, Chip Planner, and unlimited AI Chat.');
+    }, 500);
+    // Clean URL
+    history.replaceState({}, '', '/');
+  } else if (params.has('cancelled')) {
+    setTimeout(() => {
+      alert('Payment cancelled. You can upgrade anytime from the banner below.');
+    }, 500);
+    history.replaceState({}, '', '/');
+  }
+})();
 
 // Check auth on page load
 checkAuth();

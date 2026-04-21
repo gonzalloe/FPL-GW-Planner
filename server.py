@@ -869,12 +869,14 @@ def api_stripe_checkout():
         import stripe
         stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
         if not stripe.api_key:
-            # No Stripe key configured — do NOT auto-upgrade; inform user to contact admin
             return jsonify({
                 "ok": False,
                 "error": "Payment system not configured. Please contact the admin to manually upgrade your account.",
                 "contact_admin": True,
             })
+        # Already premium? Don't create another checkout
+        if user.get("plan") in ("premium", "admin"):
+            return jsonify({"ok": False, "error": "You already have an active subscription."})
         s = stripe.checkout.Session.create(
             payment_method_types=["card"],
             line_items=[{"price_data":{"currency":"usd","product_data":{"name":"FPL Predictor Premium"},
@@ -885,29 +887,115 @@ def api_stripe_checkout():
             client_reference_id=user["email"], customer_email=user["email"],
         )
         return jsonify({"ok": True, "checkout_url": s.url})
-    except ImportError:
-        from auth import upgrade_to_premium
-        return jsonify({"ok": True, "message": "Upgraded (test mode)", "user": upgrade_to_premium(user["email"]).get("user")})
     except Exception as e:
+        print(f"  [STRIPE] Checkout error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/stripe/customer-portal", methods=["POST"])
+def api_stripe_portal():
+    """Redirect premium user to Stripe Customer Portal to manage/cancel subscription."""
+    user = _get_auth_user()
+    if not user: return jsonify({"error": "Not authenticated"}), 401
+    try:
+        import stripe
+        stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+        if not stripe.api_key:
+            return jsonify({"error": "Payment system not configured."}), 400
+        # Need stripe_customer_id to create portal session
+        from auth import _load_users
+        users = _load_users()
+        full_user = users.get(user["email"], {})
+        customer_id = full_user.get("stripe_customer_id")
+        if not customer_id:
+            return jsonify({"error": "No billing account found. If you were upgraded by an admin, billing is managed manually."}), 400
+        session = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=request.headers.get("Origin", "") + "/",
+        )
+        return jsonify({"ok": True, "portal_url": session.url})
+    except Exception as e:
+        print(f"  [STRIPE] Portal error: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/stripe/webhook", methods=["POST"])
+@limiter.exempt
 def api_stripe_webhook():
     try:
         import stripe
         stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
         ws = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
         if not ws: return jsonify({"error": "Not configured"}), 403
-        event = stripe.Webhook.construct_event(request.get_data(), request.headers.get("Stripe-Signature",""), ws)
-        if event.get("type") == "checkout.session.completed":
-            s = event["data"]["object"]
-            email = s.get("client_reference_id") or s.get("customer_email")
+        event = stripe.Webhook.construct_event(
+            request.get_data(), request.headers.get("Stripe-Signature", ""), ws
+        )
+        etype = event.get("type", "")
+        obj = event["data"]["object"]
+        print(f"  [STRIPE] Webhook: {etype}")
+
+        if etype == "checkout.session.completed":
+            # New subscription created — upgrade user
+            email = obj.get("client_reference_id") or obj.get("customer_email")
             if email:
                 from auth import upgrade_to_premium
-                upgrade_to_premium(email, stripe_customer_id=s.get("customer"), stripe_subscription_id=s.get("subscription"))
+                upgrade_to_premium(
+                    email,
+                    stripe_customer_id=obj.get("customer"),
+                    stripe_subscription_id=obj.get("subscription"),
+                )
+                print(f"  [STRIPE] Upgraded: {email}")
+
+        elif etype == "invoice.paid":
+            # Subscription renewed successfully — extend premium
+            customer_email = obj.get("customer_email")
+            if customer_email:
+                from auth import extend_premium
+                extend_premium(customer_email, days=35)  # 35 days buffer for monthly
+                print(f"  [STRIPE] Renewal extended: {customer_email}")
+
+        elif etype == "invoice.payment_failed":
+            # Payment failed — log warning (Stripe retries automatically)
+            customer_email = obj.get("customer_email")
+            attempt = obj.get("attempt_count", 0)
+            print(f"  [STRIPE] Payment failed for {customer_email} (attempt {attempt})")
+            # After 3+ failed attempts, Stripe will cancel the subscription
+            # which triggers customer.subscription.deleted below
+
+        elif etype == "customer.subscription.deleted":
+            # Subscription cancelled or expired — downgrade to free
+            customer_id = obj.get("customer")
+            if customer_id:
+                from auth import downgrade_to_free
+                email = _find_email_by_stripe_customer(customer_id)
+                if email:
+                    downgrade_to_free(email)
+                    print(f"  [STRIPE] Downgraded: {email}")
+
+        elif etype == "customer.subscription.updated":
+            # Subscription status changed (e.g., paused, past_due)
+            customer_id = obj.get("customer")
+            status = obj.get("status")
+            print(f"  [STRIPE] Subscription updated: customer={customer_id} status={status}")
+            if status in ("canceled", "unpaid", "past_due"):
+                from auth import downgrade_to_free
+                email = _find_email_by_stripe_customer(customer_id)
+                if email:
+                    downgrade_to_free(email)
+                    print(f"  [STRIPE] Downgraded due to status={status}: {email}")
+
         return jsonify({"ok": True})
     except Exception as e:
+        print(f"  [STRIPE] Webhook error: {e}")
         return jsonify({"error": str(e)}), 400
+
+
+def _find_email_by_stripe_customer(customer_id: str) -> str:
+    """Look up user email by Stripe customer ID."""
+    from auth import _load_users
+    users = _load_users()
+    for email, u in users.items():
+        if u.get("stripe_customer_id") == customer_id:
+            return email
+    return ""
 
 
 # ── Admin ──

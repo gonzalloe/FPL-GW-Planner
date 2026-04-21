@@ -273,6 +273,56 @@ def upgrade_to_premium(email: str, months: int = 1,
     return {"ok": True, "user": _public_user(user)}
 
 
+def downgrade_to_free(email: str) -> dict:
+    """Downgrade user to free plan (called by Stripe webhooks on cancellation/failure)."""
+    email = email.strip().lower()
+    users = _load_users()
+    user = users.get(email)
+    if not user:
+        return {"error": "User not found"}
+
+    user["plan"] = "free"
+    user["plan_expires"] = None
+    user["stripe_subscription_id"] = None  # Clear subscription (it's cancelled)
+    # Keep stripe_customer_id for potential re-subscription
+
+    users[email] = user
+    _save_users(users)
+    return {"ok": True, "user": _public_user(user)}
+
+
+def extend_premium(email: str, days: int = 35) -> dict:
+    """Extend premium plan expiry (called by Stripe webhooks on successful renewal).
+    Uses 35 days for monthly to provide buffer for payment processing."""
+    email = email.strip().lower()
+    users = _load_users()
+    user = users.get(email)
+    if not user:
+        return {"error": "User not found"}
+
+    now = datetime.now()
+    # If already premium, extend from current expiry (or from now if expired)
+    current_expiry = user.get("plan_expires")
+    if current_expiry:
+        try:
+            base = datetime.fromisoformat(current_expiry)
+            if base > now:
+                new_expiry = base + timedelta(days=days)
+            else:
+                new_expiry = now + timedelta(days=days)
+        except (ValueError, TypeError):
+            new_expiry = now + timedelta(days=days)
+    else:
+        new_expiry = now + timedelta(days=days)
+
+    user["plan"] = "premium"
+    user["plan_expires"] = new_expiry.isoformat()
+
+    users[email] = user
+    _save_users(users)
+    return {"ok": True, "user": _public_user(user)}
+
+
 def _create_session(email: str) -> str:
     """Create a new session token."""
     token = secrets.token_hex(32)

@@ -204,78 +204,79 @@ POST /api/admin/delete-user
 
 ### Overview
 
-The payment flow:
+The complete payment flow (all code is implemented — just add Stripe keys):
+
 1. Free user clicks **"Upgrade to Premium"**
 2. Frontend calls `POST /api/stripe/create-checkout`
 3. Backend creates a Stripe Checkout Session ($2.50/month subscription)
 4. User is redirected to Stripe's hosted payment page
 5. After payment, Stripe sends a webhook to `/api/stripe/webhook`
 6. Backend upgrades user to premium (30-day subscription)
-7. User is redirected back to the app with `?upgraded=1`
+7. User is redirected back with `?upgraded=1` → success toast shown
+8. On renewal: `invoice.paid` webhook extends premium by 35 days
+9. On cancellation: `customer.subscription.deleted` webhook downgrades to free
+10. Premium users see **"Manage Subscription"** link → Stripe Customer Portal
 
-### Current Status
+### Implementation Status
 
-✅ **Implemented:**
-- Stripe Checkout Session creation (subscription mode)
-- Webhook handler for `checkout.session.completed`
-- Webhook signature verification
-- User upgrade on successful payment
-- Stripe customer/subscription ID storage
-- Graceful fallback when Stripe not configured (shows "contact admin" message)
+All code is complete. Just add Stripe keys to activate:
 
-❌ **Not Yet Implemented (TODO):**
-- Subscription cancellation endpoint
-- Stripe Customer Portal (manage billing)
-- Handle `invoice.payment_failed` webhook (auto-downgrade on failed renewal)
-- Handle `customer.subscription.deleted` webhook (subscription cancelled)
-- Success/cancel page handling in frontend (`?upgraded=1`, `?cancelled=1` params)
-- Receipt/invoice email integration
-- Proration for mid-cycle upgrades/downgrades
-- `stripe` package in requirements.txt (needs to be added)
+| Feature | Status | Details |
+|---------|--------|---------|
+| Stripe Checkout Session | ✅ Done | `POST /api/stripe/create-checkout` |
+| Webhook: `checkout.session.completed` | ✅ Done | Upgrades user to premium |
+| Webhook: `invoice.paid` | ✅ Done | Extends premium on renewal |
+| Webhook: `invoice.payment_failed` | ✅ Done | Logs warning, Stripe auto-retries |
+| Webhook: `customer.subscription.deleted` | ✅ Done | Downgrades to free |
+| Webhook: `customer.subscription.updated` | ✅ Done | Handles status changes (past_due, unpaid) |
+| Webhook signature verification | ✅ Done | `STRIPE_WEBHOOK_SECRET` env var |
+| Stripe Customer Portal | ✅ Done | `POST /api/stripe/customer-portal` |
+| Success/cancel redirect handling | ✅ Done | `?upgraded=1` / `?cancelled=1` URL params |
+| "Manage Subscription" button | ✅ Done | Shown for premium users in sidebar |
+| Duplicate checkout prevention | ✅ Done | Already-premium users blocked |
+| `stripe` in requirements.txt | ✅ Done | `stripe>=5.0.0` |
+| Graceful fallback without keys | ✅ Done | Shows "Contact admin" alert |
+| `downgrade_to_free()` in auth.py | ✅ Done | Clears plan + subscription ID |
+| `extend_premium()` in auth.py | ✅ Done | Extends expiry on renewal |
 
-### Step-by-Step Setup
+### Setup Steps (Only Stripe Dashboard Config Needed)
 
 #### Step 1: Create Stripe Account
 
 1. Go to [stripe.com](https://stripe.com) and create an account
 2. Complete business verification (required for live payments)
-3. Note: You can use **Test Mode** while setting up
+3. You can use **Test Mode** while setting up
 
 #### Step 2: Get API Keys
 
-1. In Stripe Dashboard → **Developers** → **API keys**
-2. Copy:
-   - **Publishable key**: `pk_test_xxx` (not needed for this app, but good to save)
-   - **Secret key**: `sk_test_xxx` (for testing) or `sk_live_xxx` (for production)
+1. Stripe Dashboard → **Developers** → **API keys**
+2. Copy the **Secret key**: `sk_test_xxx` (for testing) or `sk_live_xxx` (production)
 
 #### Step 3: Add Secret Key to Render
 
-1. Render Dashboard → Your Service → **Environment**
-2. Add variable:
-   ```
-   STRIPE_SECRET_KEY = sk_test_xxxxxxxxxxxxxxxxxxxx
-   ```
+Render Dashboard → Your Service → **Environment** → Add:
+```
+STRIPE_SECRET_KEY = sk_test_xxxxxxxxxxxxxxxxxxxx
+```
 
 #### Step 4: Set Up Webhook
 
-1. Stripe Dashboard → **Developers** → **Webhooks**
-2. Click **"Add endpoint"**
-3. Configure:
+1. Stripe Dashboard → **Developers** → **Webhooks** → **Add endpoint**
+2. Configure:
 
 | Setting | Value |
 |---------|-------|
 | **Endpoint URL** | `https://fpl-predictor-e0zz.onrender.com/api/stripe/webhook` |
-| **Events to send** | Select these events: |
+| **Events** | Select ALL of the following: |
 
-**Required webhook events:**
-- `checkout.session.completed` — ✅ (already handled)
+**Required webhook events (select all 4):**
+- ✅ `checkout.session.completed`
+- ✅ `invoice.paid`
+- ✅ `invoice.payment_failed`
+- ✅ `customer.subscription.deleted`
+- ✅ `customer.subscription.updated`
 
-**Recommended to add later:**
-- `invoice.payment_failed` — handle failed renewals
-- `customer.subscription.deleted` — handle cancellations
-- `customer.subscription.updated` — handle plan changes
-
-4. After creating the webhook, copy the **Signing secret**: `whsec_xxx`
+3. After creating, copy the **Signing secret**: `whsec_xxx`
 
 #### Step 5: Add Webhook Secret to Render
 
@@ -283,112 +284,62 @@ The payment flow:
 STRIPE_WEBHOOK_SECRET = whsec_xxxxxxxxxxxxxxxxxxxx
 ```
 
-#### Step 6: Add Stripe to Dependencies
+#### Step 6: Enable Customer Portal
 
-Add `stripe` to `requirements.txt`:
-```
-stripe>=7.0.0
-```
+1. Stripe Dashboard → **Settings** → **Billing** → **Customer portal**
+2. Enable the portal and configure:
+   - Allow customers to cancel subscriptions: ✅
+   - Allow customers to update payment methods: ✅
+   - Allow customers to view invoice history: ✅
+3. Save
 
-Then redeploy.
+#### Step 7: Redeploy
 
-#### Step 7: Test the Flow
+Push to GitHub or trigger manual deploy on Render. Done.
 
-1. Use Stripe **Test Mode** keys (`sk_test_xxx`)
-2. Log in as a free user
-3. Click "Upgrade to Premium"
-4. Use Stripe test card: `4242 4242 4242 4242`, any future date, any CVC
-5. After payment, check:
-   - User plan changed to `premium` in admin dashboard
-   - Stripe Dashboard shows the subscription
+#### Step 8: Test the Flow
 
-#### Step 8: Go Live
+1. Ensure you're using **Test Mode** keys (`sk_test_xxx`)
+2. Log in as a free user (e.g., cc2@fplpredictor.com)
+3. Click **"Upgrade to Premium"** or **"Upgrade Now"** in the banner
+4. Use Stripe test card: `4242 4242 4242 4242`, any future expiry, any CVC
+5. Verify:
+   - ✅ Redirected back to app with success message
+   - ✅ User plan changed to `premium` (check admin dashboard)
+   - ✅ Premium features unlocked (xPts, Transfer Sim, etc.)
+   - ✅ "Manage Subscription" link appears in sidebar
+   - ✅ Stripe Dashboard → Payments shows the charge
+   - ✅ Stripe Dashboard → Webhooks shows `checkout.session.completed` delivered
+6. Test "Manage Subscription" link → opens Stripe Customer Portal
+7. Cancel subscription in portal → verify user downgrades to free
 
-1. Switch to **Live Mode** keys in Stripe Dashboard
-2. Update Render env vars:
-   ```
-   STRIPE_SECRET_KEY = sk_live_xxxxxxxxxxxxxxxxxxxx
-   STRIPE_WEBHOOK_SECRET = whsec_xxxxxxxxxxxxxxxxxxxx  (from live webhook)
-   ```
-3. Create a NEW webhook endpoint for production (live mode has separate webhooks)
-4. Redeploy
+#### Step 9: Go Live
 
-### Stripe Configuration Summary
+1. Switch to **Live Mode** in Stripe Dashboard
+2. Get live keys: `sk_live_xxx`
+3. Create a **new webhook endpoint** (live mode has separate webhooks) with the same events
+4. Update Render env vars with live keys
+5. Redeploy
+
+### Quick Reference
 
 | What | Where | Value |
 |------|-------|-------|
 | Secret Key | Render env `STRIPE_SECRET_KEY` | `sk_test_xxx` or `sk_live_xxx` |
 | Webhook Secret | Render env `STRIPE_WEBHOOK_SECRET` | `whsec_xxx` |
 | Webhook URL | Stripe Dashboard | `https://your-app.onrender.com/api/stripe/webhook` |
-| Webhook Events | Stripe Dashboard | `checkout.session.completed` |
-| Price | Hardcoded in server.py | $2.50/month (unit_amount: 250 cents) |
-| Currency | Hardcoded in server.py | USD |
-| Mode | Hardcoded in server.py | Subscription (recurring monthly) |
+| Webhook Events | Stripe Dashboard | 5 events (see Step 4) |
+| Price | server.py (line ~880) | $2.50/month (unit_amount: 250 cents) |
+| Currency | server.py | USD |
+| Mode | server.py | Subscription (recurring monthly) |
 
-### Without Stripe (Current Default Behavior)
+### Without Stripe Keys (Default Behavior)
 
 When `STRIPE_SECRET_KEY` is not set:
-- The "Upgrade" button shows an alert: "Payment system not configured. Contact admin."
-- Admin can manually upgrade users via the Admin dashboard
-- No payment is processed
-
-### Future Payment Improvements
-
-To make the payment system production-ready, these features should be added:
-
-1. **Add `stripe` to requirements.txt**
-   ```
-   stripe>=7.0.0
-   ```
-
-2. **Handle failed payments** — Add webhook handler for `invoice.payment_failed`:
-   ```python
-   # When a subscription renewal fails, downgrade to free after grace period
-   if event["type"] == "invoice.payment_failed":
-       email = event["data"]["object"]["customer_email"]
-       # Send warning email, downgrade after 3 failed attempts
-   ```
-
-3. **Handle cancellations** — Add webhook handler for `customer.subscription.deleted`:
-   ```python
-   # When subscription is cancelled, downgrade to free
-   if event["type"] == "customer.subscription.deleted":
-       email = find_email_by_stripe_customer(customer_id)
-       downgrade_to_free(email)
-   ```
-
-4. **Stripe Customer Portal** — Let users manage their own billing:
-   ```python
-   @app.route("/api/stripe/portal", methods=["POST"])
-   def api_stripe_portal():
-       session = stripe.billing_portal.Session.create(
-           customer=user["stripe_customer_id"],
-           return_url=request.headers.get("Origin", ""),
-       )
-       return jsonify({"url": session.url})
-   ```
-
-5. **Handle success/cancel redirect** — In dashboard.html, detect URL params:
-   ```javascript
-   // After Stripe redirect
-   if (location.search.includes('upgraded=1')) {
-       alert('🎉 Welcome to Premium!');
-       history.replaceState({}, '', '/');
-   }
-   if (location.search.includes('cancelled=1')) {
-       alert('Payment cancelled. You can upgrade anytime.');
-       history.replaceState({}, '', '/');
-   }
-   ```
-
-6. **Subscription status sync** — Periodically verify subscription is still active:
-   ```python
-   # On login/token-check, verify Stripe subscription if user is premium
-   if user["stripe_subscription_id"]:
-       sub = stripe.Subscription.retrieve(user["stripe_subscription_id"])
-       if sub.status != "active":
-           downgrade_to_free(email)
-   ```
+- "Upgrade" button shows: **"Payment system not configured. Contact admin."**
+- Admin can manually upgrade users via the Admin dashboard → Quick Actions
+- No payment is processed, no Stripe calls are made
+- All other features work normally
 
 ---
 
@@ -409,11 +360,13 @@ After deploying, verify:
 ### If Using Stripe:
 - [ ] `STRIPE_SECRET_KEY` set in Render environment
 - [ ] `STRIPE_WEBHOOK_SECRET` set in Render environment
-- [ ] `stripe>=7.0.0` added to requirements.txt
-- [ ] Webhook endpoint created in Stripe Dashboard
+- [ ] Webhook endpoint created in Stripe Dashboard with all 5 events
+- [ ] Customer Portal enabled in Stripe Dashboard → Settings → Billing
 - [ ] Test payment works with card `4242 4242 4242 4242`
 - [ ] User plan upgrades to premium after test payment
-- [ ] Webhook logs show `checkout.session.completed` in Stripe Dashboard
+- [ ] Success message shown after redirect (`?upgraded=1`)
+- [ ] "Manage Subscription" link works for premium users
+- [ ] Webhook logs show events delivered in Stripe Dashboard
 
 ---
 
