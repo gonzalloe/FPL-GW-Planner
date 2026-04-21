@@ -342,6 +342,12 @@ def index():
 
 @app.route("/<path:filename>")
 def serve_static(filename):
+    # Security: block access to sensitive files/directories
+    blocked = ("data/", "cache/", ".git", "__pycache__", ".env", "sessions.json", "users.json")
+    if any(filename.startswith(b) or filename.endswith(b) for b in blocked):
+        return jsonify({"error": "Not found"}), 404
+    if filename.endswith(".py") or filename.endswith(".pyc"):
+        return jsonify({"error": "Not found"}), 404
     return send_from_directory(str(BASE_DIR), filename)
 
 
@@ -483,6 +489,10 @@ def api_refresh_status():
 def api_settings():
     if request.method == "GET":
         return jsonify(_load_settings())
+    # POST requires authentication
+    user = _get_auth_user()
+    if not user:
+        return jsonify({"error": "Not authenticated"}), 401
     data = request.get_json(silent=True) or {}
     settings = _load_settings()
     settings.update(data)

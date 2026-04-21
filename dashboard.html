@@ -149,8 +149,8 @@ body, .sidebar, .card, .stat-box, .chip-card, input, select, button, .filter-btn
 }
 
 /* Main */
-.main { flex:1; padding:28px 32px; max-width:1440px; width:100%; }
-.page { display:none; animation:pageIn .4s cubic-bezier(.4,0,.2,1); } .page.active { display:block; }
+.main { flex:1; padding:28px 32px; max-width:1440px; width:100%; display:flex; flex-direction:column; }
+.page { display:none; animation:pageIn .4s cubic-bezier(.4,0,.2,1); } .page.active { display:block; flex:1; }
 @keyframes pageIn { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
 h2 {
   font-size:24px; margin-bottom:18px; display:flex; align-items:center; gap:12px; font-weight:800;
@@ -471,6 +471,10 @@ select option:checked, select option:hover {
   background:#ffffff;
   color:#14203a;
 }
+[data-theme="light"] .card:hover { box-shadow: 0 8px 32px rgba(0,0,0,.08), 0 0 0 1px rgba(0,179,89,.12); }
+[data-theme="light"] .stat-box:hover { box-shadow: 0 8px 24px rgba(0,179,89,.08); }
+[data-theme="light"] .site-footer { background: #f8fafc; border-top-color: #e2e8f0; }
+[data-theme="light"] .footer-bottom { border-top-color: #e2e8f0; }
 
 /* My Team */
 .team-input { display:flex; gap:10px; margin-bottom:20px; }
@@ -845,11 +849,15 @@ select option:checked, select option:hover {
 @keyframes pulse-glow { 0%,100%{box-shadow:0 0 10px rgba(0,230,118,.2)} 50%{box-shadow:0 0 20px rgba(0,230,118,.4)} }
 
 /* Smooth transitions */
-.card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
-.card:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(0,0,0,.3); }
+.card { transition: transform 0.25s cubic-bezier(.4,0,.2,1), box-shadow 0.25s ease; }
+.card:hover { transform: translateY(-3px); box-shadow: 0 8px 32px rgba(0,0,0,.25), 0 0 0 1px rgba(0,230,118,.08); }
 .btn { cursor: pointer; transition: all 0.2s ease; }
-.btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+.btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(0,0,0,.25); }
 .btn:active { transform: translateY(0); }
+
+/* Enhanced table styling */
+.tbl-wrap table tbody tr { transition: background 0.15s ease; }
+.tbl-wrap table tbody tr:hover { background: rgba(0,230,118,.04); }
 
 /* Button styles */
 .btn-primary { padding:8px 16px; border-radius:8px; background:linear-gradient(135deg,var(--accent),#00bfa5); color:#000; border:none; font-weight:700; font-size:13px; }
@@ -873,8 +881,8 @@ table tr:hover { background:var(--surface2); }
 .toast.info { border-left:4px solid var(--blue); }
 
 /* Improved stat boxes */
-.stat-box { transition: transform 0.2s ease, border-color 0.2s ease; }
-.stat-box:hover { transform: scale(1.05); border-color:var(--accent); }
+.stat-box { transition: transform 0.25s cubic-bezier(.4,0,.2,1), border-color 0.2s ease, box-shadow 0.25s ease; }
+.stat-box:hover { transform: translateY(-4px) scale(1.02); border-color:var(--accent); box-shadow: 0 8px 24px rgba(0,230,118,.12); }
 .stat-box .value { background: linear-gradient(135deg, var(--accent), var(--blue)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
 
 /* Page transitions */
@@ -890,7 +898,7 @@ table tr:hover { background:var(--surface2); }
 
 /* ── Site Footer ── */
 .site-footer {
-  margin-top:48px;
+  margin-top:auto;
   padding:40px 32px 24px;
   border-top:1px solid var(--border);
   background:var(--surface);
@@ -1395,7 +1403,6 @@ table tr:hover { background:var(--surface2); }
       <a href="#" onclick="showFooterModal('privacy');return false;">Privacy Policy</a>
       <a href="#" onclick="showFooterModal('terms');return false;">Terms of Use</a>
       <a href="mailto:admin@fplpredictor.com">Contact Us</a>
-      <a href="https://github.com/gonzalloe/FPL-GW-Planner" target="_blank" rel="noopener">GitHub</a>
     </div>
   </div>
   <div class="footer-bottom">
@@ -1479,6 +1486,12 @@ function updateThemeToggle() {
 // Run on load
 document.addEventListener('DOMContentLoaded', updateThemeToggle);
 window.addEventListener('load', updateThemeToggle);
+
+// ── Security: HTML escaping ──
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+}
 
 // ── Auth System ──
 let AUTH_TOKEN = localStorage.getItem('fpl_auth_token') || '';
@@ -1619,8 +1632,8 @@ function onAuthSuccess() {
       : AUTH_USER.plan === 'premium'
       ? '<span style="background:linear-gradient(135deg,#00e676,#00d4ff);color:#000;padding:3px 9px;border-radius:10px;font-size:9px;font-weight:800;letter-spacing:.5px;box-shadow:0 2px 8px rgba(0,230,118,.35);">PRO</span>'
       : '<span style="background:rgba(255,255,255,.08);color:var(--text2);padding:3px 9px;border-radius:10px;font-size:9px;font-weight:700;letter-spacing:.5px;">FREE</span>';
-    bar.innerHTML = `<div style="margin-bottom:6px;font-weight:600;color:var(--text2);">${AUTH_USER.name} ${planBadge}</div>
-      <div style="font-size:10px;color:var(--text3);">${AUTH_USER.email}</div>
+    bar.innerHTML = `<div style="margin-bottom:6px;font-weight:600;color:var(--text2);">${escapeHtml(AUTH_USER.name)} ${planBadge}</div>
+      <div style="font-size:10px;color:var(--text3);">${escapeHtml(AUTH_USER.email)}</div>
       <div style="margin-top:6px;display:flex;gap:8px;align-items:center;">
         ${AUTH_USER.plan === 'premium' ? '<a href="#" onclick="manageSubscription();return false;" style="color:var(--accent);font-size:10px;">Manage Subscription</a> ·' : ''}
         <a href="#" onclick="authLogout();return false;" style="color:var(--red);font-size:10px;">Logout</a>
@@ -1719,16 +1732,16 @@ async function loadAdminUsers() {
       const expires = u.plan_expires ? new Date(u.plan_expires).toLocaleDateString() : '-';
       const created = u.created_at ? new Date(u.created_at).toLocaleDateString() : '-';
       html += `<tr>
-        <td style="font-size:11px;">${u.email}</td>
-        <td>${u.name || '-'}</td>
-        <td><span style="color:${planColor};font-weight:600;">${u.plan.toUpperCase()}</span></td>
+        <td style="font-size:11px;">${escapeHtml(u.email)}</td>
+        <td>${escapeHtml(u.name) || '-'}</td>
+        <td><span style="color:${planColor};font-weight:600;">${escapeHtml(u.plan).toUpperCase()}</span></td>
         <td style="font-size:11px;">${expires}</td>
         <td>${u.team_id || '-'}</td>
         <td style="font-size:11px;">${created}</td>
         <td>
-          ${u.plan !== 'admin' ? `<button onclick="adminQuickUpgrade('${u.email}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--accent);color:#000;border:none;cursor:pointer;">→PRO</button>
-          <button onclick="adminQuickFree('${u.email}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--surface3);color:var(--text2);border:1px solid var(--border);cursor:pointer;">→Free</button>
-          <button onclick="adminQuickDelete('${u.email}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--red);color:#fff;border:none;cursor:pointer;">Del</button>` : '<span style="font-size:10px;color:var(--gold);">Owner</span>'}
+          ${u.plan !== 'admin' ? `<button onclick="adminQuickUpgrade('${escapeHtml(u.email)}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--accent);color:#000;border:none;cursor:pointer;">→PRO</button>
+          <button onclick="adminQuickFree('${escapeHtml(u.email)}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--surface3);color:var(--text2);border:1px solid var(--border);cursor:pointer;">→Free</button>
+          <button onclick="adminQuickDelete('${escapeHtml(u.email)}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--red);color:#fff;border:none;cursor:pointer;">Del</button>` : '<span style="font-size:10px;color:var(--gold);">Owner</span>'}
         </td>
       </tr>`;
     });
@@ -3897,7 +3910,7 @@ function removeTyping(id){const el=document.getElementById(id);if(el)el.remove()
 
 function renderMarkdown(text){
   if(!text)return'';
-  let h=text;
+  let h=escapeHtml(text);  // Escape first, then apply formatting
   // Tables
   h=h.replace(/^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)*)/gm,function(m,hdr,sep,body){
     const ths=hdr.split('|').filter(c=>c.trim()).map(c=>'<th>'+c.trim()+'</th>').join('');
