@@ -107,6 +107,7 @@ def fetch_my_team(team_id: int) -> dict:
                 eh = picks_data.get("entry_history", {})
             
             result["gw_summary"] = {
+                "event": current_event,
                 "points": eh.get("points", 0),
                 "total_points": eh.get("total_points", 0),
                 "rank": eh.get("rank", 0),

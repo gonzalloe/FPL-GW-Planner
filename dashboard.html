@@ -1206,7 +1206,17 @@ table tr:hover { background:var(--surface2); }
 
   <!-- Team Info + Tabs -->
   <div id="myteam-content">
-    <p style="color:var(--text3);">Enter your FPL Team ID above. Find it at: fantasy.premierleague.com/entry/<strong>YOUR_ID</strong>/event/...</p>
+    <div style="color:var(--text3); line-height:1.7;">
+      <p style="margin-bottom:10px;"><strong style="color:var(--text1);">How to find your FPL Team ID:</strong></p>
+      <ol style="margin:0 0 10px 20px; padding:0;">
+        <li>Log in at <a href="https://fantasy.premierleague.com" target="_blank" style="color:var(--accent);">fantasy.premierleague.com</a></li>
+        <li>Click the <strong>Points</strong> tab in the top menu</li>
+        <li>Look at your browser URL bar — you will see something like:<br>
+          <code style="background:var(--surface3); padding:3px 8px; border-radius:4px; display:inline-block; margin-top:4px; font-size:12px;">fantasy.premierleague.com/entry/<strong style="color:var(--accent);">1234567</strong>/event/34</code></li>
+        <li>The number after <code>/entry/</code> (e.g. <strong style="color:var(--accent);">1234567</strong>) is your <strong>Team ID</strong> — paste it into the box above</li>
+      </ol>
+      <p style="font-size:12px; margin-top:10px;">💡 Tip: Your Team ID never changes — save it for next time!</p>
+    </div>
   </div>
 
   <!-- After team is loaded, these sections appear -->
@@ -2031,6 +2041,32 @@ document.querySelectorAll('.nav-item').forEach(el => {
   });
 });
 
+// ── Prewarm secondary endpoints (fires fetches in background; populates browser HTTP cache) ──
+// This does NOT change what is displayed — just makes subsequent page switches faster.
+let _prewarmed = false;
+function prewarmSecondaryData() {
+  if (_prewarmed) return;
+  _prewarmed = true;
+  const endpoints = [
+    '/api/fixture-ticker',
+    '/api/fixture-rankings?gws=5',
+    '/api/top-transfers',
+  ];
+  // Only prewarm season-chips if user has a team_id configured (else it returns default)
+  if (AUTH_USER) endpoints.push('/api/season-chips');
+  // Defer to idle to avoid competing with initial render
+  const runPrewarm = () => {
+    endpoints.forEach(url => {
+      fetch(url, {headers: authHeaders(), cache: 'default'})
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data) window['_prewarm_' + url] = data; })
+        .catch(() => {});
+    });
+  };
+  if (window.requestIdleCallback) requestIdleCallback(runPrewarm, {timeout: 2000});
+  else setTimeout(runPrewarm, 100);
+}
+
 // ── Load Data (robust) ──
 async function loadData() {
   const mainEl = document.querySelector('.main');
@@ -2045,7 +2081,7 @@ async function loadData() {
 
   // Try cached predictions first
   try {
-    const r = await fetch('/api/predictions?_t=' + Date.now(), {headers: authHeaders()});
+    const r = await fetch('/api/predictions', {headers: authHeaders(), cache: 'default'});
     if (r.ok) {
       DATA = await r.json();
       if (DATA && DATA.predictions) {
@@ -2054,6 +2090,8 @@ async function loadData() {
         const overlay = document.getElementById('loading-overlay');
         if (overlay) overlay.remove();
         render();
+        // Prewarm secondary endpoints in the background so page switches feel instant
+        prewarmSecondaryData();
         return;
       }
     }
