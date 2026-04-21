@@ -887,6 +887,55 @@ table tr:hover { background:var(--surface2); }
   .main { padding:16px; }
   .stats-row { grid-template-columns:repeat(2,1fr); }
 }
+
+/* ── Site Footer ── */
+.site-footer {
+  margin-top:48px;
+  padding:40px 32px 24px;
+  border-top:1px solid var(--border);
+  background:var(--surface);
+  backdrop-filter:blur(12px);
+  color:var(--text3);
+  font-size:12px;
+}
+.footer-inner {
+  display:grid;
+  grid-template-columns:1.5fr 1fr 1fr;
+  gap:32px;
+  max-width:1100px;
+  margin:0 auto;
+}
+.footer-col { display:flex; flex-direction:column; gap:8px; }
+.footer-brand .footer-logo {
+  font-size:16px; font-weight:800;
+  background:var(--gradient-accent); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
+  margin-bottom:4px;
+}
+.footer-brand .footer-tagline { color:var(--text2); line-height:1.5; font-size:12px; }
+.footer-brand .footer-version { font-size:10px; color:var(--text3); margin-top:4px; opacity:.7; }
+.footer-heading {
+  font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.8px;
+  color:var(--text2); margin-bottom:4px;
+}
+.footer-col a {
+  color:var(--text3); text-decoration:none; font-size:12px; padding:2px 0;
+  transition:color .2s;
+}
+.footer-col a:hover { color:var(--accent); }
+.footer-bottom {
+  max-width:1100px; margin:24px auto 0; padding-top:16px;
+  border-top:1px solid var(--border);
+  text-align:center; font-size:10px; color:var(--text3); opacity:.7;
+  line-height:1.6;
+}
+.footer-sep { margin:0 6px; }
+@media (max-width:768px) {
+  .footer-inner { grid-template-columns:1fr; gap:24px; text-align:center; }
+  .footer-col { align-items:center; }
+  .footer-bottom { font-size:9px; }
+  .footer-sep { display:none; }
+  .footer-bottom span { display:block; }
+}
 </style>
 </head>
 <body>
@@ -1324,7 +1373,49 @@ table tr:hover { background:var(--surface2); }
   </div>
 </div>
 
+<!-- Site Footer -->
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div class="footer-col footer-brand">
+      <div class="footer-logo">⚽ FPL Predictor</div>
+      <p class="footer-tagline">AI-powered Fantasy Premier League predictions, transfer planning & chip strategy.</p>
+      <div class="footer-version">v9 · Powered by Poisson Model</div>
+    </div>
+    <div class="footer-col">
+      <h4 class="footer-heading">Features</h4>
+      <a href="#" onclick="document.querySelector('[data-page=overview]')?.click();return false;">Overview</a>
+      <a href="#" onclick="document.querySelector('[data-page=players]')?.click();return false;">Players</a>
+      <a href="#" onclick="document.querySelector('[data-page=fixtures]')?.click();return false;">Fixture Ticker</a>
+      <a href="#" onclick="document.querySelector('[data-page=transfers]')?.click();return false;">Top Transfers</a>
+      <a href="#" onclick="document.querySelector('[data-page=myteam]')?.click();return false;">My Team</a>
+      <a href="#" onclick="document.querySelector('[data-page=chat]')?.click();return false;">AI Chat</a>
+    </div>
+    <div class="footer-col">
+      <h4 class="footer-heading">Legal & Support</h4>
+      <a href="#" onclick="showFooterModal('privacy');return false;">Privacy Policy</a>
+      <a href="#" onclick="showFooterModal('terms');return false;">Terms of Use</a>
+      <a href="mailto:admin@fplpredictor.com">Contact Us</a>
+      <a href="https://github.com/gonzalloe/FPL-GW-Planner" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>&copy; 2025–2026 FPL Predictor. All rights reserved.</span>
+    <span class="footer-sep">·</span>
+    <span>FPL data &copy; Premier League. Not affiliated with or endorsed by the Premier League.</span>
+  </div>
+</footer>
+
+<!-- Footer Modals (Privacy / Terms) -->
+<div id="footer-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);z-index:10000;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;max-width:640px;width:100%;max-height:80vh;overflow-y:auto;padding:32px;box-shadow:var(--shadow-lg);position:relative;">
+    <button onclick="document.getElementById('footer-modal').style.display='none'" style="position:absolute;top:12px;right:16px;background:none;border:none;color:var(--text3);font-size:20px;cursor:pointer;">✕</button>
+    <div id="footer-modal-content"></div>
+  </div>
+</div>
+
 </div><!-- /main -->
+
+
 
 <!-- Auth Modal (Login/Register) -->
 <div id="auth-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);backdrop-filter:blur(8px);z-index:9999;align-items:center;justify-content:center;">
@@ -4122,6 +4213,63 @@ function renderPlannerDetail(gwPlans) {
     html += '</div>';
   });
   document.getElementById('planner-detail').innerHTML = html;
+}
+
+// ── Footer Modals ──
+function showFooterModal(type) {
+  const modal = document.getElementById('footer-modal');
+  const content = document.getElementById('footer-modal-content');
+  if (type === 'privacy') {
+    content.innerHTML = `
+      <h2 style="margin-bottom:16px;">🔒 Privacy Policy</h2>
+      <div style="color:var(--text2);line-height:1.8;font-size:13px;">
+        <p><strong>Last updated:</strong> April 2026</p>
+        <h3 style="margin:16px 0 8px;font-size:15px;">Data We Collect</h3>
+        <ul style="padding-left:20px;">
+          <li><strong>Account info:</strong> Email address, name, and hashed password (PBKDF2-SHA256, 600k iterations)</li>
+          <li><strong>FPL Team ID:</strong> Your public FPL team identifier (optional, entered by you)</li>
+          <li><strong>Usage data:</strong> Chat message count (daily, for free tier limits)</li>
+          <li><strong>Payment data:</strong> Processed securely by <a href="https://stripe.com/privacy" target="_blank" style="color:var(--accent);">Stripe</a> — we store only your Stripe customer ID, not card details</li>
+        </ul>
+        <h3 style="margin:16px 0 8px;font-size:15px;">Data We Don't Collect</h3>
+        <ul style="padding-left:20px;">
+          <li>No tracking cookies or analytics pixels</li>
+          <li>No FPL account credentials (we only use your public Team ID)</li>
+          <li>No credit card numbers (handled entirely by Stripe)</li>
+        </ul>
+        <h3 style="margin:16px 0 8px;font-size:15px;">Data Storage</h3>
+        <p>Account data is stored server-side in encrypted JSON files. On the free deployment tier, data is ephemeral and resets on server restarts. Sessions expire after 30 days.</p>
+        <h3 style="margin:16px 0 8px;font-size:15px;">Third-Party Services</h3>
+        <ul style="padding-left:20px;">
+          <li><strong>FPL API:</strong> Official Fantasy Premier League public API (player stats, fixtures)</li>
+          <li><strong>Stripe:</strong> Payment processing for premium subscriptions</li>
+          <li><strong>Render.com:</strong> Hosting infrastructure</li>
+        </ul>
+        <h3 style="margin:16px 0 8px;font-size:15px;">Your Rights</h3>
+        <p>You can request account deletion at any time by contacting <a href="mailto:admin@fplpredictor.com" style="color:var(--accent);">admin@fplpredictor.com</a> or asking an admin to remove your account from the Admin dashboard.</p>
+      </div>`;
+  } else if (type === 'terms') {
+    content.innerHTML = `
+      <h2 style="margin-bottom:16px;">📋 Terms of Use</h2>
+      <div style="color:var(--text2);line-height:1.8;font-size:13px;">
+        <p><strong>Last updated:</strong> April 2026</p>
+        <h3 style="margin:16px 0 8px;font-size:15px;">1. Service Description</h3>
+        <p>FPL Predictor is an AI-powered tool that provides predicted points (xPts), transfer suggestions, chip strategy, and fixture analysis for Fantasy Premier League. Predictions are generated by a statistical model and should not be considered financial advice or guarantees.</p>
+        <h3 style="margin:16px 0 8px;font-size:15px;">2. Account Tiers</h3>
+        <ul style="padding-left:20px;">
+          <li><strong>Free:</strong> Limited access to fixture ticker, basic AI chat (3/day), team import</li>
+          <li><strong>Premium ($2.50/month):</strong> Full access to all predictions, transfer simulator, chip planner, unlimited AI chat</li>
+          <li><strong>Admin:</strong> All premium features plus user management and model optimization</li>
+        </ul>
+        <h3 style="margin:16px 0 8px;font-size:15px;">3. Payments & Cancellation</h3>
+        <p>Premium subscriptions are billed monthly via Stripe. You can cancel anytime through the "Manage Subscription" link in your account sidebar or by contacting the admin. Cancellation takes effect at the end of the current billing period.</p>
+        <h3 style="margin:16px 0 8px;font-size:15px;">4. Disclaimer</h3>
+        <p>Predictions are statistical estimates. FPL Predictor is not affiliated with, endorsed by, or connected to the Premier League, Fantasy Premier League, or any football club. All FPL data is sourced from publicly available APIs.</p>
+        <h3 style="margin:16px 0 8px;font-size:15px;">5. Contact</h3>
+        <p>For questions or support: <a href="mailto:admin@fplpredictor.com" style="color:var(--accent);">admin@fplpredictor.com</a></p>
+      </div>`;
+  }
+  modal.style.display = 'flex';
 }
 
 // ── Init ──
