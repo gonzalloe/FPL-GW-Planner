@@ -1406,11 +1406,26 @@ def api_admin_apply_weights():
 
     # Weights are already hot-swapped in memory by apply_weight_adjustments.
     # Kick off a threaded prediction regen so the new xPts appear ASAP.
+    # IMPORTANT: also regenerate the last-completed GW predictions, because
+    # the model-optimizer's Grade/MAE/correlation are computed from THAT file
+    # (compared against FPL API event_points). Without this, admins apply
+    # weights, see Grade unchanged, and think persistence is broken.
     try:
         def _regen():
             try:
                 _run_predictions()
-                print("  [ADMIN] Predictions regenerated with new weights")
+                print("  [ADMIN] Next-GW predictions regenerated with new weights")
+                # Also rebuild the last-completed GW so Analyze Performance
+                # reflects the NEW weights on the next click.
+                try:
+                    from data_fetcher import get_current_gameweek
+                    current_gw = get_current_gameweek()
+                    last_completed = current_gw - 1
+                    if last_completed > 0:
+                        _run_predictions(gw=last_completed)
+                        print(f"  [ADMIN] Last-completed GW{last_completed} predictions rebuilt for accuracy analysis")
+                except Exception as e:
+                    print(f"  [ADMIN] Could not rebuild last-completed GW predictions: {e}")
             except Exception as e:
                 print(f"  [ADMIN] Regen failed: {e}")
         threading.Thread(target=_regen, daemon=True).start()
