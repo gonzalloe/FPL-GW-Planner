@@ -6,7 +6,7 @@ import math
 import os
 import re
 from typing import Dict, List, Tuple
-from data_fetcher import fetch_bootstrap, get_current_gameweek
+from data_fetcher import fetch_bootstrap, fetch_gameweek_live, get_current_gameweek
 from config import PREDICTION_WEIGHTS
 
 
@@ -51,77 +51,85 @@ def find_analyzable_gw() -> int:
 
 
 def calculate_accuracy_metrics(gw: int) -> Dict:
-    """Calculate MAE, RMSE, and correlation for a specific GW.
-    
-    Note: FPL API's event_points contains the LAST FINISHED gameweek's points.
-    We compare predictions with event_points and validate via non-zero actuals.
+    """Calculate MAE, RMSE and correlation for a specific GW.
+
+    Pulls the actual per-player points for *that* GW from the FPL live
+    endpoint (/api/event/{gw}/live/), not from bootstrap.event_points
+    which only reflects the single most-recently finished GW. This lets
+    us score historical GWs and do true rolling evaluation.
     """
     predictions = load_predictions(gw)
     if not predictions:
         return {"error": f"No predictions found for GW{gw}"}
-    
-    bootstrap = fetch_bootstrap()
-    player_map = {p['id']: p for p in bootstrap['elements']}
-    current_gw = get_current_gameweek()
-    
-    # Warn if this isn't the last-completed GW, but still try to analyze
-    last_completed = current_gw - 1
-    mismatch_warning = None
-    if gw != last_completed:
-        mismatch_warning = f"Analyzing GW{gw} but event_points data is for GW{last_completed}. Results may be stale."
-    
-    errors = []
-    abs_errors = []
-    squared_errors = []
-    actual_points = []
-    predicted_points = []
-    
-    # Get predictions list (key is 'predictions' not 'players')
+
     pred_list = predictions.get('predictions', [])
     if not pred_list:
         return {"error": f"No predictions data in file for GW{gw}"}
-    
+
+    # 1) Pull the historical actuals for this GW.
+    try:
+        live = fetch_gameweek_live(gw) or {}
+    except Exception as e:
+        return {"error": f"Failed to fetch live data for GW{gw}: {e}"}
+
+    elements = live.get('elements') or []
+    # id -> total_points; minutes used to filter zero-padded entries
+    live_map = {}
+    for el in elements:
+        pid = el.get('id')
+        stats = el.get('stats') or {}
+        if pid is not None:
+            live_map[pid] = {
+                'total_points': stats.get('total_points', 0) or 0,
+                'minutes': stats.get('minutes', 0) or 0,
+            }
+
+    if not live_map:
+        return {"error": f"Live endpoint returned no elements for GW{gw}"}
+
+    errors, abs_errors, squared_errors = [], [], []
+    actual_points, predicted_points = [], []
+
     for pred in pred_list:
-        player_id = pred.get('player_id')  # Key is 'player_id' not 'id'
-        xpts = pred.get('predicted_points', 0)  # 'predicted_points' is the actual key
-        
-        if player_id and player_id in player_map:
-            player_data = player_map[player_id]
-            actual = player_data.get('event_points', 0)
-            
-            # Only count players who played or were predicted to play
-            if actual > 0 or xpts > 2:
-                error = actual - xpts
-                errors.append(error)
-                abs_errors.append(abs(error))
-                squared_errors.append(error ** 2)
-                actual_points.append(actual)
-                predicted_points.append(xpts)
-    
+        player_id = pred.get('player_id')
+        xpts = pred.get('predicted_points', 0) or 0
+        if player_id is None or player_id not in live_map:
+            continue
+        live_row = live_map[player_id]
+        actual = live_row['total_points']
+        played = live_row['minutes'] > 0
+        # Only count players who actually played OR were strongly predicted.
+        # Same policy as before, just sourced from live_map.
+        if not (played or xpts > 2):
+            continue
+        error = actual - xpts
+        errors.append(error)
+        abs_errors.append(abs(error))
+        squared_errors.append(error ** 2)
+        actual_points.append(actual)
+        predicted_points.append(xpts)
+
     if not errors:
-        return {"error": "No matchable data"}
-    
+        return {"error": f"No matchable players for GW{gw}"}
+
+    import math as _math
     mae = sum(abs_errors) / len(abs_errors)
-    rmse = math.sqrt(sum(squared_errors) / len(squared_errors))
-    
-    # Calculate correlation coefficient
+    rmse = _math.sqrt(sum(squared_errors) / len(squared_errors))
+
     n = len(actual_points)
     sum_xy = sum(a * p for a, p in zip(actual_points, predicted_points))
-    sum_x = sum(actual_points)
-    sum_y = sum(predicted_points)
-    sum_x2 = sum(a ** 2 for a in actual_points)
-    sum_y2 = sum(p ** 2 for p in predicted_points)
-    
-    correlation = 0
-    denominator = math.sqrt((n * sum_x2 - sum_x ** 2) * (n * sum_y2 - sum_y ** 2))
-    if denominator != 0:
-        correlation = (n * sum_xy - sum_x * sum_y) / denominator
-    
-    # Analyze error patterns
+    sum_x, sum_y = sum(actual_points), sum(predicted_points)
+    sum_x2 = sum(a * a for a in actual_points)
+    sum_y2 = sum(p * p for p in predicted_points)
+    correlation = 0.0
+    denom = _math.sqrt((n * sum_x2 - sum_x ** 2) * (n * sum_y2 - sum_y ** 2))
+    if denom:
+        correlation = (n * sum_xy - sum_x * sum_y) / denom
+
     over_predictions = [e for e in errors if e < 0]
     under_predictions = [e for e in errors if e > 0]
-    
-    result = {
+
+    return {
         "gw": gw,
         "total_analyzed": len(errors),
         "mae": round(mae, 2),
@@ -137,9 +145,6 @@ def calculate_accuracy_metrics(gw: int) -> Dict:
             "avg": round(sum(under_predictions) / len(under_predictions), 2) if under_predictions else 0
         }
     }
-    if mismatch_warning:
-        result["warning"] = mismatch_warning
-    return result
 
 
 def analyze_position_accuracy(gw: int) -> Dict:
@@ -184,62 +189,93 @@ def analyze_position_accuracy(gw: int) -> Dict:
 
 
 def analyze_recent_gameweeks(num_gws: int = 3) -> Dict:
-    """Analyze accuracy for the most recent completed gameweek with predictions available.
-    
-    FPL API behavior:
-    - current_gw returns the currently ongoing GW (or next if none active)
-    - event_points contains the LAST FINISHED GW's actual points
-    - We need predictions for that GW to compare
-    
-    Falls back gracefully if the expected GW's predictions aren't on disk.
+    """Analyze accuracy for the most recent N completed GWs with predictions.
+
+    Iterates backwards from the last-completed GW, computing per-GW metrics
+    and a linear-decay weighted average (most recent GW has the largest
+    weight). Gracefully handles missing prediction files or GWs where the
+    live endpoint returns nothing.
     """
+    try:
+        num_gws = max(1, int(num_gws))
+    except (TypeError, ValueError):
+        num_gws = 3
+
     current_gw = get_current_gameweek()
     available = find_available_prediction_gws()
-    
+
     if not available:
         return {
             "error": "No prediction files found on disk",
             "suggestion": "Run the prediction engine first to generate prediction data.",
         }
-    
-    # Try to find the best GW to analyze
-    gw_to_analyze = find_analyzable_gw()
-    
-    if gw_to_analyze is None:
+
+    last_completed = max(0, current_gw - 1)
+    # Candidate GWs: last_completed, last_completed-1, ... (only those with a prediction file)
+    candidate_gws = [gw for gw in range(last_completed, max(0, last_completed - num_gws - 2), -1)
+                     if gw in available]
+    # Keep at most num_gws, ordered most-recent-first for weighting logic.
+    candidate_gws = candidate_gws[:num_gws]
+
+    if not candidate_gws:
+        # Original fallback behaviour if nothing lines up cleanly.
+        gw_to_analyze = find_analyzable_gw()
+        if gw_to_analyze is None:
+            return {
+                "error": f"No analyzable GW found. Current GW is {current_gw}, "
+                         f"available prediction files: {available}",
+                "suggestion": (
+                    f"Generate predictions for GW{current_gw - 1} (the last completed GW) "
+                    f"to enable model analysis."
+                ),
+                "available_prediction_gws": available,
+                "current_gw": current_gw,
+            }
+        candidate_gws = [gw_to_analyze]
+
+    results = []
+    for gw in candidate_gws:
+        metrics = calculate_accuracy_metrics(gw)
+        if 'error' in metrics:
+            # Skip individual failures but keep going
+            continue
+        results.append(metrics)
+
+    if not results:
         return {
-            "error": f"No analyzable GW found. Current GW is {current_gw}, "
-                     f"available prediction files: {available}",
-            "suggestion": (
-                f"Generate predictions for GW{current_gw - 1} (the last completed GW) "
-                f"to enable model analysis."
-            ),
+            "error": "All candidate GWs failed to score (live endpoint returned no matchable data).",
+            "gameweeks_attempted": candidate_gws,
             "available_prediction_gws": available,
             "current_gw": current_gw,
+            "suggestion": "Make sure prediction files match historical GWs that have finished.",
         }
-    
-    metrics = calculate_accuracy_metrics(gw_to_analyze)
-    
-    if "error" in metrics:
-        return {
-            **metrics,
-            "available_prediction_gws": available,
-            "current_gw": current_gw,
-            "suggestion": "Model analysis requires prediction data that matches actual GW results.",
-        }
-    
-    results = [metrics]
-    
+
+    # Linear-decay weights: oldest=1 ... newest=len(results)
+    # results is currently newest-first, so reverse for weighting
+    ordered_oldest_first = list(reversed(results))
+    weights = list(range(1, len(ordered_oldest_first) + 1))
+    total_w = sum(weights)
+
+    def _wavg(key):
+        return sum((r.get(key) or 0) * w for r, w in zip(ordered_oldest_first, weights)) / total_w
+
+    averages = {
+        'mae': round(_wavg('mae'), 2),
+        'rmse': round(_wavg('rmse'), 2),
+        'correlation': round(_wavg('correlation'), 3),
+    }
+
     return {
-        "gameweeks_analyzed": [r['gw'] for r in results],
-        "individual_results": results,
-        "averages": {
-            "mae": round(metrics['mae'], 2),
-            "rmse": round(metrics['rmse'], 2),
-            "correlation": round(metrics['correlation'], 3)
-        },
-        "current_gw": current_gw,
-        "available_prediction_gws": available,
-        "note": f"Analysis based on GW{gw_to_analyze} predictions vs actual event_points data."
+        'gameweeks_analyzed': [r['gw'] for r in results],
+        'individual_results': results,
+        'averages': averages,
+        'current_gw': current_gw,
+        'available_prediction_gws': available,
+        'weighting': 'linear_decay (most recent GW weighted highest)',
+        'note': (
+            f"Rolling analysis over {len(results)} GW(s): "
+            f"{[r['gw'] for r in results]}. Averages are linear-decay weighted."
+        ),
     }
 
 
