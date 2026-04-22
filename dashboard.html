@@ -831,7 +831,7 @@ select option:checked, select option:hover {
 .chip-heatmap-table th { padding:6px 4px; text-align:center; background:var(--surface2); font-size:10px; color:var(--text3); position:sticky; top:0; }
 .chip-heatmap-table td { padding:4px; text-align:center; border:1px solid var(--border); min-width:36px; }
 .chip-heatmap-table td.team-label { text-align:left; font-weight:600; padding-left:8px; white-space:nowrap; min-width:40px; background:var(--surface); position:sticky; left:0; }
-.chip-heat-cell { border-radius:3px; padding:2px 4px; font-weight:600; font-size:10px; display:inline-block; min-width:28px; }
+.chip-heat-cell { border-radius:3px; padding:2px 5px; font-weight:700; font-size:11px; display:inline-block; min-width:28px; color:var(--text); }
 
 /* Chip sequence timeline */
 .chip-timeline { display:flex; gap:0; overflow-x:auto; padding:12px 0; }
@@ -3992,8 +3992,12 @@ function renderSeasonChips(data) {
       chips.forEach(chip => {
         html += '<tr><td class="team-label">' + chip + '</td>';
         (analysis[chip].all_scores || []).forEach(s => {
-          const bg = s.score >= 70 ? 'rgba(0,230,118,.3)' : s.score >= 50 ? 'rgba(255,167,38,.25)' : s.score >= 30 ? 'rgba(255,167,38,.1)' : 'transparent';
-          const cl = s.score >= 70 ? 'var(--accent)' : s.score >= 50 ? 'var(--orange)' : s.score >= 20 ? 'var(--text3)' : 'var(--surface3)';
+          // Tiered styling -- ensure LOW scores stay readable (prev used var(--surface3) which was almost invisible).
+          let bg, cl;
+          if (s.score >= 70)      { bg = 'rgba(0,230,118,.28)';  cl = 'var(--accent)'; }
+          else if (s.score >= 50) { bg = 'rgba(255,167,38,.22)'; cl = 'var(--orange)'; }
+          else if (s.score >= 30) { bg = 'rgba(255,167,38,.10)'; cl = 'var(--text2)';  }
+          else                    { bg = 'var(--surface2)';      cl = 'var(--text2)';  }
           html += '<td><span class="chip-heat-cell" style="background:' + bg + ';color:' + cl + ';" title="GW' + s.gameweek + ': ' + s.reason + '">' + s.score + '</span></td>';
         });
         html += '</tr>';
