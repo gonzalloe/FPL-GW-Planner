@@ -221,8 +221,12 @@ def _refresh_data():
         print("  [REFRESH] Already running, skipping.")
         return
     try:
+        # PERF: only wipe the FPL-API cache on *periodic* refreshes. On a cold
+        # start there is nothing to wipe, and deleting the dir we just warmed
+        # up would force re-downloading every FPL endpoint again.
+        is_first_run = (_last_refresh == 0)
         cache_dir = BASE_DIR / "cache"
-        if cache_dir.exists():
+        if cache_dir.exists() and not is_first_run:
             for f in cache_dir.glob("*.json"):
                 try: f.unlink()
                 except: pass
@@ -249,8 +253,25 @@ def _refresh_data():
 
 def _auto_refresh_loop():
     global _last_refresh
-    # Wait before first refresh to let server stabilize
-    time.sleep(90)
+    # PERF: if there are NO predictions on disk (cold Render container), kick
+    # off the first generation IMMEDIATELY so users don't stare at the
+    # "server just started up, 1-2 minutes" card for 90s of idle sleep.
+    # When predictions already exist, give the worker a short breather before
+    # running the periodic refresh (so we don't fight with first-request bursts).
+    try:
+        existing = list(OUTPUT_DIR.glob("gw*_predictions.json")) if OUTPUT_DIR.exists() else []
+    except Exception:
+        existing = []
+    if not existing:
+        try:
+            print("  [AUTO-REFRESH] No predictions on disk - generating immediately (cold start).")
+            _refresh_data()
+        except Exception as e:
+            print(f"  [AUTO-REFRESH] Initial cold-start refresh failed: {e}")
+    else:
+        # Short stabilization delay only when we already have data to serve.
+        time.sleep(20)
+
     while True:
         try:
             if time.time() - _last_refresh >= REFRESH_INTERVAL:

@@ -2384,10 +2384,30 @@ function prewarmSecondaryData() {
 
 // ── Load Data (robust) ──
 async function loadData() {
+  // SWR_SNAPSHOT_v1: stale-while-revalidate. On page refresh, if we have a
+  // snapshot from the last successful load (<= 10 min old), render it instantly
+  // so the user NEVER sees a "server is waking up" screen. We still fetch fresh
+  // data in the background and re-render when it arrives.
+  let _swrHydrated = false;
+  try {
+    const raw = sessionStorage.getItem('fpl_preds_snapshot_v1');
+    if (raw) {
+      const snap = JSON.parse(raw);
+      const ageMs = Date.now() - (snap.__savedAt || 0);
+      if (snap && snap.predictions && ageMs < 10 * 60 * 1000) {
+        DATA = snap;
+        USER_PLAN = snap.user_plan || (AUTH_USER?.plan) || 'free';
+        ALL_PREDICTIONS = snap.predictions || [];
+        _swrHydrated = true;
+        try { render(); } catch(e) { console.warn('SWR render failed:', e); _swrHydrated = false; }
+      }
+    }
+  } catch(e) { /* sessionStorage disabled / JSON error: fall through to normal load */ }
+
   const mainEl = document.querySelector('.main');
-  // Show loading state
+  // Show loading state ONLY when we have nothing to paint yet
   const overviewPage = document.getElementById('page-overview');
-  if (overviewPage) {
+  if (overviewPage && !_swrHydrated) {
     const loadingDiv = document.createElement('div');
     loadingDiv.id = 'loading-overlay';
     // LOADING_STAGES_v2: show real stage text + elapsed counter so waiting feels like progress
@@ -2417,6 +2437,12 @@ async function loadData() {
       if (DATA && DATA.predictions) {
         USER_PLAN = DATA.user_plan || (AUTH_USER?.plan) || 'free';
         ALL_PREDICTIONS = DATA.predictions || [];
+        // SWR_SNAPSHOT_v1: persist for next refresh. Wrapped in try/catch because
+        // very large premium payloads may exceed ~5MB sessionStorage quota.
+        try {
+          const snap = Object.assign({}, DATA, {__savedAt: Date.now()});
+          sessionStorage.setItem('fpl_preds_snapshot_v1', JSON.stringify(snap));
+        } catch(e) { /* quota exceeded / private mode: silently skip */ }
         _clearPhaseTimers();
         if (window.__phaseTimer1) clearTimeout(window.__phaseTimer1);
         if (window.__phaseTimer2) clearTimeout(window.__phaseTimer2);
@@ -2467,10 +2493,14 @@ async function loadData() {
       <div style="margin-top:16px;width:200px;height:4px;background:var(--surface3);border-radius:2px;margin:16px auto 0;overflow:hidden;">
         <div style="width:60%;height:100%;background:var(--accent);border-radius:2px;animation:loading 1.5s ease-in-out infinite;"></div>
       </div>
-      <p style="margin-top:12px;font-size:12px;color:var(--text3);">Auto-retrying every 15 seconds...</p>`;
+      <p style="margin-top:12px;font-size:12px;color:var(--text3);">Auto-retrying in 3s...</p>`;
     mainEl.prepend(errDiv);
-    // Auto-retry every 15 seconds
-    setTimeout(async function retry() {
+    // Exponential-ish backoff: 3s, 5s, 8s, 12s, then 15s forever. Jumps on
+    // the server the instant it finishes the first cold-start prediction run.
+    const _delays = [3000, 5000, 8000, 12000];
+    let _attempt = 0;
+    const _hintEl = errDiv.querySelector('p:last-child');
+    const _retry = async function retry() {
       try {
         const r3 = await fetch('/api/predictions?_t=' + Date.now(), {headers: authHeaders()});
         if (r3.ok) {
@@ -2479,6 +2509,10 @@ async function loadData() {
             DATA = d;
             USER_PLAN = d.user_plan || (AUTH_USER?.plan) || 'free';
             ALL_PREDICTIONS = d.predictions || [];
+            try {
+              const snap = Object.assign({}, d, {__savedAt: Date.now()});
+              sessionStorage.setItem('fpl_preds_snapshot_v1', JSON.stringify(snap));
+            } catch(e) {}
             const waiting = document.getElementById('data-waiting-card');
             if (waiting) waiting.remove();
             render();
@@ -2486,8 +2520,12 @@ async function loadData() {
           }
         }
       } catch(e) {}
-      setTimeout(retry, 15000);
-    }, 15000);
+      const next = _delays[_attempt] || 15000;
+      _attempt++;
+      if (_hintEl) _hintEl.textContent = 'Auto-retrying in ' + Math.round(next/1000) + 's (attempt ' + _attempt + ')...';
+      setTimeout(_retry, next);
+    };
+    setTimeout(_retry, _delays[0]);
   }
 }
 
