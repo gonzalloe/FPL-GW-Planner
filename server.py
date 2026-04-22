@@ -708,7 +708,13 @@ def api_predictions():
     is_premium = user and user.get("plan") in ("premium", "admin")
 
     if not is_premium:
-        import random
+        import random, copy
+        # CRITICAL: deep-copy the cached data/preds before locking fields.
+        # Without this, mutating predicted_points/captain/etc. poisons the
+        # shared process-wide prediction cache, and the next request (even
+        # from an admin/premium user) will receive the locked "🔒" values.
+        data = copy.deepcopy(data)
+        preds = copy.deepcopy(preds)
         data["user_plan"] = "free" if user else "guest"
         # Shuffle predictions for free users so the sort order doesn't reveal xPts ranking.
         # (xPts is locked with 🔒 — leaving them sorted would leak the ranking)

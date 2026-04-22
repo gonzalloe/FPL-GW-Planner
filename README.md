@@ -563,6 +563,32 @@ Personal use. FPL data belongs to the Premier League.
 
 ---
 
+## 🛠️ Recent Fixes
+
+### Admin / Premium gating — cache poisoning (fixed)
+
+**Symptom:** Users on the `admin` (or `premium`) tier were still seeing
+`🔒 Unlock` / `Upgrade to see` placeholders on the Overview, Best Squad,
+Captain pick, Best Chip, xPts columns, etc. — even though the sidebar
+correctly showed their `ADMIN` badge.
+
+**Root cause:** `/api/predictions` locked premium fields on free/guest
+requests by **mutating** the dictionaries returned by
+`_cached_predictions()`. Those dictionaries are the process-wide memo
+cache (keyed by file mtime), so a single free/guest request would rewrite
+`predicted_points`, `squad.captain`, `chip_analysis.best_chip`, etc. to
+`"🔒"` in the shared cache. Every subsequent request — including admin and
+premium — then received the already-locked data until the predictions file
+was regenerated.
+
+**Fix:** In `server.py::api_predictions`, deep-copy `data` and `preds`
+before applying any lock mutations for free/guest users. The shared cache
+is now read-only from the route's perspective, so admin/premium users
+always receive the full, unlocked payload. See `server.py` around the
+`if not is_premium:` branch.
+
+---
+
 ## FPL Rule Reviewer (admin)
 
 The admin dashboard (`/#admin`) includes a **FPL Rule Reviewer** card that
