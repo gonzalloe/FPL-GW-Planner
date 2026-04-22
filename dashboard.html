@@ -1650,7 +1650,8 @@ async function authLogin() {
       onAuthSuccess();
       // Re-fetch predictions with auth token to get unmasked premium data
       try {
-        const pr = await fetch('/api/predictions?_t=' + Date.now(), {headers: authHeaders()});
+        // Skipped: loadData() below already re-fetches predictions with proper auth + browser cache.
+        const pr = {ok: true};
         if (pr.ok) {
           DATA = await pr.json();
           if (DATA && DATA.predictions) {
@@ -2075,8 +2076,23 @@ async function loadData() {
   if (overviewPage) {
     const loadingDiv = document.createElement('div');
     loadingDiv.id = 'loading-overlay';
-    loadingDiv.innerHTML = '<div class="card" style="margin-top:40px;text-align:center;padding:40px;"><div style="font-size:32px;margin-bottom:12px;">⚽</div><h3>Loading FPL Predictions...</h3><p style="color:var(--text3);margin-top:8px;">Fetching data from FPL API</p><div style="margin-top:16px;width:200px;height:4px;background:var(--surface3);border-radius:2px;margin:16px auto 0;overflow:hidden;"><div style="width:30%;height:100%;background:var(--accent);border-radius:2px;animation:loading 1.5s ease-in-out infinite;"></div></div></div>';
+    // LOADING_STAGES_v2: show real stage text + elapsed counter so waiting feels like progress
+    loadingDiv.innerHTML = '<div class="card" style="margin-top:40px;text-align:center;padding:40px;"><div style="font-size:32px;margin-bottom:12px;">⚽</div><h3>Loading FPL Predictions...</h3><p id="loading-stage" style="color:var(--text3);margin-top:8px;">Connecting to server…</p><div style="margin-top:16px;width:200px;height:4px;background:var(--surface3);border-radius:2px;margin:16px auto 0;overflow:hidden;"><div style="width:30%;height:100%;background:var(--accent);border-radius:2px;animation:loading 1.5s ease-in-out infinite;"></div></div><p id="loading-elapsed" style="color:var(--text3);font-size:11px;margin-top:10px;opacity:0.7;"></p></div>';
     overviewPage.prepend(loadingDiv);
+    // Stage ticker: updates text as seconds tick so user sees progress even on cold start
+    const _loadStart = Date.now();
+    const _setStage = (msg) => { const e = document.getElementById('loading-stage'); if (e) e.textContent = msg; };
+    if (window._loadingTicker) clearInterval(window._loadingTicker);
+    window._loadingTicker = setInterval(() => {
+      const sec = Math.floor((Date.now() - _loadStart) / 1000);
+      const el = document.getElementById('loading-elapsed'); if (el) el.textContent = sec + 's elapsed';
+      if (sec === 2)  _setStage('Fetching predictions…');
+      else if (sec === 15) _setStage('Server is waking up (free tier sleeps after inactivity)…');
+      else if (sec === 35) _setStage('Still working — almost there…');
+      else if (sec === 60) _setStage('Taking longer than usual — hang tight…');
+    }, 500);
+    window.__phaseTimer1 = setTimeout(() => { const el = document.getElementById('loading-phase'); if (el) el.textContent = 'Warming up server (first load can take ~30s)...'; }, 3000);
+    window.__phaseTimer2 = setTimeout(() => { const el = document.getElementById('loading-phase'); if (el) el.textContent = 'Downloading predictions...'; }, 10000);
   }
 
   // Try cached predictions first
@@ -2087,6 +2103,10 @@ async function loadData() {
       if (DATA && DATA.predictions) {
         USER_PLAN = DATA.user_plan || (AUTH_USER?.plan) || 'free';
         ALL_PREDICTIONS = DATA.predictions || [];
+        _clearPhaseTimers();
+        if (window.__phaseTimer1) clearTimeout(window.__phaseTimer1);
+        if (window.__phaseTimer2) clearTimeout(window.__phaseTimer2);
+        if (window._loadingTicker) { clearInterval(window._loadingTicker); window._loadingTicker = null; }
         const overlay = document.getElementById('loading-overlay');
         if (overlay) overlay.remove();
         render();
@@ -3899,8 +3919,14 @@ function renderSeasonChips(data) {
     } else if (usedEntry) {
       statusHtml += `<div style="padding:6px 14px;border-radius:var(--radius-sm);background:var(--surface3);border:1px solid var(--border);font-size:12px;opacity:0.6;"><strong style="color:var(--text3);">${chip}</strong> <span style="color:var(--text3);">Used GW${usedEntry.gw}</span></div>`;
     } else {
-      // Available (not in used list for this half)
-      statusHtml += `<div style="padding:6px 14px;border-radius:var(--radius-sm);background:var(--accent-dim);border:1px solid var(--accent);font-size:12px;"><strong style="color:var(--accent);">${chip}</strong> <span style="color:var(--text2);">Available</span></div>`;
+      // CHIP_FALLBACK_FIXED_v2: not in available list AND no half-matched used entry.
+      // Check any-half used records first; only show Available if truly no record exists.
+      const fallbackUsed = userUsed.find(u => u.code === chip);
+      if (fallbackUsed) {
+        statusHtml += `<div style="padding:6px 14px;border-radius:var(--radius-sm);background:var(--surface3);border:1px solid var(--border);font-size:12px;opacity:0.6;"><strong style="color:var(--text3);">${chip}</strong> <span style="color:var(--text3);">Used GW${fallbackUsed.gw}</span></div>`;
+      } else {
+        statusHtml += `<div style="padding:6px 14px;border-radius:var(--radius-sm);background:var(--accent-dim);border:1px solid var(--accent);font-size:12px;"><strong style="color:var(--accent);">${chip}</strong> <span style="color:var(--text2);">Available</span></div>`;
+      }
     }
   });
   statusHtml += '</div>';

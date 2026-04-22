@@ -276,40 +276,87 @@ def _get_auth_user():
     token = auth.replace("Bearer ", "") if auth.startswith("Bearer ") else ""
     return get_user_from_token(token)
 
+# In-memory cache of parsed predictions JSON, keyed by (path, mtime).
+# Avoids re-parsing a 2+ MB file on every API request.
+_PREDICTIONS_MEMO = {"key": None, "preds": [], "data": {}}
+_PREDICTIONS_LOCK = threading.Lock()
+
 def _cached_predictions():
-    """Load cached predictions from disk. Returns (predictions_list, full_data_dict) or ([], {})."""
+    """Load cached predictions. Returns (predictions_list, full_data_dict) or ([], {}).
+    Caches parsed JSON in process memory, invalidated by file mtime."""
     files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
     if not files:
         return [], {}
-    data = json.loads(files[0].read_text(encoding="utf-8"))
-    return data.get("predictions", []), data
+    p = files[0]
+    try: mtime = p.stat().st_mtime
+    except Exception: mtime = 0
+    key = (str(p), mtime)
+    with _PREDICTIONS_LOCK:
+        if _PREDICTIONS_MEMO.get("key") == key:
+            return _PREDICTIONS_MEMO["preds"], _PREDICTIONS_MEMO["data"]
+    data = json.loads(p.read_text(encoding="utf-8"))
+    preds = data.get("predictions", [])
+    with _PREDICTIONS_LOCK:
+        _PREDICTIONS_MEMO["key"] = key
+        _PREDICTIONS_MEMO["preds"] = preds
+        _PREDICTIONS_MEMO["data"] = data
+    return preds, data
 
 
 # ── Middleware ──
+
+# Endpoints safe to cache privately in the browser for a short time.
+_BROWSER_CACHE_API = {
+    "/api/predictions": 60,
+    "/api/fixture-ticker": 120,
+    "/api/fixture-rankings": 120,
+    "/api/top-transfers": 300,
+    "/api/season-chips": 60,
+}
+
+def _maybe_gzip(resp):
+    try:
+        if resp.direct_passthrough: return resp
+        ae = (request.headers.get("Accept-Encoding") or "").lower()
+        if "gzip" not in ae: return resp
+        if resp.status_code < 200 or resp.status_code >= 300: return resp
+        if resp.headers.get("Content-Encoding"): return resp
+        ct = (resp.content_type or "").lower()
+        if not ("json" in ct or "javascript" in ct or "text/" in ct): return resp
+        data = resp.get_data()
+        if len(data) < 1024: return resp
+        import gzip as _gz
+        gz = _gz.compress(data, compresslevel=5)
+        resp.set_data(gz)
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.headers["Content-Length"] = str(len(gz))
+        resp.headers["Vary"] = "Accept-Encoding"
+    except Exception:
+        pass
+    return resp
 
 @app.after_request
 def after_request(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-
-    # Smart caching: API responses = no-cache, static assets = long cache
     path = request.path
     if path.startswith("/api/"):
-        # API responses: never cache in browser (server-side cache handles this)
-        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        resp.headers["Pragma"] = "no-cache"
-        resp.headers["Expires"] = "0"
+        max_age = _BROWSER_CACHE_API.get(path)
+        if max_age and request.method == "GET":
+            resp.headers["Cache-Control"] = f"private, max-age={max_age}, stale-while-revalidate=120"
+            resp.headers.pop("Pragma", None); resp.headers.pop("Expires", None)
+        else:
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
     elif path == "/" or path.endswith(".html"):
-        # HTML: short cache with revalidation (so new deploys propagate fast)
         resp.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
     elif any(path.endswith(ext) for ext in (".css", ".js", ".png", ".jpg", ".ico", ".svg", ".woff2")):
-        # Static assets: long cache (1 day) — bust via query string on deploy
         resp.headers["Cache-Control"] = "public, max-age=86400, immutable"
     else:
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-
-    return resp
+    return _maybe_gzip(resp)
 
 @app.before_request
 def before_request():
@@ -383,11 +430,63 @@ def api_auth_me():
 
 # ── Predictions ──
 
+# --- FILTER_USED_CHIPS_START ---
+# Strip chips the user has already used (in the current half of the season) from
+# chip_analysis. FPL 25/26: 4 chips per half (GW1-19 / GW20-38).
+_HALF_CUTOFF_CHIPS = 20
+_CHIP_NAME_MAP = {"bboost": "BB", "3xc": "TC", "freehit": "FH", "wildcard": "WC"}
+
+def _user_used_chips_in_current_half():
+    """Returns set of chip codes the user has used in the current half, or empty set."""
+    try:
+        settings = _load_settings()
+        team_id = settings.get("team_id")
+        if not team_id: return set()
+        from my_team import fetch_my_team
+        from data_fetcher import get_current_gameweek
+        td = fetch_my_team(int(team_id))
+        if td.get("error"): return set()
+        try: cgw = get_current_gameweek()
+        except Exception: cgw = (td.get("gw_summary", {}).get("event", 1) or 1) + 1
+        current_half = 2 if cgw >= _HALF_CUTOFF_CHIPS else 1
+        used = set()
+        for c in (td.get("chips", []) or []):
+            event = c.get("event", 0) or 0
+            half = 2 if event >= _HALF_CUTOFF_CHIPS else 1
+            if half != current_half: continue
+            code = _CHIP_NAME_MAP.get(c.get("name", ""), str(c.get("name", "")).upper())
+            used.add(code)
+        return used
+    except Exception:
+        return set()
+
+def _filter_chip_analysis(chip_analysis, used_codes):
+    """Return NEW chip_analysis with used chips removed. Does not mutate input."""
+    if not used_codes or not isinstance(chip_analysis, dict):
+        return chip_analysis
+    import copy
+    ca = copy.deepcopy(chip_analysis)
+    recs = ca.get("recommendations", []) or []
+    ca["recommendations"] = [r for r in recs if r.get("code") not in used_codes]
+    best = ca.get("best_chip")
+    if best and best.get("code") in used_codes:
+        ca["best_chip"] = ca["recommendations"][0] if ca["recommendations"] else None
+    ca["user_used_chips"] = sorted(list(used_codes))
+    return ca
+# --- FILTER_USED_CHIPS_END ---
+
 @app.route("/api/predictions")
 def api_predictions():
     preds, data = _cached_predictions()
     if not data:
         return jsonify({"error": "No predictions yet. Please wait for data refresh."}), 404
+
+    # Filter chips already used this half so UI never recommends an unusable chip.
+    # IMPORTANT: do NOT mutate the memoized dict -- shallow-copy then swap chip_analysis.
+    used_codes = _user_used_chips_in_current_half()
+    if used_codes and data.get("chip_analysis"):
+        data = dict(data)
+        data["chip_analysis"] = _filter_chip_analysis(data.get("chip_analysis"), used_codes)
 
     user = _get_auth_user()
     is_premium = user and user.get("plan") in ("premium", "admin")
@@ -611,6 +710,10 @@ def api_chip_analysis():
         gw_info = cached.get("gw_info", {})
         chip_advisor = ChipAdvisor(preds, gw_info)
         analysis = chip_advisor.analyze()
+        # FILTER_CHIP_ANALYSIS_ENDPOINT_DONE: strip user-exhausted chips
+        used_codes = _user_used_chips_in_current_half()
+        if used_codes:
+            analysis = _filter_chip_analysis(analysis, used_codes)
         optimizer = SquadOptimizer(preds)
         normal = optimizer.optimize_squad()
         bb = optimizer.optimize_squad(chip="bench_boost")
@@ -839,20 +942,23 @@ def api_season_chips():
         if settings.get("team_id"):
             try:
                 from my_team import fetch_my_team
+                from data_fetcher import get_current_gameweek
                 td = fetch_my_team(settings["team_id"])
                 if not td.get("error"):
                     squad_ids = [p.get("element") for p in td.get("picks",[])]
                     bank = td.get("gw_summary",{}).get("bank",0)
                     chips_used_list = td.get("chips",[])
-                    active_chip = td.get("active_chip")
-                    cgw = td.get("gw_summary",{}).get("event",33)
+                    # Use bootstrap authoritative current GW, NOT gw_summary.event
+                    # (which is the last-completed GW and caused FH-at-GW33 to be skipped).
+                    try: cgw = get_current_gameweek()
+                    except: cgw = td.get("gw_summary",{}).get("event",1) + 1
                     current_half = 2 if cgw >= HALF_CUTOFF else 1
                     used = set()
+                    # Any chip already activated in this half is permanently consumed.
+                    # Do NOT skip chips just because they match cgw or active_chip.
                     for c in chips_used_list:
                         code = cmap.get(c.get("name",""), c.get("name","").upper())
                         h = 2 if c.get("event",0) >= HALF_CUTOFF else 1
-                        if c.get("event",0) == cgw: continue
-                        if active_chip and c.get("name") == active_chip: continue
                         if h == current_half: used.add(code)
                     chips_available = [c for c in ["BB","TC","FH","WC"] if c not in used]
             except: pass
