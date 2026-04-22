@@ -39,6 +39,145 @@ The server fetches all data from the official FPL API and auto-refreshes every 2
 
 ---
 
+## 🏗️ System Architecture
+
+End-to-end view of every moving part in production — browser, Flask server,
+prediction / optimization engines, admin tooling, and the external services
+the app talks to.
+
+```mermaid
+flowchart LR
+    %% ========== CLIENTS ==========
+    subgraph Client["🌐 Client (Browser)"]
+        UI["dashboard.html<br/>Single-file SPA<br/>Light/Dark theme"]
+        LOGIN["Login / Register<br/>+ Google OAuth<br/>+ Forgot password"]
+    end
+
+    %% ========== EDGE ==========
+    subgraph Edge["🚪 Edge (Render.com)"]
+        GUNI["Gunicorn<br/>1 worker · 4 threads"]
+        RL["flask-limiter<br/>login 10/min · chat 20/min<br/>heavy 3–5/min"]
+        CACHE["In-memory TTL cache<br/>fixture-ticker 2m · top-transfers 5m"]
+    end
+
+    %% ========== APP ==========
+    subgraph App["🧠 Flask App (server.py)"]
+        AUTH["auth.py<br/>PBKDF2-SHA256<br/>session tokens (30d)<br/>tiers: free / premium / admin"]
+        ROUTES["REST API<br/>/api/predictions · /api/my-team<br/>/api/chat · /api/fixture-ticker<br/>/api/admin/* · /api/health"]
+        CHAT["ai_chat.py<br/>12 intents NLU"]
+        ANALYST["ai_analyst.py<br/>team + player insights"]
+    end
+
+    %% ========== DOMAIN ENGINES ==========
+    subgraph Engines["⚙️ Domain Engines"]
+        PRED["prediction_engine.py<br/>13-factor Poisson xPts"]
+        SQUAD["squad_optimizer.py<br/>beam + local search"]
+        GW["gw_planner.py<br/>multi-GW planner"]
+        CHIP["chip_planner.py<br/>season chip optimizer"]
+        TEAM["team_analysis.py<br/>win prob · fixture xG"]
+        MYTEAM["my_team.py<br/>FPL team import"]
+    end
+
+    %% ========== ADMIN ==========
+    subgraph Admin["🛡️ Admin Tooling"]
+        MOPT["model_optimizer.py<br/>backtest · suggest weights<br/>persisted to storage"]
+        RULES["fpl_rules.py<br/>rule reviewer<br/>auto-refine calc"]
+        EMAIL["email_service.py<br/>verify · reset"]
+    end
+
+    %% ========== DATA ==========
+    subgraph Data["💾 Data Layer"]
+        SUPA[("Supabase Postgres<br/>users · sessions · settings<br/>model_weights")]
+        JSON["Local JSON<br/>data/ · cache/ · output/<br/>(atomic writes, RLock)"]
+        CONF["config.py<br/>weights · thresholds"]
+    end
+
+    %% ========== EXTERNAL ==========
+    subgraph Ext["🌍 External Services"]
+        FPL[("FPL Official API<br/>fantasy.premierleague.com")]
+        NEWS["news_aggregator.py<br/>multi-source RSS/HTML"]
+        GOOG[("Google OAuth")]
+        SMTP[("SMTP provider<br/>transactional mail")]
+    end
+
+    %% ========== EDGES ==========
+    UI -->|HTTPS| GUNI
+    LOGIN -->|HTTPS| GUNI
+    LOGIN -. OAuth .-> GOOG
+    GOOG -. callback .-> AUTH
+
+    GUNI --> RL --> CACHE --> ROUTES
+    ROUTES --> AUTH
+    ROUTES --> CHAT
+    ROUTES --> ANALYST
+    ROUTES --> PRED
+    ROUTES --> SQUAD
+    ROUTES --> GW
+    ROUTES --> CHIP
+    ROUTES --> TEAM
+    ROUTES --> MYTEAM
+    ROUTES --> MOPT
+    ROUTES --> RULES
+
+    AUTH <--> SUPA
+    AUTH --> EMAIL --> SMTP
+
+    PRED --> CONF
+    SQUAD --> PRED
+    GW --> PRED
+    CHIP --> PRED
+    TEAM --> PRED
+    MYTEAM --> FPL
+    PRED --> FPL
+    NEWS --> ROUTES
+
+    MOPT -->|writes weights| SUPA
+    MOPT -. reads history .-> JSON
+    RULES -->|confirmed changes| CONF
+    CONF <-. hot-reload .- PRED
+
+    classDef ext fill:#fff2cc,stroke:#d6b656,color:#222
+    classDef data fill:#e1f5fe,stroke:#0288d1,color:#222
+    classDef admin fill:#fde2e2,stroke:#d32f2f,color:#222
+    class FPL,GOOG,SMTP,NEWS ext
+    class SUPA,JSON,CONF data
+    class MOPT,RULES,EMAIL admin
+```
+
+### Request lifecycle (happy path)
+
+```
+Browser ─► Gunicorn ─► flask-limiter ─► TTL cache ─► Flask route
+                                                             │
+                                             ┌───────────────┼─────────────────┐
+                                             ▼               ▼                 ▼
+                                        auth.py        prediction_engine   squad/gw/chip
+                                        (Supabase)     (+ config weights)  optimizers
+                                             │               │                 │
+                                             └───► JSON response ◄───────────────┘
+```
+
+### Deployment topology
+
+| Layer           | Where it runs                | Persistence                                   |
+|-----------------|------------------------------|-----------------------------------------------|
+| Static SPA      | Served by Flask from repo    | Stateless                                     |
+| Flask + engines | Render.com (Gunicorn)        | Ephemeral FS + `cache/`, `output/`, `data/`   |
+| Primary DB      | Supabase (Postgres)          | Users, sessions, settings, tuned weights      |
+| FPL data        | Local disk cache (`cache/`)  | Rehydrated from FPL API on cold start         |
+| Secrets         | Render env vars              | `SUPABASE_*`, `GOOGLE_OAUTH_*`, `SMTP_*`      |
+
+### Admin write paths (the ones that *mutate* the model)
+
+- **Model Optimization → Apply** → `model_optimizer.py` writes new weights into
+  Supabase (`model_weights`) and hot-reloads `config.py` in-process, so
+  `prediction_engine` picks them up immediately — survives server restarts.
+- **FPL Rule Reviewer → Confirm** → `fpl_rules.py` diffs the official rules
+  snapshot, shows the delta in the admin UI, and on confirmation patches the
+  scoring constants in `config.py` so future xPts calculations use the new rules.
+
+---
+
 ## 📁 Project Structure
 
 ```
