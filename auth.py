@@ -1,12 +1,15 @@
 """
 FPL Predictor — User Authentication & Subscription System
-Lightweight auth with JSON file storage. No database required.
-Supports: register, login, session tokens, free/premium tiers.
+Pluggable storage: Supabase Postgres (production) or JSON files (local dev).
 
-Thread-safety: All JSON file operations are protected by reentrant locks
-to prevent data corruption under Gunicorn's threaded worker model.
+Backend selection:
+  - If SUPABASE_URL and SUPABASE_KEY env vars are set → use Supabase
+  - Otherwise → fall back to local JSON files (legacy behavior)
+
+Supports: register, login, session tokens, free/premium tiers.
 """
 import json
+import os
 import hashlib
 import secrets
 import time
@@ -19,9 +22,39 @@ DATA_DIR.mkdir(exist_ok=True)
 USERS_FILE = DATA_DIR / "users.json"
 SESSIONS_FILE = DATA_DIR / "sessions.json"
 
-# Thread-safety locks for JSON file access (prevents concurrent read/write corruption)
+# Thread-safety locks for storage access
 _users_lock = threading.RLock()
 _sessions_lock = threading.RLock()
+
+# ── Storage backend: Supabase (if env configured) or JSON files (fallback) ──
+_SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+_SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
+_USE_SUPABASE = bool(_SUPABASE_URL and _SUPABASE_KEY)
+_supabase_client = None
+_backend_logged = False
+
+
+def _get_supabase():
+    """Lazy-init Supabase client. Returns None if not configured or import fails."""
+    global _supabase_client, _USE_SUPABASE, _backend_logged
+    if not _USE_SUPABASE:
+        if not _backend_logged:
+            print(f"  [AUTH] Using JSON file backend ({DATA_DIR})")
+            _backend_logged = True
+        return None
+    if _supabase_client is not None:
+        return _supabase_client
+    try:
+        from supabase import create_client
+        _supabase_client = create_client(_SUPABASE_URL, _SUPABASE_KEY)
+        if not _backend_logged:
+            print(f"  [AUTH] Using Supabase backend ({_SUPABASE_URL[:40]}...)")
+            _backend_logged = True
+        return _supabase_client
+    except Exception as e:
+        print(f"  [AUTH] Supabase init failed, falling back to JSON files: {e}")
+        _USE_SUPABASE = False
+        return None
 
 # Subscription config
 PLANS = {
@@ -102,6 +135,14 @@ def _hash_password(password: str, salt: str = None) -> tuple:
 
 def _load_users() -> dict:
     with _users_lock:
+        sb = _get_supabase()
+        if sb is not None:
+            try:
+                res = sb.table("users").select("email,data").execute()
+                return {row["email"]: row["data"] for row in (res.data or [])}
+            except Exception as e:
+                print(f"  [AUTH] Supabase load_users failed: {e}")
+                return {}
         if USERS_FILE.exists():
             return json.loads(USERS_FILE.read_text(encoding="utf-8"))
         return {}
@@ -109,13 +150,42 @@ def _load_users() -> dict:
 
 def _save_users(users: dict):
     with _users_lock:
+        sb = _get_supabase()
+        if sb is not None:
+            try:
+                # Fetch existing emails so we can compute deletions
+                existing = sb.table("users").select("email").execute()
+                existing_emails = {row["email"] for row in (existing.data or [])}
+                new_emails = set(users.keys())
+
+                # Delete users that were removed
+                to_delete = existing_emails - new_emails
+                for email in to_delete:
+                    sb.table("users").delete().eq("email", email).execute()
+
+                # Upsert all current users
+                if users:
+                    rows = [{"email": e, "data": u} for e, u in users.items()]
+                    sb.table("users").upsert(rows, on_conflict="email").execute()
+                return
+            except Exception as e:
+                print(f"  [AUTH] Supabase save_users failed: {e}")
+                # Fall through to file save as emergency backup
         tmp = USERS_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(users, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(USERS_FILE)  # atomic on POSIX, near-atomic on Windows
+        tmp.replace(USERS_FILE)
 
 
 def _load_sessions() -> dict:
     with _sessions_lock:
+        sb = _get_supabase()
+        if sb is not None:
+            try:
+                res = sb.table("sessions").select("token,data").execute()
+                return {row["token"]: row["data"] for row in (res.data or [])}
+            except Exception as e:
+                print(f"  [AUTH] Supabase load_sessions failed: {e}")
+                return {}
         if SESSIONS_FILE.exists():
             return json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
         return {}
@@ -123,6 +193,28 @@ def _load_sessions() -> dict:
 
 def _save_sessions(sessions: dict):
     with _sessions_lock:
+        sb = _get_supabase()
+        if sb is not None:
+            try:
+                existing = sb.table("sessions").select("token").execute()
+                existing_tokens = {row["token"] for row in (existing.data or [])}
+                new_tokens = set(sessions.keys())
+
+                to_delete = existing_tokens - new_tokens
+                if to_delete:
+                    # Chunk to avoid URL length limits on large in-lists
+                    tok_list = list(to_delete)
+                    for i in range(0, len(tok_list), 100):
+                        sb.table("sessions").delete().in_("token", tok_list[i:i+100]).execute()
+
+                if sessions:
+                    rows = [{"token": t, "data": d} for t, d in sessions.items()]
+                    # Batch upsert to avoid huge payloads
+                    for i in range(0, len(rows), 500):
+                        sb.table("sessions").upsert(rows[i:i+500], on_conflict="token").execute()
+                return
+            except Exception as e:
+                print(f"  [AUTH] Supabase save_sessions failed: {e}")
         tmp = SESSIONS_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(sessions, indent=2, ensure_ascii=False), encoding="utf-8")
         tmp.replace(SESSIONS_FILE)
