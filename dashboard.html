@@ -2093,25 +2093,50 @@ async function analyzeModelPerformance() {
 }
 
 function showWeightDetails() {
-  if (!MODEL_ANALYSIS_DATA) return;
-  
-  const current = MODEL_ANALYSIS_DATA.current_weights || {};
+  if (!MODEL_ANALYSIS_DATA) {
+    alert('Click "Analyze Performance" first so the model data can load.');
+    return;
+  }
+
+  const current   = MODEL_ANALYSIS_DATA.current_weights   || {};
   const suggested = MODEL_ANALYSIS_DATA.suggested_weights || {};
-  
+  const keys      = Array.from(new Set([...Object.keys(current), ...Object.keys(suggested)])).sort();
+
+  const fmt = v => (typeof v === 'number' && isFinite(v)) ? v.toFixed(3) : '—';
+
   let html = '<table style="width:100%;border-collapse:collapse;">';
-  html += '<thead><tr style="border-bottom:1px solid var(--border);"><th style="text-align:left;padding:8px 4px;">Factor</th><th style="text-align:right;padding:8px 4px;">Current</th><th style="text-align:right;padding:8px 4px;">Suggested</th><th style="text-align:right;padding:8px 4px;">Δ</th></tr></thead><tbody>';
-  
-  Object.keys(current).forEach(key => {
-    const curr = current[key];
-    const sugg = suggested[key];
-    const delta = sugg - curr;
-    const arrow = delta > 0.001 ? '↑' : (delta < -0.001 ? '↓' : '→');
-    const color = delta > 0.001 ? 'var(--accent)' : (delta < -0.001 ? 'var(--red)' : 'var(--text3)');
-    html += `<tr style="border-bottom:1px solid var(--border-light);"><td style="padding:8px 4px;">${key.replace(/_/g, ' ')}</td><td style="text-align:right;padding:8px 4px;">${curr.toFixed(3)}</td><td style="text-align:right;padding:8px 4px;color:${color};font-weight:600;">${sugg.toFixed(3)}</td><td style="text-align:right;padding:8px 4px;color:${color};">${arrow} ${Math.abs(delta).toFixed(3)}</td></tr>`;
-  });
+  html += '<thead><tr style="border-bottom:1px solid var(--border);">' +
+            '<th style="text-align:left;padding:8px 4px;">Factor</th>' +
+            '<th style="text-align:right;padding:8px 4px;">Current</th>' +
+            '<th style="text-align:right;padding:8px 4px;">Suggested</th>' +
+            '<th style="text-align:right;padding:8px 4px;">Δ</th>' +
+          '</tr></thead><tbody>';
+
+  if (!keys.length) {
+    html += '<tr><td colspan="4" style="padding:12px 4px;color:var(--text3);text-align:center;">No weight data returned by the analyzer.</td></tr>';
+  } else {
+    keys.forEach(key => {
+      const curr = current[key];
+      const sugg = suggested[key];
+      const hasBoth = (typeof curr === 'number' && typeof sugg === 'number' && isFinite(curr) && isFinite(sugg));
+      const delta   = hasBoth ? (sugg - curr) : NaN;
+      const arrow   = !hasBoth ? '—' : (delta > 0.001 ? '↑' : (delta < -0.001 ? '↓' : '→'));
+      const color   = !hasBoth ? 'var(--text3)' : (delta > 0.001 ? 'var(--accent)' : (delta < -0.001 ? 'var(--red)' : 'var(--text3)'));
+      const deltaTxt = hasBoth ? (arrow + ' ' + Math.abs(delta).toFixed(3)) : arrow;
+      html += '<tr style="border-bottom:1px solid var(--border-light);">' +
+                '<td style="padding:8px 4px;">' + key.replace(/_/g, ' ') + '</td>' +
+                '<td style="text-align:right;padding:8px 4px;">' + fmt(curr) + '</td>' +
+                '<td style="text-align:right;padding:8px 4px;color:' + color + ';font-weight:600;">' + fmt(sugg) + '</td>' +
+                '<td style="text-align:right;padding:8px 4px;color:' + color + ';">' + deltaTxt + '</td>' +
+              '</tr>';
+    });
+  }
   html += '</tbody></table>';
-  
-  document.getElementById('weight-comparison-table').innerHTML = html;
+
+  const panel = document.getElementById('model-weight-details');
+  const table = document.getElementById('weight-comparison-table');
+  if (table) table.innerHTML = html;
+  if (panel) { panel.style.display = 'block'; panel.scrollIntoView({behavior:'smooth', block:'nearest'}); }
 }
 
 // -- FPL Rule Reviewer (admin) --
