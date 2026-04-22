@@ -175,3 +175,43 @@ The codebase is **production-ready** with:
 - ✅ Performance optimized
 
 No critical issues found. All test/debug files removed. Ready for deployment.
+
+
+---
+
+## Pass 2 — FPL Rule Reviewer + Hardening
+
+**Date**: 2026-04-22  
+**Scope**: code-security pass alongside the FPL Rule Reviewer feature rollout.
+
+### Findings & Fixes
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| 1 | No request-body size cap — oversized JSON could exhaust worker memory | Medium | **Fixed** — `app.config["MAX_CONTENT_LENGTH"] = 256 KB` added at Flask init |
+| 2 | `/api/setup-accounts` & `/api/reset-accounts` used plain string compare on the SETUP_KEY (timing attack) | Medium | **Fixed** — switched to `hmac.compare_digest`, added min-20-char key length guard, kept key-gate closed when unset |
+| 3 | Same two endpoints were un-rate-limited | Low | **Fixed** — `@limiter.limit("5/min")` and `"2/min")` respectively |
+| 4 | 10 admin routes each copy-paste the same `if user.plan != 'admin': 403` guard — one missed paste = full privilege bypass | Medium | **Mitigated** — added `require_admin` decorator; routes can migrate incrementally. All 10 existing routes were re-verified to currently have the inline guard. |
+| 5 | FPL API response was previously consumed raw into `config` | Low → would become Medium once auto-apply shipped | **Fixed** — `fpl_rules.py` validates every field (type + range), refuses apply if the admin's snapshot no longer matches live API, and never auto-applies scoring point values |
+| 6 | No audit log for admin-initiated rule/weight changes | Low | **Fixed** — `fpl_rules_history` key (capped 20 entries) records every apply/rollback with admin email + timestamp |
+| 7 | Admin-tuned model weights & rule overrides previously lived only on Render's ephemeral disk → wiped on every redeploy | High (data loss) | **Fixed** (earlier commit) — persisted via `app_storage` → Supabase `app_settings` table |
+
+### Posture re-confirmed (no change needed)
+
+- ✅ **Password hashing**: PBKDF2-SHA256, 600 000 iterations (OWASP-recommended minimum), 16-byte per-user salt, single-use reset tokens (`secrets.token_urlsafe(32)`) with expiry.
+- ✅ **Auth transport**: bearer-token header (no cookies → no CSRF surface).
+- ✅ **Stripe webhook**: signature verified via `stripe.Webhook.construct_event`.
+- ✅ **Email canonicalisation**: `email.strip().lower()` in register/login/reset.
+- ✅ **Path traversal**: Flask's `send_from_directory` blocks `..`; explicit blocklist for `data/`, `.env`, `*.py`, `users.json`, `sessions.json`.
+- ✅ **No `eval` / `exec` / `debug=True`** anywhere in the request path.
+- ✅ **Rate-limit** on all auth endpoints: login 10/min, register 5/min, forgot 3/min, reset 5/min, resend-verify 10/min.
+
+### Known, intentional deferrals
+
+- **Per-account lockout** after N failed logins — deferred; current 10/min/IP rate limit is adequate for the deployment size. Add if traffic scales.
+- **Content-Security-Policy** / other hardening headers — not yet set. Flask default is unopinionated. Add via a `@app.after_request` hook when we stop using inline JS in `dashboard.html`.
+- **Replay protection** on the /rules/apply endpoint — we already re-fetch server-side and require the admin's `snapshot` to match the live value, which is a stronger guarantee than a nonce.
+
+### Conclusion
+
+**Status: PASS.** The new FPL Rule Reviewer adds administrative surface but does so with validation, re-fetch, audit log, and defensive merge semantics. The companion hardening closes the remaining medium-severity findings from the original audit's surface area.

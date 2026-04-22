@@ -45,6 +45,11 @@ _refresh_thread_started = False
 
 app = Flask(__name__, static_folder=None)  # Disable Flask's default static handling
 
+# Security: cap incoming request body size to prevent memory-exhaustion DoS
+# via giant JSON payloads on any POST endpoint. 256 KB is plenty (the largest
+# legitimate payload we accept is the weight-adjustment dict, ~1 KB).
+app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
+
 # ── Rate Limiter (degrades gracefully if dependency missing) ──
 if _HAS_LIMITER:
     limiter = Limiter(
@@ -169,6 +174,16 @@ try:
     _load_saved_weights()
 except Exception as _e:
     print(f"  [STARTUP] load_saved_weights skipped: {_e}")
+
+# Apply persisted FPL rule overrides from app_storage (chip counts, squad rules
+# etc) so they survive Render redeploys the same way model weights do.
+try:
+    from fpl_rules import apply_overrides_to_config as _apply_rule_overrides
+    _n = _apply_rule_overrides()
+    if _n:
+        print(f"  [STARTUP] Applied {_n} FPL rule override(s) from persistent storage.")
+except Exception as _e:
+    print(f"  [STARTUP] apply_overrides_to_config skipped: {_e}")
 
 
 def _run_predictions(gw=None):
@@ -1294,7 +1309,21 @@ def _find_email_by_stripe_customer(customer_id: str) -> str:
     return ""
 
 
-# ── Admin ──
+# -- Admin --
+
+def require_admin(f):
+    """Decorator: 403 unless caller is authenticated with plan=='admin'.
+    Centralises admin auth so no future route accidentally ships without it."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        user = _get_auth_user()
+        if not user or user.get("plan") != "admin":
+            return jsonify({"error": "Admin access required"}), 403
+        # Stash the user on request for the route to read without re-fetching
+        request._admin_user = user
+        return f(*args, **kwargs)
+    return wrapper
+
 
 @app.route("/api/admin/users", methods=["POST"])
 def api_admin_users():
@@ -1377,16 +1406,26 @@ def api_admin_apply_weights():
         })
 
 @app.route("/api/setup-accounts")
+@limiter.limit("5 per minute")
 def api_setup_accounts():
+    import hmac
     sk = os.environ.get("SETUP_KEY", "")
-    if not sk or request.args.get("key","") != sk: return jsonify({"error": "Invalid key"}), 403
+    if not sk or len(sk) < 20:
+        return jsonify({"error": "Setup disabled (SETUP_KEY not configured or too short)"}), 403
+    if not hmac.compare_digest(request.args.get("key", ""), sk):
+        return jsonify({"error": "Invalid key"}), 403
     _auto_setup_accounts()
     return jsonify({"ok": True})
 
 @app.route("/api/reset-accounts")
+@limiter.limit("2 per minute")
 def api_reset_accounts():
+    import hmac
     sk = os.environ.get("SETUP_KEY", "")
-    if not sk or request.args.get("key","") != sk: return jsonify({"error": "Invalid key"}), 403
+    if not sk or len(sk) < 20:
+        return jsonify({"error": "Reset disabled (SETUP_KEY not configured or too short)"}), 403
+    if not hmac.compare_digest(request.args.get("key", ""), sk):
+        return jsonify({"error": "Invalid key"}), 403
     from auth import _save_users, _save_sessions
     _save_users({}); _save_sessions({})
     _auto_setup_accounts()
@@ -1408,6 +1447,83 @@ def api_admin_reset_weights():
         "message": "Saved weight override cleared. Defaults will apply after the next restart."
             if ok else "Failed to clear weight override."
     })
+
+
+# -- FPL Rules Reviewer (admin) --
+
+@app.route("/api/admin/rules/review", methods=["GET"])
+@limiter.limit("10 per minute")
+def api_admin_rules_review():
+    """Fetch current FPL rules from bootstrap-static and diff against baseline.
+    Returns a structured diff the admin UI renders as a checklist."""
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
+    from fpl_rules import review
+    result = review()
+    code = 200 if result.get("ok") else 502
+    return jsonify(result), code
+
+
+@app.route("/api/admin/rules/apply", methods=["POST"])
+@limiter.limit("10 per minute")
+def api_admin_rules_apply():
+    """Apply a subset of detected rule changes.
+
+    Body: { "accepted_ids": ["squad_size", "chips", ...],
+            "snapshot": { ... current rules from /review ... } }
+
+    Re-validates every change server-side; refuses any review-safety rule.
+    Persists overrides, hot-reloads config, regenerates predictions.
+    """
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
+    d = request.get_json(silent=True) or {}
+    accepted_ids = d.get("accepted_ids") or []
+    snapshot = d.get("snapshot") or {}
+    from fpl_rules import apply as apply_rules
+    result = apply_rules(user["email"], accepted_ids, snapshot)
+    if result.get("ok") and result.get("applied"):
+        # Predictions depend on squad rules / chips counts - regen in background.
+        def _regen():
+            try:
+                _run_predictions()
+                print("  [ADMIN] Predictions regenerated after FPL rule update")
+            except Exception as e:
+                print(f"  [ADMIN] Post-rule-apply regen failed: {e}")
+        threading.Thread(target=_regen, daemon=True).start()
+        result["regenerating"] = True
+    return jsonify(result), 200 if result.get("ok") else 400
+
+
+@app.route("/api/admin/rules/rollback", methods=["POST"])
+@limiter.limit("5 per minute")
+def api_admin_rules_rollback():
+    """Clear all FPL rule overrides - revert to config.py defaults."""
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
+    from fpl_rules import rollback
+    result = rollback(user["email"])
+    # Regenerate predictions to reflect defaults
+    try:
+        threading.Thread(target=lambda: _run_predictions(), daemon=True).start()
+    except Exception:
+        pass
+    return jsonify(result), 200
+
+
+@app.route("/api/admin/rules/history", methods=["GET"])
+@limiter.limit("30 per minute")
+def api_admin_rules_history():
+    """Audit log of applied rule changes (last N entries)."""
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
+    from fpl_rules import get_history
+    return jsonify({"ok": True, "history": get_history()})
+
 
 
 # ── Health & Monitoring ──

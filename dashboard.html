@@ -1447,6 +1447,32 @@ table tr:hover { background:var(--surface2); }
       <div id="weight-comparison-table" style="font-size:12px;"></div>
     </div>
   </div>
+
+  <!-- FPL Rule Reviewer (admin) -->
+  <div class="card">
+    <div class="card-header">
+      <h3>FPL Rule Reviewer</h3>
+      <button class="btn btn-primary" onclick="reviewFplRules()" style="font-size:12px;padding:6px 14px;">Review FPL Rules</button>
+    </div>
+    <p style="font-size:12px;color:var(--text3);margin-bottom:12px;">
+      Fetches the latest structural rules from the FPL API (squad size, budget, chips, per-position limits) and diffs them against the last accepted snapshot. Scoring values are <b>never</b> auto-applied — only structural rules, and only after you confirm each change.
+    </p>
+    <div id="fpl-rules-loading" style="display:none;text-align:center;padding:20px;color:var(--text3);">
+      <div style="display:inline-block;width:20px;height:20px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+      <p style="margin-top:8px;font-size:13px;">Fetching latest FPL rules...</p>
+    </div>
+    <div id="fpl-rules-result" style="display:none;">
+      <div id="fpl-rules-meta" style="font-size:12px;color:var(--text3);margin-bottom:10px;"></div>
+      <div id="fpl-rules-diff"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+        <button class="btn btn-primary" onclick="applyFplRules()" id="fpl-rules-apply-btn" style="font-size:12px;padding:6px 14px;">Apply Selected</button>
+        <button class="btn btn-secondary" onclick="rollbackFplRules()" style="font-size:12px;padding:6px 14px;">Rollback (clear overrides)</button>
+        <button onclick="viewFplRulesHistory()" style="font-size:12px;padding:6px 14px;border-radius:6px;background:var(--surface3);color:var(--text2);border:1px solid var(--border);cursor:pointer;">View History</button>
+        <button onclick="document.getElementById('fpl-rules-result').style.display='none'" style="font-size:12px;padding:6px 14px;border-radius:6px;background:var(--surface3);color:var(--text2);border:1px solid var(--border);cursor:pointer;">Close</button>
+      </div>
+      <div id="fpl-rules-history" style="display:none;margin-top:12px;padding:10px;background:var(--surface2);border-radius:var(--radius-sm);font-size:12px;font-family:monospace;max-height:260px;overflow-y:auto;"></div>
+    </div>
+  </div>
 </div>
 
 </div><!-- /main -->
@@ -1504,7 +1530,6 @@ table tr:hover { background:var(--surface2); }
     <div id="footer-modal-content"></div>
   </div>
 </div>
-
 
 
 <!-- Auth Modal (Login/Register) -->
@@ -2087,7 +2112,139 @@ function showWeightDetails() {
   html += '</tbody></table>';
   
   document.getElementById('weight-comparison-table').innerHTML = html;
-  document.getElementById('model-weight-details').style.display = 'block';
+}
+
+// -- FPL Rule Reviewer (admin) --
+let _fplRulesSnapshot = null;
+
+async function reviewFplRules() {
+  const loading = document.getElementById('fpl-rules-loading');
+  const result = document.getElementById('fpl-rules-result');
+  loading.style.display = 'block';
+  result.style.display = 'none';
+  try {
+    const r = await fetch('/api/admin/rules/review', {headers: authHeaders()});
+    const d = await r.json();
+    loading.style.display = 'none';
+    if (!d.ok) {
+      alert('Rule review failed: ' + (d.error || 'unknown error'));
+      return;
+    }
+    _fplRulesSnapshot = d.current;
+    renderFplRulesDiff(d);
+    result.style.display = 'block';
+  } catch (e) {
+    loading.style.display = 'none';
+    alert('Network error: ' + e.message);
+  }
+}
+
+function _fmtRuleValue(v) {
+  if (v === null || v === undefined) return '<span style="color:var(--text3);">(none)</span>';
+  if (typeof v === 'object') {
+    try { return '<pre style="margin:0;font-size:11px;max-height:120px;overflow:auto;">' +
+                 JSON.stringify(v, null, 2).replace(/</g,'&lt;') + '</pre>'; }
+    catch { return String(v); }
+  }
+  return String(v).replace(/</g,'&lt;');
+}
+
+function renderFplRulesDiff(payload) {
+  const meta = document.getElementById('fpl-rules-meta');
+  const container = document.getElementById('fpl-rules-diff');
+  meta.innerHTML = 'Fetched at <b>' + (payload.fetched_at || 'now') + '</b>' +
+    (payload.first_run ? ' &middot; <span style="color:var(--accent);">first-run baseline establishment</span>' : '');
+
+  const rows = payload.diff || [];
+  if (!rows.length) { container.innerHTML = '<em>No rules tracked.</em>'; return; }
+
+  const changedRows = rows.filter(r => r.changed);
+  if (!changedRows.length) {
+    container.innerHTML = '<div style="padding:12px;background:var(--surface2);border-radius:var(--radius-sm);color:var(--text2);font-size:13px;">No structural rule changes detected vs the stored baseline.</div>';
+    return;
+  }
+
+  let html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+  html += '<tr style="border-bottom:1px solid var(--border);">' +
+    '<th style="text-align:left;padding:6px;width:40px;">Apply</th>' +
+    '<th style="text-align:left;padding:6px;">Rule</th>' +
+    '<th style="text-align:left;padding:6px;">Baseline</th>' +
+    '<th style="text-align:left;padding:6px;">Current (FPL)</th>' +
+    '<th style="text-align:left;padding:6px;">Status</th></tr>';
+  for (const r of rows) {
+    if (!r.changed) continue;
+    const badge = r.safety === 'safe'
+      ? '<span style="padding:2px 6px;border-radius:4px;background:rgba(0,200,0,0.15);color:var(--accent);font-size:10px;">SAFE</span>'
+      : '<span style="padding:2px 6px;border-radius:4px;background:rgba(255,150,0,0.15);color:#ff9630;font-size:10px;">REVIEW</span>';
+    const checked = r.auto_apply ? 'checked' : '';
+    const disabled = r.safety !== 'safe' ? 'disabled' : '';
+    html += '<tr style="border-bottom:1px solid var(--border);vertical-align:top;">' +
+      '<td style="padding:6px;"><input type="checkbox" class="fpl-rule-check" data-id="' + r.id + '" ' + checked + ' ' + disabled + '></td>' +
+      '<td style="padding:6px;"><b>' + r.label + '</b><div style="font-size:10px;color:var(--text3);">' + r.id + ' &middot; ' + badge + '</div></td>' +
+      '<td style="padding:6px;">' + _fmtRuleValue(r.baseline) + '</td>' +
+      '<td style="padding:6px;">' + _fmtRuleValue(r.current) + '</td>' +
+      '<td style="padding:6px;color:var(--text3);">' + (r.reason || '') + '</td></tr>';
+  }
+  html += '</table>';
+  container.innerHTML = html;
+}
+
+async function applyFplRules() {
+  if (!_fplRulesSnapshot) { alert('Run Review first.'); return; }
+  const ids = Array.from(document.querySelectorAll('.fpl-rule-check:checked')).map(el => el.dataset.id);
+  if (!ids.length) { alert('Nothing selected to apply.'); return; }
+  if (!confirm('Apply ' + ids.length + ' rule change(s)? This will regenerate predictions.')) return;
+  const btn = document.getElementById('fpl-rules-apply-btn');
+  btn.disabled = true; btn.textContent = 'Applying...';
+  try {
+    const r = await fetch('/api/admin/rules/apply', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ accepted_ids: ids, snapshot: _fplRulesSnapshot }),
+    });
+    const d = await r.json();
+    btn.disabled = false; btn.textContent = 'Apply Selected';
+    if (!d.ok) { alert('Apply failed: ' + (d.error || 'unknown')); return; }
+    let msg = 'Applied ' + (d.applied || []).length + ' rule(s).';
+    if ((d.rejected || []).length) msg += '\nRejected: ' + d.rejected.map(x => x.id + ' (' + x.reason + ')').join('; ');
+    if (d.regenerating) msg += '\nPredictions are regenerating in the background.';
+    alert(msg);
+    reviewFplRules();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Apply Selected';
+    alert('Network error: ' + e.message);
+  }
+}
+
+async function rollbackFplRules() {
+  if (!confirm('Clear ALL FPL rule overrides? Defaults from config.py will take effect.')) return;
+  try {
+    const r = await fetch('/api/admin/rules/rollback', {method: 'POST', headers: authHeaders()});
+    const d = await r.json();
+    alert(d.message || (d.ok ? 'Rollback complete.' : 'Rollback failed.'));
+    reviewFplRules();
+  } catch (e) { alert('Network error: ' + e.message); }
+}
+
+async function viewFplRulesHistory() {
+  const box = document.getElementById('fpl-rules-history');
+  if (box.style.display === 'block') { box.style.display = 'none'; return; }
+  try {
+    const r = await fetch('/api/admin/rules/history', {headers: authHeaders()});
+    const d = await r.json();
+    const hist = (d.history || []).slice().reverse();
+    if (!hist.length) { box.innerHTML = '<em>No history yet.</em>'; }
+    else {
+      box.innerHTML = hist.map(h =>
+        '<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--border);">' +
+        '<b>' + (h.at || '') + '</b> &middot; ' + (h.action || '') + ' &middot; <span style="color:var(--text3);">' + (h.admin || '') + '</span>' +
+        (h.applied && h.applied.length ? '<br>applied: ' + h.applied.map(x=>x.id).join(', ') : '') +
+        (h.rejected && h.rejected.length ? '<br>rejected: ' + h.rejected.map(x=>x.id).join(', ') : '') +
+        '</div>'
+      ).join('');
+    }
+    box.style.display = 'block';
+  } catch (e) { box.innerHTML = 'Error: ' + e.message; box.style.display = 'block'; }
 }
 
 async function applyWeightSuggestions() {

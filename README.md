@@ -330,3 +330,48 @@ See **[SETUP.md](SETUP.md)** for full deployment guide including:
 ## 📄 License
 
 Personal use. FPL data belongs to the Premier League.
+
+
+---
+
+## FPL Rule Reviewer (admin)
+
+The admin dashboard (`/#admin`) includes a **FPL Rule Reviewer** card that
+keeps the app in sync with the official game when Premier League changes
+structural rules each season (for example: "no more 2 Free Hits", "budget
+raised to £100.5m", or new chips like the 2025/26 Manager chip).
+
+**How it works**
+
+1. Click **Review FPL Rules** — the backend fetches the live
+   `/api/bootstrap-static/` JSON from `fantasy.premierleague.com`, extracts the
+   structural rules (squad size, budget, per-position limits, transfer cost,
+   captain multiplier, chip counts) and diffs them against the stored
+   baseline.
+2. Each changed rule is shown with a checkbox:
+   - **SAFE** rows are structural JSON rules we can validate programmatically —
+     pre-checked, ready to apply.
+   - **REVIEW** rows (scoring point values) are never auto-applied. Those
+     numbers live only on the official rules HTML page; the admin must
+     update `config.SCORING` manually.
+3. Click **Apply Selected** — the backend re-fetches live, refuses any rule
+   whose value no longer matches the admin's snapshot (stale/tampered
+   protection), writes accepted values to `app_settings.fpl_rules_overrides`
+   in Supabase, and hot-swaps them into `config` in memory. Predictions
+   regenerate in the background.
+4. **Rollback** clears every override. Next process start uses `config.py`
+   defaults; next Review captures a fresh baseline.
+
+**Persistence**
+
+All three artefacts live under your Supabase `app_settings` table
+(the same one used for admin-tuned model weights):
+
+| Key | Purpose |
+|---|---|
+| `fpl_rules_baseline` | last-accepted rule snapshot |
+| `fpl_rules_overrides` | applied values, re-played onto `config` on startup |
+| `fpl_rules_history` | audit log (last 20 apply/rollback events) |
+
+No table changes needed if you already ran the `app_settings` SQL from the
+"Supabase setup" section above.
