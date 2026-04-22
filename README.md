@@ -333,17 +333,47 @@ opt-in Google sign-in button. No heavyweight identity provider required.
 | `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_KEY` | Service role secret key (server-side only) |
 
-### Optional email features (Resend)
+### Optional email features (Gmail SMTP or Resend)
 
-Used for "Forgot password" and "Verify email" links. Without these, the app still
-runs — reset/verify links are printed to the server log instead of emailed.
+Used for "Forgot password" and "Verify email" links. Without either backend
+configured, the app still runs — the reset/verify links are printed to the
+server log instead of emailed (dev-mode).
 
-| Key | Description |
-|-----|-------------|
-| `RESEND_API_KEY` | Get one free at [resend.com](https://resend.com) (100 emails/day) |
-| `EMAIL_FROM` | e.g. `FPL Predictor <noreply@yourdomain.com>` — defaults to Resend's sandbox `onboarding@resend.dev` (can only deliver to the Resend account owner in dev mode) |
-| `PUBLIC_BASE_URL` | Public site URL, e.g. `https://fpl-predictor-e0zz.onrender.com` (falls back to `RENDER_EXTERNAL_URL` which Render injects automatically) |
-| `REQUIRE_EMAIL_VERIFICATION` | `true` to force new signups to verify before first login. Default `false` (existing users unaffected). |
+Two backends are supported and auto-selected in this order:
+
+1. **Generic SMTP** — *recommended for personal / small deployments*. Works with
+   any Gmail account via a 16-character [App Password](https://myaccount.google.com/apppasswords).
+   No custom domain required; delivers to **any** recipient. Free, ~500/day.
+2. **Resend** — better deliverability once you own a domain you can verify.
+   Sandbox (`onboarding@resend.dev`) only delivers to the Resend account owner.
+
+| Key | Backend | Description |
+|-----|---------|-------------|
+| `SMTP_HOST` | SMTP | `smtp.gmail.com` for Gmail |
+| `SMTP_PORT` | SMTP | `587` (STARTTLS, default) or `465` (implicit TLS) |
+| `SMTP_USER` | SMTP | Your Gmail address, e.g. `you@gmail.com` |
+| `SMTP_PASS` | SMTP | 16-char [Google App Password](https://myaccount.google.com/apppasswords) (requires 2FA on the account). **Not** your Google login password. |
+| `SMTP_USE_SSL` | SMTP | optional, `1` to force implicit TLS (port 465). Default: autodetect. |
+| `RESEND_API_KEY` | Resend | Get one free at [resend.com](https://resend.com) (3000 emails/month) |
+| `EMAIL_FROM` | common | From address, e.g. `FPL Predictor <you@gmail.com>`. For Gmail SMTP this **must** match `SMTP_USER` or Gmail will rewrite it. |
+| `PUBLIC_BASE_URL` | common | Public site URL, e.g. `https://fpl-predictor-e0zz.onrender.com` (falls back to `RENDER_EXTERNAL_URL` which Render injects automatically). Links in emails use this. |
+| `REQUIRE_EMAIL_VERIFICATION` | common | `true` to force new signups to verify before first login. Default `false` (existing users unaffected). |
+
+**Minimum Gmail setup on Render** (fastest path to working emails):
+
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your-gmail@gmail.com
+SMTP_PASS=abcd efgh ijkl mnop        # 16-char app password, spaces optional
+EMAIL_FROM=FPL Predictor <your-gmail@gmail.com>
+PUBLIC_BASE_URL=https://fpl-predictor-e0zz.onrender.com
+REQUIRE_EMAIL_VERIFICATION=true
+```
+
+After saving those env vars on Render, trigger a redeploy. New signups will
+need to click a verify link in their inbox; Forgot-password will send real
+reset emails.
 
 ### Persistent app settings (admin-tuned weights, team_id, etc.)
 
@@ -412,7 +442,30 @@ Key guarantees:
 - **Reset path** — `POST /api/admin/reset-weights` deletes the setting and
   reverts RAM back to the `config.py` defaults.
 
-#### Resend setup (5 minutes)
+#### Gmail SMTP setup (recommended — 5 minutes)
+
+Send from your own Gmail to **any** recipient with no domain or sandbox
+restrictions.
+
+1. Enable 2-step verification on your Google account (required for app passwords).
+2. Visit [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords),
+   create an app password called "FPL Predictor", copy the 16-character value.
+3. On Render → **Environment** → add:
+   - `SMTP_HOST` = `smtp.gmail.com`
+   - `SMTP_PORT` = `587`
+   - `SMTP_USER` = your Gmail address
+   - `SMTP_PASS` = the 16-char app password
+   - `EMAIL_FROM` = `FPL Predictor <your-gmail@gmail.com>`
+   - `PUBLIC_BASE_URL` = your Render URL (no trailing slash)
+   - `REQUIRE_EMAIL_VERIFICATION` = `true` (optional but recommended)
+4. Save → auto-redeploy. New signups will receive a verification email; the
+   "Forgot password" link will send a real reset email.
+
+> **Troubleshooting** — a Gmail `SMTPAuthenticationError` in the server log
+> almost always means the password is a login password instead of a 16-char app
+> password, or 2-step verification isn't enabled on the sending account.
+
+#### Resend setup (alternative — for bulk / custom-domain senders)
 1. Sign up at [resend.com](https://resend.com) — no credit card needed.
 2. Dashboard → **API Keys** → **Create API Key** → copy `re_xxx...`.
 3. (Optional) **Domains** → add and verify your domain so you can send from

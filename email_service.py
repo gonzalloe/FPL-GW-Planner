@@ -1,18 +1,34 @@
 ﻿"""
 FPL Predictor - Email Service
-Thin wrapper around Resend's HTTP API.
+Supports two delivery backends (tried in this priority order):
 
-Env vars:
-  RESEND_API_KEY   - Resend API key (https://resend.com)
-  EMAIL_FROM       - From address, e.g. "FPL Predictor <noreply@yourdomain.com>"
-                     (Defaults to Resend sandbox "onboarding@resend.dev" which
-                      only delivers to the account owner - fine for dev.)
-  PUBLIC_BASE_URL  - Public URL of the site (e.g. https://fpl-predictor-e0zz.onrender.com)
-                     Used to build verification / reset links.
+  1. Generic SMTP (recommended for Gmail / personal senders with no custom domain).
+     Enabled automatically when SMTP_HOST + SMTP_USER + SMTP_PASS are set.
 
-Behavior when RESEND_API_KEY is missing:
-  - Does NOT raise. Prints the link to stdout so local dev still works.
-  - Returns {"ok": False, "dev_mode": True, "link": "..."} so callers can surface it.
+  2. Resend HTTPS API (better for bulk / deliverability once you own a domain).
+     Enabled automatically when RESEND_API_KEY is set.
+
+  3. Dev-mode: neither configured --> prints the link to stdout and returns
+     {"ok": False, "dev_mode": True, "link": "..."}. Never raises.
+
+Env vars
+--------
+  # SMTP backend (Option B - Gmail etc.)
+  SMTP_HOST        smtp.gmail.com
+  SMTP_PORT        587 (STARTTLS) or 465 (implicit TLS)
+  SMTP_USER        your-gmail@gmail.com
+  SMTP_PASS        16-char Google App Password (https://myaccount.google.com/apppasswords)
+  SMTP_USE_SSL     optional, "1" to force implicit TLS (port 465). Default: autodetect.
+
+  # Resend backend (Option A)
+  RESEND_API_KEY   re_xxx... from https://resend.com
+
+  # Common
+  EMAIL_FROM       From address, e.g. "FPL Predictor <your-gmail@gmail.com>".
+                   Defaults to Resend sandbox "onboarding@resend.dev" (only
+                   delivers to the Resend account owner - dev-only).
+  PUBLIC_BASE_URL  Public URL of the site (e.g. https://fpl-predictor-e0zz.onrender.com)
+                   Used to build verification / reset links.
 """
 import os
 import json
@@ -91,6 +107,77 @@ def _wrap(inner):
     )
 
 
+def _send_via_smtp(to, subject, html, text=""):
+    """Send via generic SMTP (Gmail App Password etc.). Returns {ok,...}."""
+    host = _env("SMTP_HOST")
+    user = _env("SMTP_USER")
+    password = _env("SMTP_PASS")
+    if not (host and user and password):
+        return {"ok": False, "not_configured": True}
+
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+
+    sender = _env("EMAIL_FROM", user)
+    try:
+        port = int(_env("SMTP_PORT", "587"))
+    except ValueError:
+        port = 587
+
+    # Implicit-TLS on 465, STARTTLS on anything else (including the common 587).
+    use_ssl = _env("SMTP_USE_SSL", "").lower() in ("1", "true", "yes") or port == 465
+
+    msg = EmailMessage()
+    msg["From"] = sender
+    msg["To"] = to
+    msg["Subject"] = subject
+    # Plain-text fallback body first, then HTML alternative (RFC-compliant).
+    msg.set_content(text or "This email requires an HTML-capable client.")
+    msg.add_alternative(html, subtype="html")
+
+    ctx = ssl.create_default_context()
+    try:
+        if use_ssl:
+            with smtplib.SMTP_SSL(host, port, context=ctx, timeout=15) as smtp:
+                smtp.login(user, password)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(host, port, timeout=15) as smtp:
+                smtp.ehlo()
+                smtp.starttls(context=ctx)
+                smtp.ehlo()
+                smtp.login(user, password)
+                smtp.send_message(msg)
+        return {"ok": True, "backend": "smtp"}
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"  [EMAIL] SMTP auth failed ({host}:{port}): {e}")
+        return {"ok": False, "error": "SMTP auth failed. For Gmail, use a 16-char App Password, not your login password."}
+    except Exception as e:
+        print(f"  [EMAIL] SMTP send failed ({host}:{port}): {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def _dispatch(to, subject, html, text=""):
+    """Try SMTP first (if configured), then Resend, then dev-mode.
+    Guarantees a dict return with at least {"ok": bool}."""
+    # 1. SMTP
+    if _env("SMTP_HOST") and _env("SMTP_USER") and _env("SMTP_PASS"):
+        result = _send_via_smtp(to, subject, html, text)
+        # Only fall through on "not configured"; real failures surface as-is
+        # so the caller can log / surface them.
+        if not result.get("not_configured"):
+            return result
+
+    # 2. Resend
+    if _env("RESEND_API_KEY"):
+        return _send_via_resend(to, subject, html, text)
+
+    # 3. Dev-mode: no backend wired up. Don't raise; log + let caller surface the link.
+    print(f"  [EMAIL] No backend configured (SMTP_* or RESEND_API_KEY). Would send to {to}: {subject}")
+    return {"ok": False, "dev_mode": True}
+
+
 def send_verification_email(to_email, token):
     link = f"{get_public_base_url()}/verify-email?token={token}"
     html = _wrap(
@@ -100,7 +187,7 @@ def send_verification_email(to_email, token):
         f'<span style="color:#7fd4ff;">{link}</span></p>'
     )
     text = f"Verify your email: {link}"
-    result = _send_via_resend(to_email, "Verify your FPL Predictor account", html, text)
+    result = _dispatch(to_email, "Verify your FPL Predictor account", html, text)
     if not result.get("ok"):
         result["link"] = link
     return result
@@ -115,7 +202,7 @@ def send_password_reset_email(to_email, token):
         f'<span style="color:#7fd4ff;">{link}</span></p>'
     )
     text = f"Reset your password: {link}"
-    result = _send_via_resend(to_email, "Reset your FPL Predictor password", html, text)
+    result = _dispatch(to_email, "Reset your FPL Predictor password", html, text)
     if not result.get("ok"):
         result["link"] = link
     return result
