@@ -1,4 +1,4 @@
-# ⚽ FPL Predictor — AI-Powered Fantasy Premier League Optimizer
+﻿# ⚽ FPL Predictor — AI-Powered Fantasy Premier League Optimizer
 
 An intelligent prediction and squad optimization system for Fantasy Premier League. Features a **13-factor Poisson model**, real-time injury news, interactive **transfer simulator**, season-wide **chip planner**, **AI chat**, and a modern glassmorphism UI with light/dark theme.
 
@@ -235,6 +235,43 @@ falls back to `data/app_settings.json` — fine for local dev, but lost on Rende
 redeploys (same caveat as the old file).
 
 <!-- _PERSIST_README_PATCH_ -->
+
+#### What happens when an admin clicks *Apply* in Model Optimization
+
+```mermaid
+sequenceDiagram
+    participant Admin as Admin UI
+    participant Server as server.py
+    participant MO as model_optimizer.py
+    participant Store as Supabase app_settings<br/>(or data/app_settings.json)
+    participant Cfg as config.PREDICTION_WEIGHTS (RAM)
+
+    Admin->>Server: POST /api/admin/apply-weights
+    Server->>MO: apply_weight_adjustments(new_weights)
+    MO->>Store: set_setting("prediction_weights", merged) — persisted
+    MO->>Cfg: clear() + update(merged) — hot-swap, live immediately
+    MO-->>Server: True
+    Server-->>Admin: Applied ✓
+
+    Note over Server,Store: 💥 Server restart / Render redeploy
+
+    Server->>MO: load_saved_weights() (called on startup)
+    MO->>Store: get_setting("prediction_weights")
+    Store-->>MO: { previously-saved weights }
+    MO->>Cfg: update(saved) — admin tuning restored
+    Note over Cfg: xPts calculations keep using<br/>the admin-tuned weights ✓
+```
+
+Key guarantees:
+
+- **Persistence** — weights land in `app_settings` (or the JSON fallback) *before*
+  the API responds. No "eventually consistent" gap.
+- **Hot-swap** — `PREDICTION_WEIGHTS` is mutated in place, so every module that
+  `from config import PREDICTION_WEIGHTS` sees the new values without a restart.
+- **Restart recovery** — `server.py` calls `load_saved_weights()` during startup;
+  saved admin weights override the defaults baked into [`config.py`](config.py).
+- **Reset path** — `POST /api/admin/reset-weights` deletes the setting and
+  reverts RAM back to the `config.py` defaults.
 
 #### Resend setup (5 minutes)
 1. Sign up at [resend.com](https://resend.com) — no credit card needed.
