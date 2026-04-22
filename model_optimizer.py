@@ -313,35 +313,98 @@ def _grade_performance(mae: float, correlation: float) -> str:
         return "D (Needs Improvement)"
 
 
+# _PERSIST_PATCH_APPLIED_
 def apply_weight_adjustments(new_weights: Dict) -> bool:
-    """Apply new weights to config.py."""
+    """Persist new weights to Supabase (app_settings table) AND apply them to
+    the in-memory config so predictions immediately use them. Survives restart.
+
+    We deliberately do NOT rewrite config.py anymore — that was wiped on every
+    redeploy and was unsafe under concurrent admin edits.
+    """
     try:
-        with open('config.py', 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Find PREDICTION_WEIGHTS section
-        start = content.find('PREDICTION_WEIGHTS = {')
-        if start == -1:
+        import config as _config
+        from app_storage import set_setting
+
+        # 1) Sanitise: keep only keys the engine actually uses; coerce to float.
+        valid_keys = set(_config.PREDICTION_WEIGHTS.keys())
+        cleaned = {}
+        for k, v in (new_weights or {}).items():
+            if k in valid_keys:
+                try:
+                    cleaned[k] = float(v)
+                except (TypeError, ValueError):
+                    continue
+        if not cleaned:
+            print("[OPT] No valid weight keys in payload; nothing to apply.")
             return False
-        
-        end = content.find('}', start) + 1
-        
-        # Build new weights string
-        weights_str = "PREDICTION_WEIGHTS = {\n"
-        for key, value in new_weights.items():
-            comment = f"  # {key.replace('_', ' ').title()}"
-            weights_str += f'    "{key}": {value},{comment}\n'
-        weights_str += "}"
-        
-        # Replace
-        new_content = content[:start] + weights_str + content[end:]
-        
-        with open('config.py', 'w', encoding='utf-8') as f:
-            f.write(new_content)
-        
+
+        # Merge so any missing key keeps its current value
+        merged = dict(_config.PREDICTION_WEIGHTS)
+        merged.update(cleaned)
+
+        # 2) Persist first — if DB write fails we must NOT silently drift.
+        ok = set_setting("prediction_weights", merged)
+        if not ok:
+            print("[OPT] set_setting returned False; aborting in-memory update.")
+            return False
+
+        # 3) Mutate the live dict IN PLACE so all existing imports
+        #    (prediction_engine did `from config import PREDICTION_WEIGHTS`)
+        #    see the new values without needing importlib.reload.
+        _config.PREDICTION_WEIGHTS.clear()
+        _config.PREDICTION_WEIGHTS.update(merged)
+
+        # Keep prediction_engine module-level binding in sync too
+        try:
+            import prediction_engine as _pe
+            _pe.PREDICTION_WEIGHTS = _config.PREDICTION_WEIGHTS
+        except Exception:
+            pass
+
+        print(f"[OPT] Saved {len(merged)} weights to Supabase and hot-swapped in memory.")
         return True
     except Exception as e:
-        print(f"Error applying weights: {e}")
+        print(f"[OPT] apply_weight_adjustments failed: {e}")
+        return False
+
+
+def load_saved_weights() -> bool:
+    """Call once at app startup. Loads admin-tuned weights from Supabase
+    (if present) and overlays them on config.PREDICTION_WEIGHTS in memory.
+    Returns True if any saved weights were applied."""
+    try:
+        import config as _config
+        from app_storage import get_setting
+        saved = get_setting("prediction_weights", None)
+        if not isinstance(saved, dict) or not saved:
+            return False
+        valid_keys = set(_config.PREDICTION_WEIGHTS.keys())
+        applied = {k: float(v) for k, v in saved.items()
+                   if k in valid_keys and isinstance(v, (int, float))}
+        if not applied:
+            return False
+        _config.PREDICTION_WEIGHTS.update(applied)
+        try:
+            import prediction_engine as _pe
+            _pe.PREDICTION_WEIGHTS = _config.PREDICTION_WEIGHTS
+        except Exception:
+            pass
+        print(f"[OPT] Restored {len(applied)} admin-tuned weights from storage.")
+        return True
+    except Exception as e:
+        print(f"[OPT] load_saved_weights failed: {e}")
+        return False
+
+
+def reset_weights_to_defaults() -> bool:
+    """Admin action: wipe the saved override so the app reverts to config.py defaults
+    on next restart. Does NOT mutate RAM — restart clears it."""
+    try:
+        from app_storage import delete_setting
+        delete_setting("prediction_weights")
+        return True
+    except Exception as e:
+        print(f"[OPT] reset_weights_to_defaults failed: {e}")
         return False
 
 

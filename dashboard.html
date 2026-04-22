@@ -1517,7 +1517,7 @@ table tr:hover { background:var(--surface2); }
       <input type="email" id="auth-email" placeholder="Email" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;margin-bottom:10px;box-sizing:border-box;">
       <input type="password" id="auth-password" placeholder="Password" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;margin-bottom:16px;box-sizing:border-box;" onkeydown="if(event.key==='Enter')authLogin()">
       <button onclick="authLogin()" style="width:100%;padding:10px;border-radius:10px;background:linear-gradient(135deg,#00e676,#00bfa5);color:#000;border:none;font-weight:700;font-size:14px;cursor:pointer;margin-bottom:10px;">Log In</button>
-      <p style="color:var(--text3);font-size:12px;">Don't have an account? <a href="#" onclick="showRegister()" style="color:var(--accent);">Sign up free</a></p>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text3);margin-bottom:10px;"><a href="#" onclick="showForgot();return false;" style="color:var(--accent);text-decoration:none;">Forgot password?</a><a href="#" onclick="showRegister();return false;" style="color:var(--accent);text-decoration:none;">Sign up free</a></div><button id="auth-google-btn" onclick="authGoogle()" style="display:none;width:100%;padding:10px;border-radius:10px;background:#fff;color:#3c4043;border:1px solid #dadce0;font-weight:600;font-size:13px;cursor:pointer;margin-top:6px;"><span style="margin-right:8px;">G</span>Sign in with Google</button>
     </div>
     <div id="auth-form-register" style="display:none;">
       <input type="text" id="reg-name" placeholder="Name" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;margin-bottom:10px;box-sizing:border-box;">
@@ -1525,6 +1525,18 @@ table tr:hover { background:var(--surface2); }
       <input type="password" id="reg-password" placeholder="Password (6+ chars)" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;margin-bottom:16px;box-sizing:border-box;" onkeydown="if(event.key==='Enter')authRegister()">
       <button onclick="authRegister()" style="width:100%;padding:10px;border-radius:10px;background:linear-gradient(135deg,#42a5f5,#1e88e5);color:#fff;border:none;font-weight:700;font-size:14px;cursor:pointer;margin-bottom:10px;">Create Account</button>
       <p style="color:var(--text3);font-size:12px;">Already have an account? <a href="#" onclick="showLogin()" style="color:var(--accent);">Log in</a></p>
+    </div>
+    <div id="auth-form-forgot" style="display:none;">
+      <p style="color:var(--text3);font-size:12px;margin-bottom:12px;">Enter your email and we'll send you a link to reset your password.</p>
+      <input type="email" id="forgot-email" placeholder="Email" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;margin-bottom:16px;box-sizing:border-box;" onkeydown="if(event.key==='Enter')authForgot()">
+      <button onclick="authForgot()" style="width:100%;padding:10px;border-radius:10px;background:linear-gradient(135deg,#ffa726,#fb8c00);color:#000;border:none;font-weight:700;font-size:14px;cursor:pointer;margin-bottom:10px;">Send reset link</button>
+      <p style="color:var(--text3);font-size:12px;"><a href="#" onclick="showLogin();return false;" style="color:var(--accent);">Back to login</a></p>
+    </div>
+    <div id="auth-form-reset" style="display:none;">
+      <p style="color:var(--text3);font-size:12px;margin-bottom:12px;">Choose a new password for your account.</p>
+      <input type="password" id="reset-password-input" placeholder="New password (6+ chars)" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;margin-bottom:10px;box-sizing:border-box;">
+      <input type="password" id="reset-password-confirm" placeholder="Confirm new password" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;margin-bottom:16px;box-sizing:border-box;" onkeydown="if(event.key==='Enter')authReset()">
+      <button onclick="authReset()" style="width:100%;padding:10px;border-radius:10px;background:linear-gradient(135deg,#00e676,#00bfa5);color:#000;border:none;font-weight:700;font-size:14px;cursor:pointer;margin-bottom:10px;">Reset password</button>
     </div>
   </div>
 </div>
@@ -1612,12 +1624,16 @@ function hideAuthOverlay() {
 function showLogin() {
   document.getElementById('auth-form-login').style.display = '';
   document.getElementById('auth-form-register').style.display = 'none';
+  var f = document.getElementById('auth-form-forgot'); if (f) f.style.display = 'none';
+  var r = document.getElementById('auth-form-reset');  if (r) r.style.display = 'none';
   document.getElementById('auth-error').style.display = 'none';
 }
 
 function showRegister() {
   document.getElementById('auth-form-login').style.display = 'none';
   document.getElementById('auth-form-register').style.display = '';
+  var f = document.getElementById('auth-form-forgot'); if (f) f.style.display = 'none';
+  var r = document.getElementById('auth-form-reset');  if (r) r.style.display = 'none';
   document.getElementById('auth-error').style.display = 'none';
 }
 
@@ -1684,7 +1700,14 @@ async function authRegister() {
   try {
     const r = await fetch('/api/auth/register', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, password, name})});
     const d = await r.json();
-    if (d.ok) {
+    if (d.ok && d.needs_verification) {
+      showLogin();
+      const el = document.getElementById('auth-error');
+      el.style.color = 'var(--green, #00e676)';
+      el.style.background = 'rgba(0,230,118,.1)';
+      el.textContent = d.message || 'Check your email to verify your account before logging in.';
+      el.style.display = '';
+    } else if (d.ok) {
       AUTH_TOKEN = d.token;
       AUTH_USER = d.user;
       localStorage.setItem('fpl_auth_token', AUTH_TOKEN);
@@ -1695,6 +1718,115 @@ async function authRegister() {
     }
   } catch(e) { showAuthError('Connection error'); }
 }
+
+// _ALITE_UI_PATCH_ ── Forgot password / Verify email / Google OAuth ──
+function showForgot() {
+  document.getElementById('auth-form-login').style.display = 'none';
+  document.getElementById('auth-form-register').style.display = 'none';
+  document.getElementById('auth-form-forgot').style.display = '';
+  document.getElementById('auth-form-reset').style.display = 'none';
+  document.getElementById('auth-error').style.display = 'none';
+}
+
+function showReset() {
+  document.getElementById('auth-form-login').style.display = 'none';
+  document.getElementById('auth-form-register').style.display = 'none';
+  document.getElementById('auth-form-forgot').style.display = 'none';
+  document.getElementById('auth-form-reset').style.display = '';
+  document.getElementById('auth-error').style.display = 'none';
+}
+
+async function authForgot() {
+  const email = document.getElementById('forgot-email').value.trim();
+  if (!email) { showAuthError('Please enter your email'); return; }
+  try {
+    const r = await fetch('/api/auth/forgot-password', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email})
+    });
+    const d = await r.json();
+    showAuthError(d.message || 'If that account exists, a reset email was sent.');
+    const errEl = document.getElementById('auth-error');
+    errEl.style.color = 'var(--green, #00e676)';
+    errEl.style.background = 'rgba(0,230,118,.1)';
+  } catch(e) {
+    showAuthError('Connection error. Please try again.');
+  }
+}
+
+async function authReset() {
+  const pw = document.getElementById('reset-password-input').value;
+  const confirm = document.getElementById('reset-password-confirm').value;
+  if (!pw || pw.length < 6) { showAuthError('Password must be at least 6 characters'); return; }
+  if (pw !== confirm) { showAuthError('Passwords do not match'); return; }
+  const token = window.__RESET_TOKEN__ || new URLSearchParams(location.search).get('token');
+  if (!token) { showAuthError('Missing reset token. Please request a new link.'); return; }
+  try {
+    const r = await fetch('/api/auth/reset-password', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token, password: pw})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      AUTH_TOKEN = d.token;
+      AUTH_USER = d.user;
+      localStorage.setItem('fpl_auth_token', AUTH_TOKEN);
+      // Strip ?token= from URL without reloading
+      history.replaceState(null, '', '/');
+      hideAuthOverlay();
+      onAuthSuccess();
+    } else {
+      showAuthError(d.error || 'Reset failed. The link may be expired.');
+    }
+  } catch(e) { showAuthError('Connection error'); }
+}
+
+async function authVerifyEmailFromURL(token) {
+  try {
+    const r = await fetch('/api/auth/verify-email', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      AUTH_TOKEN = d.token;
+      AUTH_USER = d.user;
+      localStorage.setItem('fpl_auth_token', AUTH_TOKEN);
+      history.replaceState(null, '', '/');
+      hideAuthOverlay();
+      onAuthSuccess();
+    } else {
+      showAuthOverlay();
+      showAuthError(d.error || 'Verification failed. The link may be expired.');
+    }
+  } catch(e) {
+    showAuthOverlay();
+    showAuthError('Verification failed. Please try again.');
+  }
+}
+
+function authGoogle() {
+  // Triggers the full OAuth redirect flow (server routes handle the rest).
+  location.href = '/api/auth/google/login';
+}
+
+// On page load, detect password-reset / email-verification URLs.
+(function handleAuthLandingRoutes() {
+  const path = location.pathname;
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token');
+  if (path === '/reset-password' && token) {
+    window.__RESET_TOKEN__ = token;
+    showAuthOverlay();
+    showReset();
+  } else if (path === '/verify-email' && token) {
+    showAuthOverlay();
+    authVerifyEmailFromURL(token);
+  }
+})();
 
 function authLogout() {
   AUTH_TOKEN = '';

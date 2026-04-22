@@ -116,6 +116,10 @@ PLANS = {
 }
 
 SESSION_TTL = 30 * 24 * 3600  # 30 days
+VERIFICATION_TTL = 7 * 24 * 3600  # 7 days for email verification link
+RESET_TTL = 60 * 60  # 1 hour for password reset link
+REQUIRE_EMAIL_VERIFICATION = os.environ.get("REQUIRE_EMAIL_VERIFICATION", "false").lower() in ("1", "true", "yes")
+# _ALITE_PATCH_APPLIED_
 
 # Rate limiting: track failed login attempts per email
 _login_attempts = {}  # {email: {"count": int, "lockout_until": float}}
@@ -233,6 +237,7 @@ def register(email: str, password: str, name: str = "") -> dict:
         return {"error": "Email already registered"}
 
     hashed, salt = _hash_password(password)
+    needs_verify = REQUIRE_EMAIL_VERIFICATION
     user = {
         "email": email,
         "name": name or email.split("@")[0],
@@ -246,10 +251,35 @@ def register(email: str, password: str, name: str = "") -> dict:
         "chat_date": None,
         "stripe_customer_id": None,
         "stripe_subscription_id": None,
+        "email_verified": (not needs_verify),
+        "verification_token": None,
+        "verification_token_expires": None,
+        "reset_token": None,
+        "reset_token_expires": None,
+        "oauth_provider": None,
     }
     users[email] = user
-    _save_users(users)
 
+    # If verification required, generate token and send email. Do NOT auto-login.
+    if needs_verify:
+        vtoken = secrets.token_urlsafe(32)
+        user["verification_token"] = vtoken
+        user["verification_token_expires"] = time.time() + VERIFICATION_TTL
+        users[email] = user
+        _save_users(users)
+        try:
+            from email_service import send_verification_email
+            send_verification_email(email, vtoken)
+        except Exception as e:
+            print(f"  [AUTH] send_verification_email failed: {e}")
+        return {
+            "ok": True,
+            "needs_verification": True,
+            "message": "Check your email to verify your account before logging in.",
+            "user": _public_user(user),
+        }
+
+    _save_users(users)
     token = _create_session(email)
     return {
         "ok": True,
@@ -273,6 +303,10 @@ def login(email: str, password: str) -> dict:
     if not user:
         return {"error": "Email not found"}
 
+    # OAuth-only accounts (e.g. Google) have no password_hash
+    if not user.get("password_hash"):
+        return {"error": "This account uses social sign-in. Please use the Google button."}
+
     hashed, _ = _hash_password(password, user["salt"])
     if hashed != user["password_hash"]:
         # Track failed attempt
@@ -282,6 +316,13 @@ def login(email: str, password: str) -> dict:
             attempt["count"] = 0
         _login_attempts[email] = attempt
         return {"error": "Incorrect password"}
+
+    # Block login if verification is still pending (explicitly False)
+    if user.get("email_verified") is False:
+        return {
+            "error": "Please verify your email first. Check your inbox for the verification link.",
+            "needs_verification": True,
+        }
 
     # Login successful — reset rate limit
     _login_attempts.pop(email, None)
@@ -569,3 +610,174 @@ def admin_delete_user(admin_email: str, target_email: str) -> dict:
     del users[target_email]
     _save_users(users)
     return {"ok": True, "message": f"Deleted {target_email}"}
+
+
+
+# ──────────────────────────────────────────────────────────
+# Email verification
+# ──────────────────────────────────────────────────────────
+
+def verify_email_with_token(token: str) -> dict:
+    """Mark a user as verified given a valid, unexpired verification token."""
+    if not token:
+        return {"error": "Missing token"}
+    users = _load_users()
+    now = time.time()
+    for email, user in users.items():
+        if user.get("verification_token") == token:
+            exp = user.get("verification_token_expires") or 0
+            if now > exp:
+                return {"error": "Verification link expired. Please request a new one."}
+            user["email_verified"] = True
+            user["verification_token"] = None
+            user["verification_token_expires"] = None
+            users[email] = user
+            _save_users(users)
+            # Auto-login after verification for convenience
+            sess_token = _create_session(email)
+            return {
+                "ok": True,
+                "token": sess_token,
+                "user": _public_user(user),
+                "message": "Email verified. You are now logged in.",
+            }
+    return {"error": "Invalid or already-used verification token"}
+
+
+def resend_verification_email(email: str) -> dict:
+    """Generate a fresh verification token and email it to the user."""
+    email = (email or "").strip().lower()
+    users = _load_users()
+    user = users.get(email)
+    if not user:
+        # Do not leak which emails exist
+        return {"ok": True, "message": "If that account exists, a verification email was sent."}
+    if user.get("email_verified"):
+        return {"ok": True, "message": "Account is already verified. You can log in."}
+
+    vtoken = secrets.token_urlsafe(32)
+    user["verification_token"] = vtoken
+    user["verification_token_expires"] = time.time() + VERIFICATION_TTL
+    users[email] = user
+    _save_users(users)
+    try:
+        from email_service import send_verification_email
+        send_verification_email(email, vtoken)
+    except Exception as e:
+        print(f"  [AUTH] resend verification failed: {e}")
+        return {"error": "Failed to send email. Please try again later."}
+    return {"ok": True, "message": "Verification email sent. Please check your inbox."}
+
+
+# ──────────────────────────────────────────────────────────
+# Password reset
+# ──────────────────────────────────────────────────────────
+
+def request_password_reset(email: str) -> dict:
+    """Generate a reset token and email it. Always returns ok (no enumeration)."""
+    email = (email or "").strip().lower()
+    users = _load_users()
+    user = users.get(email)
+    # Silently succeed even if user does not exist — do not leak account presence
+    if user and user.get("password_hash"):
+        rtoken = secrets.token_urlsafe(32)
+        user["reset_token"] = rtoken
+        user["reset_token_expires"] = time.time() + RESET_TTL
+        users[email] = user
+        _save_users(users)
+        try:
+            from email_service import send_password_reset_email
+            send_password_reset_email(email, rtoken)
+        except Exception as e:
+            print(f"  [AUTH] send_password_reset_email failed: {e}")
+    return {"ok": True, "message": "If that account exists, a reset email was sent."}
+
+
+def reset_password_with_token(token: str, new_password: str) -> dict:
+    """Set a new password given a valid, unexpired reset token."""
+    if not token:
+        return {"error": "Missing token"}
+    if not new_password or len(new_password) < 6:
+        return {"error": "Password must be at least 6 characters"}
+    users = _load_users()
+    now = time.time()
+    for email, user in users.items():
+        if user.get("reset_token") == token:
+            exp = user.get("reset_token_expires") or 0
+            if now > exp:
+                return {"error": "Reset link expired. Please request a new one."}
+            hashed, salt = _hash_password(new_password)
+            user["password_hash"] = hashed
+            user["salt"] = salt
+            user["reset_token"] = None
+            user["reset_token_expires"] = None
+            # A successful reset also implies the email is reachable → mark verified
+            user["email_verified"] = True
+            users[email] = user
+            _save_users(users)
+            # Invalidate all existing sessions for safety
+            sessions = _load_sessions()
+            dirty = False
+            for tk, sess in list(sessions.items()):
+                if sess.get("email") == email:
+                    del sessions[tk]
+                    dirty = True
+            if dirty:
+                _save_sessions(sessions)
+            # Issue a fresh session so the user is logged in immediately
+            sess_token = _create_session(email)
+            return {
+                "ok": True,
+                "token": sess_token,
+                "user": _public_user(user),
+                "message": "Password reset successfully.",
+            }
+    return {"error": "Invalid or expired reset token"}
+
+
+# ──────────────────────────────────────────────────────────
+# OAuth (Google) — integration point for future Supabase OAuth
+# ──────────────────────────────────────────────────────────
+
+def upsert_oauth_user(email: str, name: str = "", provider: str = "google") -> dict:
+    """Create or update a user based on a verified OAuth identity.
+    Called by the Google OAuth callback once Supabase has verified the identity.
+    Returns {ok, token, user}."""
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        return {"error": "Invalid email from provider"}
+
+    users = _load_users()
+    user = users.get(email)
+    if user is None:
+        user = {
+            "email": email,
+            "name": name or email.split("@")[0],
+            "password_hash": None,  # OAuth-only account
+            "salt": None,
+            "plan": "free",
+            "plan_expires": None,
+            "created_at": datetime.now().isoformat(),
+            "team_id": None,
+            "chat_count_today": 0,
+            "chat_date": None,
+            "stripe_customer_id": None,
+            "stripe_subscription_id": None,
+            "email_verified": True,  # Provider has already verified
+            "verification_token": None,
+            "verification_token_expires": None,
+            "reset_token": None,
+            "reset_token_expires": None,
+            "oauth_provider": provider,
+        }
+    else:
+        # Existing local account → link OAuth provider (do NOT wipe password)
+        user["email_verified"] = True
+        user["oauth_provider"] = user.get("oauth_provider") or provider
+        if name and not user.get("name"):
+            user["name"] = name
+    users[email] = user
+    _save_users(users)
+
+    token = _create_session(email)
+    return {"ok": True, "token": token, "user": _public_user(user)}

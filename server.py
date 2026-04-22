@@ -24,7 +24,7 @@ sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 sys.path.insert(0, str(Path(__file__).parent))
 
-from flask import Flask, request, jsonify, send_from_directory, make_response
+from flask import Flask, request, jsonify, send_from_directory, make_response, redirect
 
 # Rate limiting — graceful fallback if flask-limiter not installed
 try:
@@ -120,17 +120,56 @@ def invalidate_cache(prefix: str = ""):
 
 _settings_lock = threading.Lock()
 
+# _SERVER_PERSIST_PATCH_
+# user_settings (e.g. team_id) persisted via app_storage so they survive
+# container restarts on Render. Falls back to the old local file when
+# Supabase isn't configured. On first read after migration we also pull
+# any pre-existing user_settings.json to seed the store.
 def _load_settings():
     with _settings_lock:
-        if SETTINGS_FILE.exists():
-            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-        return {}
+        try:
+            from app_storage import get_setting, set_setting
+            data = get_setting("user_settings", None)
+            if data is None and SETTINGS_FILE.exists():
+                # One-time migration: seed storage with the legacy file contents
+                try:
+                    data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+                    if data:
+                        set_setting("user_settings", data)
+                        print("  [SETTINGS] Migrated legacy user_settings.json to app_storage.")
+                except Exception as e:
+                    print(f"  [SETTINGS] Legacy migration read failed: {e}")
+            return data or {}
+        except Exception as e:
+            print(f"  [SETTINGS] _load_settings fallback to file: {e}")
+            if SETTINGS_FILE.exists():
+                return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            return {}
 
 def _save_settings(data):
     with _settings_lock:
-        tmp = SETTINGS_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(SETTINGS_FILE)
+        try:
+            from app_storage import set_setting
+            set_setting("user_settings", data)
+        except Exception as e:
+            print(f"  [SETTINGS] _save_settings storage write failed: {e}")
+        # Always also mirror to disk as an emergency backup (best-effort)
+        try:
+            tmp = SETTINGS_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(SETTINGS_FILE)
+        except Exception:
+            pass
+
+# Load any admin-tuned weights from persistent storage on startup.
+# This must happen BEFORE the first _run_predictions so the background
+# refresh thread picks them up.
+try:
+    from model_optimizer import load_saved_weights as _load_saved_weights
+    _load_saved_weights()
+except Exception as _e:
+    print(f"  [STARTUP] load_saved_weights skipped: {_e}")
+
 
 def _run_predictions(gw=None):
     from prediction_engine import PredictionEngine
@@ -426,6 +465,147 @@ def api_auth_me():
     if user:
         return jsonify({"ok": True, "user": user})
     return jsonify({"error": "Not authenticated"}), 401
+
+
+# ── A1-lite auth endpoints (email verification, password reset, OAuth callback) ──
+# _ALITE_SERVER_PATCH_
+
+@app.route("/api/auth/forgot-password", methods=["POST"])
+@limiter.limit("3 per minute")
+def api_auth_forgot_password():
+    """Send a password reset email. Always returns ok (no account enumeration)."""
+    from auth import request_password_reset
+    data = request.get_json(silent=True) or {}
+    result = request_password_reset(data.get("email", ""))
+    return jsonify(result), 200
+
+
+@app.route("/api/auth/reset-password", methods=["POST"])
+@limiter.limit("5 per minute")
+def api_auth_reset_password():
+    """Set a new password using a valid reset token."""
+    from auth import reset_password_with_token
+    data = request.get_json(silent=True) or {}
+    result = reset_password_with_token(
+        data.get("token", ""),
+        data.get("password", ""),
+    )
+    return jsonify(result), 200 if result.get("ok") else 400
+
+
+@app.route("/api/auth/verify-email", methods=["POST"])
+@limiter.limit("10 per minute")
+def api_auth_verify_email():
+    """Mark the user's email as verified given a valid token."""
+    from auth import verify_email_with_token
+    data = request.get_json(silent=True) or {}
+    result = verify_email_with_token(data.get("token", ""))
+    return jsonify(result), 200 if result.get("ok") else 400
+
+
+@app.route("/api/auth/resend-verification", methods=["POST"])
+@limiter.limit("3 per minute")
+def api_auth_resend_verification():
+    from auth import resend_verification_email
+    data = request.get_json(silent=True) or {}
+    result = resend_verification_email(data.get("email", ""))
+    return jsonify(result), 200
+
+
+@app.route("/verify-email")
+def page_verify_email():
+    """Landing page the user hits after clicking the verification link in their email.
+    The token is in the query string; we hand it to the dashboard which calls
+    /api/auth/verify-email via JS to complete the flow."""
+    return send_from_directory(str(BASE_DIR), "dashboard.html")
+
+
+@app.route("/reset-password")
+def page_reset_password():
+    """Landing page for password reset. Dashboard.html reads ?token=... from URL."""
+    return send_from_directory(str(BASE_DIR), "dashboard.html")
+
+
+# ── Google OAuth (optional — disabled unless GOOGLE_OAUTH_ENABLED=true) ──
+# This is a STUB wired to Supabase Auth's Google provider. To enable:
+#   1. In Supabase Dashboard → Authentication → Providers → enable Google
+#      and fill in your Google Client ID + Secret.
+#   2. In Google Cloud Console → OAuth consent screen + credentials.
+#   3. Add your site URL to "Authorized redirect URIs":
+#        https://<your-domain>/api/auth/google/callback
+#   4. Set env var GOOGLE_OAUTH_ENABLED=true on Render.
+#   5. The frontend "Sign in with Google" button calls /api/auth/google/login
+#      which bounces to Supabase, which bounces to Google, which bounces back here.
+
+@app.route("/api/auth/google/login")
+def api_auth_google_login():
+    """Kick off Google OAuth flow via Supabase Auth."""
+    if os.environ.get("GOOGLE_OAUTH_ENABLED", "").lower() not in ("1", "true", "yes"):
+        return jsonify({"error": "Google sign-in is not enabled on this deployment."}), 503
+    sb_url = os.environ.get("SUPABASE_URL", "").strip()
+    if not sb_url:
+        return jsonify({"error": "Supabase not configured"}), 503
+    # Supabase hosted authorization endpoint — redirects to Google, then back to our callback
+    redirect_to = request.host_url.rstrip("/") + "/api/auth/google/callback"
+    return redirect(f"{sb_url}/auth/v1/authorize?provider=google&redirect_to={redirect_to}")
+
+
+@app.route("/api/auth/google/callback")
+def api_auth_google_callback():
+    """Receive the authenticated identity from Supabase and mint our own session.
+    Supabase returns the user info via URL fragment, so this page runs a tiny JS
+    snippet that posts the access_token back to /api/auth/google/exchange."""
+    return (
+        "<!doctype html><meta charset=utf-8><title>Signing in…</title>"
+        "<body style=\"font-family:sans-serif;background:#0f1222;color:#e7e9ef;"
+        "display:flex;align-items:center;justify-content:center;height:100vh;\">"
+        "<div>Finishing sign-in…</div>"
+        "<script>(async()=>{"
+        "const h=new URLSearchParams(location.hash.slice(1));"
+        "const at=h.get('access_token');"
+        "if(!at){document.body.innerText='Missing access_token';return;}"
+        "const r=await fetch('/api/auth/google/exchange',{method:'POST',"
+        "headers:{'Content-Type':'application/json'},"
+        "body:JSON.stringify({access_token:at})});"
+        "const d=await r.json();"
+        "if(d.ok){localStorage.setItem('fpl_auth_token',d.token);location.href='/';}"
+        "else{document.body.innerText=d.error||'Sign-in failed';}"
+        "})();</script></body>"
+    )
+
+
+@app.route("/api/auth/google/exchange", methods=["POST"])
+@limiter.limit("10 per minute")
+def api_auth_google_exchange():
+    """Verify the Supabase access_token with Supabase, then create our session."""
+    if os.environ.get("GOOGLE_OAUTH_ENABLED", "").lower() not in ("1", "true", "yes"):
+        return jsonify({"error": "Google sign-in is not enabled."}), 503
+    data = request.get_json(silent=True) or {}
+    at = (data.get("access_token") or "").strip()
+    if not at:
+        return jsonify({"error": "Missing access_token"}), 400
+    sb_url = os.environ.get("SUPABASE_URL", "").strip()
+    sb_key = os.environ.get("SUPABASE_KEY", "").strip()
+    if not (sb_url and sb_key):
+        return jsonify({"error": "Supabase not configured"}), 503
+    try:
+        import urllib.request, json as _json
+        req = urllib.request.Request(
+            f"{sb_url}/auth/v1/user",
+            headers={"apikey": sb_key, "Authorization": f"Bearer {at}"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            profile = _json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        print(f"  [AUTH] Google exchange failed: {e}")
+        return jsonify({"error": "Could not verify identity with Supabase"}), 401
+    email = (profile.get("email") or "").strip().lower()
+    name = (profile.get("user_metadata") or {}).get("full_name") or ""
+    if not email:
+        return jsonify({"error": "Provider did not return an email"}), 400
+    from auth import upsert_oauth_user
+    return jsonify(upsert_oauth_user(email, name=name, provider="google")), 200
+
 
 
 # ── Predictions ──
@@ -1172,14 +1352,11 @@ def api_admin_apply_weights():
         return jsonify({"error": "No weights provided"}), 400
     success = apply_weight_adjustments(weights)
     if not success:
-        return jsonify({"ok": False, "message": "Failed to write weights to config.py"})
-    
-    # Hot-reload config and regenerate predictions so new xPts show immediately
+        return jsonify({"ok": False, "message": "Failed to persist weights (storage error)"})
+
+    # Weights are already hot-swapped in memory by apply_weight_adjustments.
+    # Kick off a threaded prediction regen so the new xPts appear ASAP.
     try:
-        import importlib, config, prediction_engine
-        importlib.reload(config)
-        importlib.reload(prediction_engine)
-        # Threaded regen so request returns quickly
         def _regen():
             try:
                 _run_predictions()
@@ -1214,6 +1391,23 @@ def api_reset_accounts():
     _save_users({}); _save_sessions({})
     _auto_setup_accounts()
     return jsonify({"ok": True, "message": "Reset done"})
+
+
+@app.route("/api/admin/reset-weights", methods=["POST"])
+def api_admin_reset_weights():
+    """Admin: Remove persisted weight override so the app uses config.py defaults
+    again on next restart. The currently-running process keeps its in-memory
+    weights until restart (safer - avoids surprise xPts jumps mid-session)."""
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
+    from model_optimizer import reset_weights_to_defaults
+    ok = reset_weights_to_defaults()
+    return jsonify({
+        "ok": ok,
+        "message": "Saved weight override cleared. Defaults will apply after the next restart."
+            if ok else "Failed to clear weight override."
+    })
 
 
 # ── Health & Monitoring ──

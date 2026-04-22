@@ -144,9 +144,16 @@ fpl-predictor/
 ### Auth Endpoints
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/auth/register` | POST | Create account |
+| `/api/auth/register` | POST | Create account (honours `REQUIRE_EMAIL_VERIFICATION`) |
 | `/api/auth/login` | POST | Get session token |
 | `/api/auth/me` | POST | Validate token |
+| `/api/auth/forgot-password` | POST | Send a password-reset email |
+| `/api/auth/reset-password` | POST | Set a new password with a reset token |
+| `/api/auth/verify-email` | POST | Mark an account verified with a token |
+| `/api/auth/resend-verification` | POST | Resend the verification email |
+| `/api/auth/google/login` | GET | Start Google OAuth flow (if enabled) |
+| `/api/auth/google/callback` | GET | OAuth return landing |
+| `/api/auth/google/exchange` | POST | Swap Supabase access_token for a session |
 | `/api/stripe/create-checkout` | POST | Start Stripe checkout |
 | `/api/stripe/webhook` | POST | Stripe webhook |
 
@@ -172,6 +179,134 @@ fpl-predictor/
 | `/api/admin/apply-weights` | POST | Apply new weights + regen |
 | `/api/run` | GET | Trigger prediction run (admin only) |
 | `/api/refresh` | GET | Trigger data refresh (admin only) |
+
+---
+
+## 🔐 Authentication Setup
+
+The app ships with a light-weight auth layer ("A1-lite"): PBKDF2 password hashing,
+Supabase-backed user storage, optional email verification, password reset, and an
+opt-in Google sign-in button. No heavyweight identity provider required.
+
+### Required env vars (already set for Supabase storage)
+| Key | Description |
+|-----|-------------|
+| `SUPABASE_URL` | Your Supabase project URL |
+| `SUPABASE_KEY` | Service role secret key (server-side only) |
+
+### Optional email features (Resend)
+
+Used for "Forgot password" and "Verify email" links. Without these, the app still
+runs — reset/verify links are printed to the server log instead of emailed.
+
+| Key | Description |
+|-----|-------------|
+| `RESEND_API_KEY` | Get one free at [resend.com](https://resend.com) (100 emails/day) |
+| `EMAIL_FROM` | e.g. `FPL Predictor <noreply@yourdomain.com>` — defaults to Resend's sandbox `onboarding@resend.dev` (can only deliver to the Resend account owner in dev mode) |
+| `PUBLIC_BASE_URL` | Public site URL, e.g. `https://fpl-predictor-e0zz.onrender.com` (falls back to `RENDER_EXTERNAL_URL` which Render injects automatically) |
+| `REQUIRE_EMAIL_VERIFICATION` | `true` to force new signups to verify before first login. Default `false` (existing users unaffected). |
+
+### Persistent app settings (admin-tuned weights, team_id, etc.)
+
+The app keeps a small generic key-value store in Supabase so things like
+**admin-tuned model weights** and the **FPL team ID** survive container restarts
+on Render (whose filesystem is ephemeral).
+
+Create this table once, in Supabase *SQL editor*:
+
+```sql
+create table if not exists app_settings (
+    key         text primary key,
+    value       jsonb not null,
+    updated_at  timestamptz default now()
+);
+-- Service role bypasses RLS, so no policies required for server-side writes.
+```
+
+What gets stored:
+
+| Key | Source | Purpose |
+|-----|--------|---------|
+| `prediction_weights` | Admin → Model Analysis → *Apply weights* | Hot-swapped in memory AND reloaded at startup — predictions survive restart |
+| `user_settings` | Admin → *Import team ID* | Replaces the old `user_settings.json` local file |
+
+If `SUPABASE_URL` / `SUPABASE_KEY` are **not** set, the store automatically
+falls back to `data/app_settings.json` — fine for local dev, but lost on Render
+redeploys (same caveat as the old file).
+
+<!-- _PERSIST_README_PATCH_ -->
+
+#### Resend setup (5 minutes)
+1. Sign up at [resend.com](https://resend.com) — no credit card needed.
+2. Dashboard → **API Keys** → **Create API Key** → copy `re_xxx...`.
+3. (Optional) **Domains** → add and verify your domain so you can send from
+   `noreply@yourdomain.com`. Until you verify a domain, Resend only delivers to
+   *your own* account email (sandbox mode) — perfectly fine for testing.
+4. On Render → **Environment** → add `RESEND_API_KEY` (and optionally `EMAIL_FROM`,
+   `PUBLIC_BASE_URL`). Save → auto-redeploy.
+
+### Google Sign-In (optional, opt-in)
+
+Powered by Supabase's built-in Google OAuth provider — no Google client libraries
+needed in the app itself. Steps:
+
+1. **Google Cloud Console**
+   - Create a project (or reuse one).
+   - *APIs & Services → OAuth consent screen* → fill in the basics (external, test
+     users = your email while unpublished).
+   - *Credentials → Create Credentials → OAuth Client ID* → **Web application**.
+   - **Authorised redirect URIs** — add exactly this (Supabase handles Google's
+     side of the redirect):
+     ```
+     https://<your-project-ref>.supabase.co/auth/v1/callback
+     ```
+   - Save and copy the **Client ID** and **Client Secret**.
+
+2. **Supabase Dashboard**
+   - *Authentication → Providers → Google* → toggle **Enabled**.
+   - Paste the **Client ID** and **Client Secret** from step 1.
+   - Under *Authentication → URL Configuration*, add your site URL
+     (`https://fpl-predictor-e0zz.onrender.com`) to **Site URL** and to
+     **Additional Redirect URLs** add:
+     ```
+     https://fpl-predictor-e0zz.onrender.com/api/auth/google/callback
+     ```
+   - Save.
+
+3. **Render env vars**
+   - `GOOGLE_OAUTH_ENABLED` = `true`
+   - (No client ID/secret needed on our side — Supabase handles the exchange.)
+   - Save → auto-redeploy.
+
+4. **Show the button on the frontend**
+   - The "Sign in with Google" button is already rendered but hidden by default
+     (`display:none`). To reveal it, either:
+     - Edit `dashboard.html` and change `id="auth-google-btn"` style to
+       `display:block`, **or**
+     - Add a tiny feature-flag endpoint to your server and toggle the button
+       from JS based on its response. (Left as a one-line follow-up.)
+
+5. **How the flow works** (just so you know what's happening):
+   ```
+   User clicks "Sign in with Google"
+        │
+        ▼
+   GET /api/auth/google/login
+        │  (redirects to)
+        ▼
+   https://<ref>.supabase.co/auth/v1/authorize?provider=google&redirect_to=…
+        │  (Supabase → Google → Supabase)
+        ▼
+   GET /api/auth/google/callback  (our page, parses #access_token from URL)
+        │  (JS posts token to)
+        ▼
+   POST /api/auth/google/exchange
+        │  (server calls Supabase /auth/v1/user to verify, then upsert_oauth_user)
+        ▼
+   Returns our own session token → user is logged in.
+   ```
+
+<!-- _ALITE_README_PATCH_ -->
 
 ---
 
