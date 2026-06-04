@@ -515,16 +515,35 @@ def build_fpl_context():
                 context += f"{name}|{team}|{pos}|£{price}m|{xpts}xPts\n"
 
         # Captain pick
-        captain = predictions.get('captain_pick') or (top_players[0] if top_players else None)
+        captain = predictions.get('top_picks', [])
         if captain:
-            context += f"\nRECOMMENDED CAPTAIN: {captain.get('name')} "
-            context += f"(xPts: {captain.get('predicted_points')}, "
-            context += f"£{captain.get('price')}m, {captain.get('team')})\n"
+            top_captain = captain[0] if captain else None
+            if top_captain:
+                context += f"\nRECOMMENDED CAPTAIN: {top_captain.get('name')} "
+                context += f"(xPts: {top_captain.get('predicted_points')}, "
+                context += f"£{top_captain.get('price')}m, {top_captain.get('team')})\n"
 
-        # Best chip
-        chip = predictions.get('best_chip')
-        if chip:
-            context += f"\nBEST CHIP THIS GW: {chip}\n"
+        # Chip analysis
+        chip_analysis = predictions.get('chip_analysis', {})
+        if chip_analysis:
+            context += "\nCHIP ANALYSIS:\n"
+            for chip_name, chip_data in chip_analysis.items():
+                if isinstance(chip_data, dict):
+                    score = chip_data.get('score', '?')
+                    rec   = chip_data.get('recommendation', chip_data.get('advice', '?'))
+                    reason = chip_data.get('reason', chip_data.get('reasons', ''))
+                    context += f"  {chip_name}: score={score} | {rec} | {reason}\n"
+                elif isinstance(chip_data, str):
+                    context += f"  {chip_name}: {chip_data}\n"
+
+        # GW info
+        gw_info = predictions.get('gw_info', {})
+        if gw_info:
+            context += f"\nGW INFO:\n"
+            context += f"  Gameweek: {gw_info.get('current_gw', '?')}\n"
+            context += f"  Is DGW: {gw_info.get('is_dgw', False)}\n"
+            context += f"  Is BGW: {gw_info.get('is_bgw', False)}\n"
+                    context += f"\nBEST CHIP THIS GW: {chip}\n"
 
         # Top transfers in
         transfers_in = predictions.get('top_transfers_in', [])[:5]
@@ -532,14 +551,6 @@ def build_fpl_context():
             context += "\nTOP TRANSFERS IN THIS GW:\n"
             for t in transfers_in:
                 context += f"  - {t.get('name')} ({t.get('team')}) £{t.get('price')}m\n"
-
-        # Add chip analysis
-        chip_analysis = predictions.get('chip_analysis', {})
-        if chip_analysis:
-            context += "\nCHIP ANALYSIS:\n"
-            for chip_name, chip_data in chip_analysis.items():
-                if isinstance(chip_data, dict):
-                    context += f"  {chip_name}: score={chip_data.get('score','?')} recommendation={chip_data.get('recommendation','?')}\n"
 
         return context
 
