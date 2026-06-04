@@ -120,6 +120,102 @@ body, .sidebar, .card, .stat-box, .chip-card, input, select, button, .filter-btn
 @keyframes spin-slow { to { transform:rotate(360deg); } }
 .sidebar-logo small { color:var(--text3); font-size:11px; letter-spacing:.5px; text-transform:uppercase; }
 
+/* ── Hamburger & Mobile Sidebar ── */
+.hamburger-btn {
+  display: none;                        /* hidden on desktop */
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 1100;
+  width: 44px;
+  height: 44px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  box-shadow: var(--shadow);
+  transition: var(--transition);
+}
+
+.hamburger-btn:hover {
+  background: var(--surface3);
+  border-color: var(--accent);
+}
+
+.hamburger-btn span {
+  display: block;
+  width: 22px;
+  height: 2px;
+  background: var(--text);
+  border-radius: 2px;
+  transition: var(--transition);
+}
+
+/* Animate to X when sidebar is open */
+.hamburger-btn.is-open span:nth-child(1) {
+  transform: translateY(7px) rotate(45deg);
+}
+.hamburger-btn.is-open span:nth-child(2) {
+  opacity: 0;
+  transform: scaleX(0);
+}
+.hamburger-btn.is-open span:nth-child(3) {
+  transform: translateY(-7px) rotate(-45deg);
+}
+
+/* Dark overlay behind the sidebar */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 999;
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.sidebar-overlay.is-visible {
+  opacity: 1;
+}
+
+/* ── Mobile breakpoint ── */
+@media (max-width: 768px) {
+  /* Show the hamburger */
+  .hamburger-btn {
+    display: flex;
+  }
+  /* Push the sidebar off-screen by default */
+  .sidebar {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow-y: auto;
+  }
+  /* Slide in when open */
+  .sidebar.is-open {
+    transform: translateX(0);
+  }
+  /* Show the overlay when sidebar is open */
+  .sidebar-overlay.is-visible {
+    display: block;
+  }
+  /* Main content takes full width */
+  .main {
+    margin-left: 0 !important;
+    width: 100% !important;
+    padding-top: 70px; /* space for the hamburger button */
+  }
+}
+
 .nav-item {
   display:flex; align-items:center; gap:10px;
   padding:11px 20px; color:var(--text2); cursor:pointer;
@@ -1004,6 +1100,16 @@ table tr:hover { background:var(--surface2); }
 </style>
 </head>
 <body>
+
+<!-- Hamburger button – only shows on mobile -->
+<button class="hamburger-btn" id="hamburgerBtn" onclick="toggleSidebar()" aria-label="Toggle menu">
+  <span></span>
+  <span></span>
+  <span></span>
+</button>
+
+<!-- Overlay – tapping it closes the sidebar -->
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
 
 <div class="app-wrapper">
 <!-- Sidebar -->
@@ -4782,6 +4888,44 @@ function showFooterModal(type) {
 loadSettings();
 loadData();
 updateRefreshStatus();
+
+// ── Mobile sidebar toggle ──
+function toggleSidebar() {
+  const sidebar = document.querySelector('.sidebar');
+  const overlay = document.getElementById('sidebarOverlay');
+  const btn     = document.getElementById('hamburgerBtn');
+
+  const isOpen = sidebar.classList.toggle('is-open');
+  btn.classList.toggle('is-open', isOpen);
+
+  if (isOpen) {
+    overlay.style.display = 'block';
+    // Small delay so display:block kicks in before opacity transition
+    requestAnimationFrame(() => overlay.classList.add('is-visible'));
+    document.body.style.overflow = 'hidden'; // prevent background scroll
+  } else {
+    closeSidebar();
+  }
+}
+function closeSidebar() {
+  const sidebar = document.querySelector('.sidebar');
+  const overlay = document.getElementById('sidebarOverlay');
+  const btn     = document.getElementById('hamburgerBtn');
+
+  sidebar.classList.remove('is-open');
+  btn.classList.remove('is-open');
+  overlay.classList.remove('is-visible');
+  document.body.style.overflow = '';
+
+  // Hide overlay after transition ends
+  setTimeout(() => { overlay.style.display = 'none'; }, 300);
+}
+// Close sidebar when a nav item is clicked (optional but nice on mobile)
+document.querySelectorAll('.sidebar .nav-item, .sidebar [data-section]').forEach(el => {
+  el.addEventListener('click', () => {
+    if (window.innerWidth <= 768) closeSidebar();
+  });
+});
 </script>
 </body>
 </html>
