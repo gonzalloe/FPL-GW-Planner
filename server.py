@@ -474,14 +474,14 @@ def build_fpl_context():
         if not predictions:
             return "FPL data is currently loading, please try again shortly."
 
-        players = predictions.get('players', [])
+        players = predictions.get('predictions', [])
         current_gw = predictions.get('current_gw', 'Unknown')
         last_updated = predictions.get('last_updated', 'Unknown')
 
         # Top 25 players by predicted points
         top_players = sorted(
             players,
-            key=lambda x: float(x.get('predicted_points', 0)),
+            key=lambda x: float(x.get('xpts', 0) or x.get('predicted_points', 0) or 0),
             reverse=True
         )[:25]
 
