@@ -463,7 +463,14 @@ def before_request():
 def build_fpl_context():
     """Build rich live FPL context to send to Dify"""
     try:
-        _, predictions = _cached_predictions()
+        result = _cached_predictions()
+        print(f"DEBUG _cached_predictions type: {type(result)}")
+        print(f"DEBUG _cached_predictions value preview: {str(result)[:200]}")
+        
+        _, predictions = result
+        print(f"DEBUG predictions type: {type(predictions)}")
+        print(f"DEBUG predictions keys: {predictions.keys() if predictions else 'EMPTY'}")
+        #_, predictions = _cached_predictions()
         if not predictions:
             return "FPL data is currently loading, please try again shortly."
 
