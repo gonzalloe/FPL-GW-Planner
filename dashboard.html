@@ -195,10 +195,12 @@ body, .sidebar, .card, .stat-box, .chip-card, input, select, button, .filter-btn
     top: 0;
     left: 0;
     height: 100vh;
+    width: 260px !important; 
     z-index: 1000;
     transform: translateX(-100%);
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     overflow-y: auto;
+    display: block !important;
   }
   /* Slide in when open */
   .sidebar.is-open {
