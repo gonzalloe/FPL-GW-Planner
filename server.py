@@ -463,92 +463,67 @@ def before_request():
 def build_fpl_context():
     """Build rich live FPL context to send to Dify"""
     try:
-        result = _cached_predictions()
-        print(f"DEBUG _cached_predictions type: {type(result)}")
-        print(f"DEBUG _cached_predictions value preview: {str(result)[:200]}")
-        
-        _, predictions = result
-        print(f"DEBUG predictions type: {type(predictions)}")
-        print(f"DEBUG predictions keys: {predictions.keys() if predictions else 'EMPTY'}")
-        #_, predictions = _cached_predictions()
+        _, predictions = _cached_predictions()
         if not predictions:
             return "FPL data is currently loading, please try again shortly."
 
         players = predictions.get('predictions', [])
-        current_gw = predictions.get('current_gw', 'Unknown')
-        last_updated = predictions.get('last_updated', 'Unknown')
+        current_gw = predictions.get('gameweek', predictions.get('current_gw', 'Unknown'))
+        last_updated = predictions.get('generated_at', predictions.get('last_updated', 'Unknown'))
 
-        # Top 50 players by predicted points
+        # Sort all players
         all_players_sorted = sorted(
             players,
-            key=lambda x: float(x.get('xpts', 0) or x.get('predicted_points', 0) or 0),
+            key=lambda x: float(x.get('predicted_points', 0) or 0),
             reverse=True
         )
 
-        context = f"=== LIVE FPL PREDICTOR DATA ===\n"
-        context += f"Gameweek: {current_gw}\n"
-        context += f"Last Updated: {last_updated}\n\n"
+        context = f"=== LIVE FPL DATA | GW{current_gw} | Updated:{last_updated} ===\n\n"
 
-        context += "TOP 50 PLAYERS (name|team|pos|price|xpts|own%):\n"
+        # Top 100 compact — one line each
+        context += "PLAYERS (name|team|pos|£price|xPts|own%):\n"
+        for p in all_players_sorted[:100]:
+            context += (
+                f"{p.get('name','?')}|"
+                f"{p.get('team','?')}|"
+                f"{p.get('position','?')}|"
+                f"£{p.get('price','?')}m|"
+                f"{p.get('predicted_points','?')}xPts|"
+                f"{p.get('selected_by_percent','?')}%\n"
+            )
 
-        top_players = all_players_sorted[:50]    # top 50 full detail
-        remaining   = all_players_sorted[50:]   # everyone else compact
+        # Captain
+        top_picks = predictions.get('top_picks', [])
+        if top_picks:
+            c = top_picks[0]
+            context += f"\nCAPTAIN PICK: {c.get('name')}|{c.get('team')}|£{c.get('price')}m|{c.get('predicted_points')}xPts\n"
 
-        for p in top_players:
-            name  = p.get('name', '?')
-            team  = p.get('team', '?')
-            pos   = p.get('position', '?')
-            price = p.get('price', '?')
-            xpts  = p.get('predicted_points', '?')
-            own   = p.get('selected_by_percent', '?')
-            context += f"{name}|{team}|{pos}|£{price}m|{xpts}xPts|{own}%\n"
-
-        if remaining:
-            context += "\nALL OTHER PLAYERS (name|team|pos|price|xpts):\n"
-            for p in remaining:
-                name  = p.get('name', '?')
-                team  = p.get('team', '?')
-                pos   = p.get('position', '?')
-                price = p.get('price', '?')
-                xpts  = p.get('predicted_points', '?')
-                context += f"{name}|{team}|{pos}|£{price}m|{xpts}xPts\n"
-
-        # Captain pick
-        captain = predictions.get('top_picks', [])
-        if captain:
-            top_captain = captain[0] if captain else None
-            if top_captain:
-                context += f"\nRECOMMENDED CAPTAIN: {top_captain.get('name')} "
-                context += f"(xPts: {top_captain.get('predicted_points')}, "
-                context += f"£{top_captain.get('price')}m, {top_captain.get('team')})\n"
-
-        # Chip analysis
+        # Chips
         chip_analysis = predictions.get('chip_analysis', {})
         if chip_analysis:
-            context += "\nCHIP ANALYSIS:\n"
+            context += "\nCHIPS:\n"
             for chip_name, chip_data in chip_analysis.items():
                 if isinstance(chip_data, dict):
-                    score = chip_data.get('score', '?')
-                    rec   = chip_data.get('recommendation', chip_data.get('advice', '?'))
-                    reason = chip_data.get('reason', chip_data.get('reasons', ''))
-                    context += f"  {chip_name}: score={score} | {rec} | {reason}\n"
-                elif isinstance(chip_data, str):
-                    context += f"  {chip_name}: {chip_data}\n"
+                    context += f"  {chip_name}: score={chip_data.get('score','?')} | {chip_data.get('recommendation', chip_data.get('advice',''))}\n"
 
         # GW info
         gw_info = predictions.get('gw_info', {})
         if gw_info:
-            context += f"\nGW INFO:\n"
-            context += f"  Gameweek: {gw_info.get('current_gw', '?')}\n"
-            context += f"  Is DGW: {gw_info.get('is_dgw', False)}\n"
-            context += f"  Is BGW: {gw_info.get('is_bgw', False)}\n"
+            context += f"\nDGW:{gw_info.get('is_dgw',False)} | BGW:{gw_info.get('is_bgw',False)}\n"
 
-        # Top transfers in
-        transfers_in = predictions.get('top_transfers_in', [])[:5]
-        if transfers_in:
-            context += "\nTOP TRANSFERS IN THIS GW:\n"
-            for t in transfers_in:
-                context += f"  - {t.get('name')} ({t.get('team')}) £{t.get('price')}m\n"
+        # Differentials
+        differentials = predictions.get('differentials', [])[:10]
+        if differentials:
+            context += "\nDIFFERENTIALS:\n"
+            for p in differentials:
+                context += f"  {p.get('name')}|{p.get('team')}|£{p.get('price')}m|{p.get('predicted_points')}xPts|{p.get('selected_by_percent')}%\n"
+
+        # Value picks
+        value_picks = predictions.get('value_picks', [])[:10]
+        if value_picks:
+            context += "\nVALUE PICKS:\n"
+            for p in value_picks:
+                context += f"  {p.get('name')}|{p.get('team')}|£{p.get('price')}m|{p.get('predicted_points')}xPts\n"
 
         return context
 
