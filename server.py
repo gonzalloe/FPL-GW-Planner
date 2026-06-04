@@ -491,6 +491,19 @@ def build_fpl_context():
                 f"{p.get('predicted_points','?')}xPts|"
                 f"{p.get('selected_by_percent','?')}%\n"
             )
+        
+        # Remaining players — ultra compact, no ownership to save tokens
+        remaining = all_players_sorted[100:]
+        if remaining:
+            context += "\nREMAINING PLAYERS (name|team|pos|£price|xPts):\n"
+            for p in remaining:
+                context += (
+                    f"{p.get('name','?')}|"
+                    f"{p.get('team','?')}|"
+                    f"{p.get('position','?')}|"
+                    f"£{p.get('price','?')}m|"
+                    f"{p.get('predicted_points','?')}xPts\n"
+                )
 
         # Captain
         top_picks = predictions.get('top_picks', [])
