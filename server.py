@@ -16,9 +16,14 @@ import os
 import time
 import threading
 import hashlib
+import os
+import requests
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
+
+DIFY_API_KEY = os.environ.get("DIFY_API_KEY", "")
+DIFY_API_URL = os.environ.get("DIFY_API_URL", "https://api.dify.ai/v1")
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -455,6 +460,112 @@ def before_request():
     try: _auto_setup_accounts()
     except: pass
 
+def build_fpl_context():
+    """Build rich live FPL context to send to Dify"""
+    try:
+        predictions = _cached_predictions()
+        if not predictions:
+            return "FPL data is currently loading, please try again shortly."
+
+        players = predictions.get('players', [])
+        current_gw = predictions.get('current_gw', 'Unknown')
+        last_updated = predictions.get('last_updated', 'Unknown')
+
+        # Top 25 players by predicted points
+        top_players = sorted(
+            players,
+            key=lambda x: float(x.get('predicted_points', 0)),
+            reverse=True
+        )[:25]
+
+        context = f"=== LIVE FPL PREDICTOR DATA ===\n"
+        context += f"Gameweek: {current_gw}\n"
+        context += f"Last Updated: {last_updated}\n\n"
+
+        context += "TOP 25 PLAYERS BY PREDICTED POINTS:\n"
+        context += f"{'Name':<22} {'Team':<18} {'Pos':<5} {'Price':<7} {'xPts':<6} {'Own%':<7} {'Status'}\n"
+        context += "-" * 80 + "\n"
+
+        for p in top_players:
+            name     = p.get('name', 'Unknown')[:21]
+            team     = p.get('team', '?')[:17]
+            pos      = p.get('position', '?')
+            price    = f"£{p.get('price', '?')}m"
+            xpts     = p.get('predicted_points', '?')
+            own      = f"{p.get('selected_by', '?')}%"
+            status   = p.get('status', 'Available')
+            context += f"{name:<22} {team:<18} {pos:<5} {price:<7} {xpts:<6} {own:<7} {status}\n"
+
+        # Captain pick
+        captain = predictions.get('captain_pick') or (top_players[0] if top_players else None)
+        if captain:
+            context += f"\nRECOMMENDED CAPTAIN: {captain.get('name')} "
+            context += f"(xPts: {captain.get('predicted_points')}, "
+            context += f"£{captain.get('price')}m, {captain.get('team')})\n"
+
+        # Best chip
+        chip = predictions.get('best_chip')
+        if chip:
+            context += f"\nBEST CHIP THIS GW: {chip}\n"
+
+        # Top transfers in
+        transfers_in = predictions.get('top_transfers_in', [])[:5]
+        if transfers_in:
+            context += "\nTOP TRANSFERS IN THIS GW:\n"
+            for t in transfers_in:
+                context += f"  - {t.get('name')} ({t.get('team')}) £{t.get('price')}m\n"
+
+        return context
+
+    except Exception as e:
+        return f"FPL data temporarily unavailable: {str(e)}"
+
+def ask_dify(user_message, conversation_id=None):
+    if not DIFY_API_KEY:
+        return {
+            "answer": "Dify API key not configured.",
+            "conversation_id": None,
+            "suggestions": ["Who should I captain?"]
+        }
+
+    fpl_context = build_fpl_context()
+
+    headers = {
+        "Authorization": f"Bearer {DIFY_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "inputs": {"fpl_data": fpl_context},
+        "query": user_message,
+        "response_mode": "blocking",
+        "user": "fpl-user"
+    }
+
+    if conversation_id:
+        payload["conversation_id"] = conversation_id
+
+    try:
+        response = requests.post(
+            f"{DIFY_API_URL}/chat-messages",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        return {
+            "answer": data.get("answer", "No response from AI."),
+            "conversation_id": data.get("conversation_id"),
+            "suggestions": ["Who should I captain?", "Best transfer this GW?", "Should I use my chip?"]
+        }
+
+    except requests.exceptions.Timeout:
+        return {"answer": "AI response timed out. Please try again.", "conversation_id": conversation_id, "suggestions": []}
+    except requests.exceptions.RequestException as e:
+        return {"answer": f"AI service error: {str(e)}", "conversation_id": conversation_id, "suggestions": []}
+
 
 # ── Static files (explicit, no Flask static_folder magic) ──
 
@@ -822,27 +933,24 @@ def api_settings():
 
 
 # ── Chat ──
-
 @app.route("/api/chat", methods=["POST"])
 @limiter.limit("20 per minute")
 def api_chat():
     try:
         data = request.get_json(silent=True) or {}
         question = data.get("question", "").strip()
+        conversation_id = data.get("conversation_id")
+
         if not question:
             return jsonify({"error": "No question provided"}), 400
-        from ai_chat import FPLChatEngine
-        _, cached = _cached_predictions()
-        if not cached: cached = _run_predictions()
-        chat = FPLChatEngine(
-            predictions=cached.get("predictions", []), squad=cached.get("squad", {}),
-            gw_info=cached.get("gw_info", {}), chip_analysis=cached.get("chip_analysis", {}),
-            bb_squad=cached.get("bb_squad", {}),
-        )
-        return jsonify(chat.answer(question))
+
+        result = ask_dify(question, conversation_id)
+        return jsonify(result)
+
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"answer": "Sorry, something went wrong.", "suggestions": ["Who should I captain?"]}), 200
+
 
 
 # ── My Team ──

@@ -4538,6 +4538,7 @@ function renderMarkdown(text){
   return h;
 }
 
+let difyConversationId = null;
 async function sendChat(){
   if(chatBusy)return;
   const input=document.getElementById('chat-input');
@@ -4548,9 +4549,12 @@ async function sendChat(){
   document.getElementById('send-icon').style.display='none';
   document.getElementById('send-spinner').style.display='inline-block';
   try{
-    const r=await fetch('/api/chat',{method:'POST',headers:authHeaders(),body:JSON.stringify({question:q})});
+    const r=await fetch('/api/chat',{method:'POST',headers:authHeaders(),body:JSON.stringify({question:q,conversation_id:difyConversationId})});
     const data=await r.json();
     removeTyping(tid);
+    if(data.conversation_id){
+      difyConversationId = data.conversation_id;
+    }
     appendChatMsg('bot',data.answer||'Sorry, no answer.',data.suggestions||[]);
   }catch(e){
     removeTyping(tid);
