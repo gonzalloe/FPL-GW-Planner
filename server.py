@@ -478,30 +478,41 @@ def build_fpl_context():
         current_gw = predictions.get('current_gw', 'Unknown')
         last_updated = predictions.get('last_updated', 'Unknown')
 
-        # Top 25 players by predicted points
-        top_players = sorted(
+        # Top 50 players by predicted points
+        all_players_sorted = sorted(
             players,
             key=lambda x: float(x.get('xpts', 0) or x.get('predicted_points', 0) or 0),
             reverse=True
-        )[:25]
+        )
 
         context = f"=== LIVE FPL PREDICTOR DATA ===\n"
         context += f"Gameweek: {current_gw}\n"
         context += f"Last Updated: {last_updated}\n\n"
 
-        context += "TOP 25 PLAYERS BY PREDICTED POINTS:\n"
-        context += f"{'Name':<22} {'Team':<18} {'Pos':<5} {'Price':<7} {'xPts':<6} {'Own%':<7} {'Status'}\n"
-        context += "-" * 80 + "\n"
+        context += "TOP 50 PLAYERS (name|team|pos|price|xpts|own%):\n"
 
+        top_players = all_players_sorted[:50]    # top 50 full detail
+        remaining   = all_players_sorted[50:]   # everyone else compact
+
+        context += "TOP 50 PLAYERS (name|team|pos|price|xpts|own%):\n"
         for p in top_players:
-            name     = p.get('name', 'Unknown')[:21]
-            team     = p.get('team', '?')[:17]
-            pos      = p.get('position', '?')
-            price    = f"£{p.get('price', '?')}m"
-            xpts     = p.get('predicted_points', '?')
-            own      = f"{p.get('selected_by', '?')}%"
-            status   = p.get('status', 'Available')
-            context += f"{name:<22} {team:<18} {pos:<5} {price:<7} {xpts:<6} {own:<7} {status}\n"
+            name  = p.get('name', '?')
+            team  = p.get('team', '?')
+            pos   = p.get('position', '?')
+            price = p.get('price', '?')
+            xpts  = p.get('predicted_points', '?')
+            own   = p.get('selected_by_percent', '?')
+            context += f"{name}|{team}|{pos}|£{price}m|{xpts}xPts|{own}%\n"
+
+        if remaining:
+            context += "\nALL OTHER PLAYERS (name|team|pos|price|xpts):\n"
+            for p in remaining:
+                name  = p.get('name', '?')
+                team  = p.get('team', '?')
+                pos   = p.get('position', '?')
+                price = p.get('price', '?')
+                xpts  = p.get('predicted_points', '?')
+                context += f"{name}|{team}|{pos}|£{price}m|{xpts}xPts\n"
 
         # Captain pick
         captain = predictions.get('captain_pick') or (top_players[0] if top_players else None)
@@ -521,6 +532,14 @@ def build_fpl_context():
             context += "\nTOP TRANSFERS IN THIS GW:\n"
             for t in transfers_in:
                 context += f"  - {t.get('name')} ({t.get('team')}) £{t.get('price')}m\n"
+
+        # Add chip analysis
+        chip_analysis = predictions.get('chip_analysis', {})
+        if chip_analysis:
+            context += "\nCHIP ANALYSIS:\n"
+            for chip_name, chip_data in chip_analysis.items():
+                if isinstance(chip_data, dict):
+                    context += f"  {chip_name}: score={chip_data.get('score','?')} recommendation={chip_data.get('recommendation','?')}\n"
 
         return context
 
