@@ -494,7 +494,6 @@ def build_fpl_context():
         top_players = all_players_sorted[:50]    # top 50 full detail
         remaining   = all_players_sorted[50:]   # everyone else compact
 
-        context += "TOP 50 PLAYERS (name|team|pos|price|xpts|own%):\n"
         for p in top_players:
             name  = p.get('name', '?')
             team  = p.get('team', '?')
@@ -543,7 +542,6 @@ def build_fpl_context():
             context += f"  Gameweek: {gw_info.get('current_gw', '?')}\n"
             context += f"  Is DGW: {gw_info.get('is_dgw', False)}\n"
             context += f"  Is BGW: {gw_info.get('is_bgw', False)}\n"
-            context += f"\nBEST CHIP THIS GW: {chip}\n"
 
         # Top transfers in
         transfers_in = predictions.get('top_transfers_in', [])[:5]
