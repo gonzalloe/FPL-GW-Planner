@@ -571,6 +571,9 @@ def ask_dify(user_message, conversation_id=None):
     except requests.exceptions.Timeout:
         return {"answer": "AI response timed out. Please try again.", "conversation_id": conversation_id, "suggestions": []}
     except requests.exceptions.RequestException as e:
+        # check bug
+        error_detail = e.response.text if e.response is not None else str(e)
+        print(f"DIFY ERROR DETAIL: {error_detail}")
         return {"answer": f"AI service error: {str(e)}", "conversation_id": conversation_id, "suggestions": []}
 
 
