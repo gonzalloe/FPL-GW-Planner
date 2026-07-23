@@ -1349,9 +1349,11 @@ def api_stripe_checkout():
         # Already premium? Don't create another checkout
         if user.get("plan") in ("premium", "admin"):
             return jsonify({"ok": False, "error": "You already have an active subscription."})
+        STRIPE_PRICE_ID = os.environ.get("STRIPE_PRICE_ID", "")
+        if not STRIPE_PRICE_ID:
+            return jsonify({"ok": False, "error": "Price not configured. Please contact the admin."}), 500
         s = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            STRIPE_PRICE_ID = os.environ.get("STRIPE_PRICE_ID", "")
+            payment_method_types=["card"],           
             line_items=[{"price": STRIPE_PRICE_ID,"quantity": 1,}],
             mode="subscription",
             success_url=request.headers.get("Origin","")+"/?upgraded=1",
