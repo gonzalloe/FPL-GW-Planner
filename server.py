@@ -1351,8 +1351,8 @@ def api_stripe_checkout():
             return jsonify({"ok": False, "error": "You already have an active subscription."})
         s = stripe.checkout.Session.create(
             payment_method_types=["card"],
-            line_items=[{"price_data":{"currency":"usd","product_data":{"name":"FPL Predictor Premium"},
-                         "unit_amount":250,"recurring":{"interval":"month"}},"quantity":1}],
+            STRIPE_PRICE_ID = os.environ.get("STRIPE_PRICE_ID", "")
+            line_items=[{"price": STRIPE_PRICE_ID,"quantity": 1,}],
             mode="subscription",
             success_url=request.headers.get("Origin","")+"/?upgraded=1",
             cancel_url=request.headers.get("Origin","")+"/?cancelled=1",
