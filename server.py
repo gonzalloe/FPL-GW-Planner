@@ -1418,19 +1418,27 @@ def api_stripe_webhook():
 
         elif etype == "invoice.paid":
             # Subscription renewed successfully — extend premium
-            customer_email = obj.get("customer_email")
-            if customer_email:
+            customer_id = obj.get("customer")
+            if customer_id:
                 from auth import extend_premium
-                extend_premium(customer_email, days=35)  # 35 days buffer for monthly
-                print(f"  [STRIPE] Renewal extended: {customer_email}")
+                email = _find_email_by_stripe_customer(customer_id)
+                if email:
+                    extend_premium(email, days=35)  # 35 days buffer for monthly
+                    print(f"  [STRIPE] Renewal extended: {email}")
+                else:
+                    print(f"  [STRIPE] Could not find user for customer: {customer_id}")
 
         elif etype == "invoice.payment_failed":
             # Payment failed — log warning (Stripe retries automatically)
-            customer_email = obj.get("customer_email")
+            customer_id = obj.get("customer")
             attempt = obj.get("attempt_count", 0)
-            print(f"  [STRIPE] Payment failed for {customer_email} (attempt {attempt})")
-            # After 3+ failed attempts, Stripe will cancel the subscription
-            # which triggers customer.subscription.deleted below
+            email = _find_email_by_stripe_customer(customer_id) if customer_id else ""
+            print(
+                f"  [STRIPE] Payment failed for {email or customer_id} "
+                f"(attempt {attempt})"
+            )
+            # Do not downgrade immediately. Stripe retries failed payments automatically.
+            # If subscription is eventually cancelled, customer.subscription.deleted handles downgrade.
 
         elif etype == "customer.subscription.deleted":
             # Subscription cancelled or expired — downgrade to free
