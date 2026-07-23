@@ -65,7 +65,7 @@ def _send_via_resend(to, subject, html, text=""):
     req = urllib.request.Request(
         RESEND_ENDPOINT,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "FPL-Predictor/1.0"},
         method="POST",
     )
     try:
