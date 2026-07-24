@@ -200,6 +200,20 @@ class SquadOptimizer:
                     reverse=True,
                 )
 
+                # temp debug check
+                if pos_id == 4:
+                    print(
+                        "FWD POOL TOP:",
+                        [
+                            (
+                                p["web_name"],
+                                p["predicted_points"]
+                            )
+                            for p in affordable[:15]
+                        ]
+                    )
+
+
                 # Limit combinations for performance
                 max_cands = min(
                     len(affordable),
