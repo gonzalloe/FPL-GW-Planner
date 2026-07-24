@@ -199,8 +199,9 @@ def get_fixture_xg(team_id: int, opponent_id: int, is_home: bool,
     league_avg = 1.35
 
     # xG = (team_attack * opponent_conceding) / league_avg
-    team_xg = (team_attack * opp_ga) / (league_avg + 0.01)
-    opp_xg = (opp_attack * team_ga) / (league_avg + 0.01)
+    # use the blended defence values, not raw season-only rates
+    team_xg = (team_attack * opp_defence) / (league_avg + 0.01)
+    opp_xg = (opp_attack * team_defence) / (league_avg + 0.01)
 
     # Home/away adjustment
     if is_home:
