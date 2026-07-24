@@ -182,24 +182,13 @@ class SquadOptimizer:
                     if new_budget < 0:
                         continue
 
-                    # Check if remaining budget is enough for remaining positions
-                    remaining_slots = sum(c for pid, c in pos_order
-                                          if pid not in [pos_id] + [p[0] for p in pos_order[:pos_order.index((pos_id, count))]])
-                    # Rough min cost per remaining player: ~4.0
-                    # But be more generous to not prune too aggressively
-                    if remaining_slots > 0 and new_budget < remaining_slots * 3.8:
-                        # Check more carefully
-                        filled_pos = set()
-                        for p in state["players"]:
-                            filled_pos.add(p.get("position_id"))
-                        for p in combo:
-                            filled_pos.add(p.get("position_id"))
-                        unfilled_count = 0
-                        for pid2, cnt2 in pos_order:
-                            if pid2 not in filled_pos:
-                                unfilled_count += cnt2
-                        if unfilled_count > 0 and new_budget < unfilled_count * 3.9:
-                            continue
+                    new_players = state["players"] + list(combo)
+                    new_states.append({
+                        "players": new_players,
+                        "budget": new_budget,
+                        "teams": new_teams,
+                        "xpts": self._squad_score(new_players),
+                    })
 
                     new_states.append({
                         "players": state["players"] + list(combo),
