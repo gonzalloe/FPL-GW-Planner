@@ -216,6 +216,16 @@ class SquadOptimizer:
                         continue
 
                     new_players = state["players"] + list(combo)
+
+                    # haaland appear in search check
+                    if any(p["web_name"] == "Haaland" for p in players):
+                        print(
+                            "HAALAND STATE",
+                            len(players),
+                            sum(p["price"] for p in players),
+                            self._squad_score(players)
+                        )
+
                     new_states.append({
                         "players": new_players,
                         "budget": new_budget,
