@@ -32,7 +32,7 @@ from data_fetcher import (
     build_player_map, build_team_map, get_player_fixture,
     get_player_fixtures, get_dgw_teams, get_bgw_teams,
     get_next_gameweek, get_current_gameweek,
-    get_last_season_rates, get_team_strength_priors,  
+    get_last_season_rates, get_previous_season_team_stats
 )
 from team_analysis import (
     build_team_stats, get_h2h, get_fixture_xg,
@@ -122,7 +122,7 @@ class PredictionEngine:
         self.bgw_teams = set()
         self.team_stats = build_team_stats(
             self.fixtures, self.teams,
-            previous_season_stats=get_team_strength_priors(self.teams),
+            previous_season_stats=get_previous_season_team_stats(self.bootstrap, self.teams),
         )
 
 

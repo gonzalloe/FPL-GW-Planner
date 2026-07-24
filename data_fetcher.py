@@ -5,6 +5,8 @@ Pulls all data from the official FPL API.
 import json
 import time
 import requests
+import csv
+import io
 from pathlib import Path
 from config import FPL_ENDPOINTS
 
@@ -99,41 +101,6 @@ def get_last_season_rates(player_id: int) -> dict:
     return {}
 
 
-def get_team_strength_priors(teams: dict) -> dict:
-    """
-    Team-level goal-scoring/conceding priors derived from FPL's own
-    strength ratings (strength_attack_home/away, strength_defence_home/away).
-
-    These ratings are FPL's own continuously-updated, multi-season-informed
-    quality estimate per team, already present on every team dict from
-    build_team_map(). We use them as the "previous season" proxy because
-    this app doesn't otherwise fetch historical prior-season fixture
-    results - if that's added later, pass real results into
-    build_team_stats(previous_season_stats=...) instead of this.
-
-    Returns {team_id: {"gf_per_game": float, "ga_per_game": float}}
-    """
-    LEAGUE_AVG_GOALS = 1.35
-    BASELINE_RATING = 1200.0  # FPL's strength scale is centred ~1000-1400
-
-    priors = {}
-    for tid, t in teams.items():
-        atk = (t.get("strength_attack_home", BASELINE_RATING) +
-               t.get("strength_attack_away", BASELINE_RATING)) / 2.0
-        defn = (t.get("strength_defence_home", BASELINE_RATING) +
-                t.get("strength_defence_away", BASELINE_RATING)) / 2.0
-
-        gf = LEAGUE_AVG_GOALS * (atk / BASELINE_RATING)
-        # Higher defence rating = concedes fewer goals -> inverse relationship
-        ga = LEAGUE_AVG_GOALS * (BASELINE_RATING / defn) if defn > 0 else LEAGUE_AVG_GOALS
-
-        priors[tid] = {
-            "gf_per_game": round(max(0.6, min(gf, 2.6)), 3),
-            "ga_per_game": round(max(0.6, min(ga, 2.6)), 3),
-        }
-    return priors
-
-
 def fetch_gameweek_live(event_id: int) -> dict:
     """Fetch live stats for a specific gameweek."""
     url = FPL_ENDPOINTS["gameweek_live"].format(event_id=event_id)
@@ -146,6 +113,75 @@ def fetch_set_piece_notes() -> dict:
         return _get(FPL_ENDPOINTS["set_pieces"], cache_key="set_pieces", cache_ttl=3600)
     except Exception:
         return {}
+
+
+def _fetch_csv(url: str, cache_key: str, cache_ttl: int = 86400) -> list[dict]:
+    """Tiny CSV GET-with-cache helper (vaastav archive serves CSV, not JSON)."""
+    cache_file = CACHE_DIR / f"{cache_key}.json"
+    if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < cache_ttl:
+        return json.loads(cache_file.read_text(encoding="utf-8"))
+    try:
+        resp = requests.get(url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
+        resp.raise_for_status()
+        rows = list(csv.DictReader(io.StringIO(resp.text)))
+        cache_file.write_text(json.dumps(rows), encoding="utf-8")
+        return rows
+    except Exception:
+        if cache_file.exists():
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        return []
+
+
+def get_previous_season_team_stats(bootstrap: dict, teams: dict) -> dict:
+    """
+    {team_id: {"gf_per_game", "ga_per_game"}} from the most recently
+    completed PL season, sourced from the vaastav/Fantasy-Premier-League
+    public archive (FPL's own API doesn't expose prior-season results).
+    Matched via short_name (FPL's team_id can shift between seasons).
+    Missing/newly-promoted teams are simply absent -> caller's
+    LEAGUE_AVG_GOALS fallback in build_team_stats() applies to them.
+    """
+    events = bootstrap.get("events", [])
+    if not events:
+        return {}
+    try:
+        year = int(events[0]["deadline_time"][:4])
+    except (KeyError, ValueError, TypeError):
+        return {}
+    season = f"{year - 1}-{str(year)[-2:]}"
+    base = f"https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/{season}"
+
+    prev_teams = _fetch_csv(f"{base}/teams.csv", f"prev_teams_{season}")
+    prev_fixtures = _fetch_csv(f"{base}/fixtures.csv", f"prev_fixtures_{season}")
+    if not prev_teams or not prev_fixtures:
+        return {}
+
+    id_to_short = {row["id"]: row["short_name"] for row in prev_teams}
+    agg = {}
+    for f in prev_fixtures:
+        if str(f.get("finished", "")).lower() != "true":
+            continue
+        th, ta = id_to_short.get(f.get("team_h")), id_to_short.get(f.get("team_a"))
+        try:
+            sh, sa = int(f["team_h_score"]), int(f["team_a_score"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        for name, gf, ga in ((th, sh, sa), (ta, sa, sh)):
+            if not name:
+                continue
+            a = agg.setdefault(name, {"gf": 0, "ga": 0, "played": 0})
+            a["gf"] += gf; a["ga"] += ga; a["played"] += 1
+
+    short_to_current_id = {t.get("short_name"): tid for tid, t in teams.items()}
+    result = {}
+    for short_name, a in agg.items():
+        tid = short_to_current_id.get(short_name)
+        if tid and a["played"] > 0:
+            result[tid] = {
+                "gf_per_game": round(a["gf"] / a["played"], 3),
+                "ga_per_game": round(a["ga"] / a["played"], 3),
+            }
+    return result
 
 
 # ── Derived helpers ───────────────────────────────────────────
