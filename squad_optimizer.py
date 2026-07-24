@@ -206,7 +206,7 @@ class SquadOptimizer:
                         "FWD POOL TOP:",
                         [
                             (
-                                p["web_name"],
+                                #p["web_name"],
                                 p["predicted_points"]
                             )
                             for p in affordable[:15]
@@ -263,7 +263,7 @@ class SquadOptimizer:
                         list(combo)
                     )
 
-                    # Debug Haaland survival
+                    # Temp Debug Haaland survival check
                     if any(
                         p.get("web_name") == "Haaland"
                         for p in new_players
@@ -298,7 +298,7 @@ class SquadOptimizer:
             states = new_states[:beam_width]
 
 
-            # Beam survival debug
+            # Temp beam survival debug check
             print(
                 "BEAM DEBUG",
                 f"stage={pos_id}",
