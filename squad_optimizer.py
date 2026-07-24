@@ -295,13 +295,13 @@ class SquadOptimizer:
                     )
                 )
             )
-    if not states:
-        return []
-    best = max(
-        states,
-        key=lambda s: s["xpts"]
-    )
-    return best["players"]
+        if not states:
+            return []
+        best = max(
+            states,
+            key=lambda s: s["xpts"]
+        )
+        return best["players"]
 
 
     def _greedy_squad(self, by_pos: dict) -> list:
