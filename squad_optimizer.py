@@ -81,7 +81,7 @@ class SquadOptimizer:
         dgw_count = sum(1 for p in squad if p.get("is_dgw"))
         dgw_xi = sum(1 for p in starting_xi if p.get("is_dgw"))
 
-        // temp debug check
+        # temp debug check
         print("TOP SQUAD:",[(p["name"], p["predicted_points"]) for p in squad])
         print("HAALAND AVAILABLE:",[p["predicted_points"]for p in self.predictionsif "Haaland" in p["name"]])
 
