@@ -58,6 +58,80 @@ def fetch_player_detail(player_id: int) -> dict:
     """Fetch detailed history for a single player."""
     url = FPL_ENDPOINTS["player_detail"].format(player_id=player_id)
     return _get(url, cache_key=f"player_{player_id}", cache_ttl=900)
+    
+
+def get_last_season_rates(player_id: int) -> dict:
+    """
+    Per-90 xG/xA/bonus rate from the player's most recent completed
+    PL season with a meaningful sample (>=450 mins, ~5 full games).
+    Used as a cold-start prior before this season's minutes accumulate.
+    Returns {} if no qualifying prior season is found.
+    """
+    try:
+        detail = fetch_player_detail(player_id)
+    except Exception:
+        return {}
+
+    history_past = detail.get("history_past", []) if isinstance(detail, dict) else []
+    if not history_past:
+        return {}
+
+    # Walk backwards from most recent season, skip ones with too little data
+    for season in reversed(history_past):
+        mins = int(season.get("minutes", 0) or 0)
+        if mins < 450:
+            continue
+        starts = int(season.get("starts", 0) or 0)
+        if starts <= 0:
+            # Older FPL seasons don't always report `starts` - approximate
+            starts = max(round(mins / 75), 1)
+        xg = float(season.get("expected_goals", 0) or 0)
+        xa = float(season.get("expected_assists", 0) or 0)
+        bonus = int(season.get("bonus", 0) or 0)
+        per90 = mins / 90.0
+        return {
+            "xg_per90": xg / per90 if per90 > 0 else 0.0,
+            "xa_per90": xa / per90 if per90 > 0 else 0.0,
+            "bonus_per_start": bonus / starts if starts > 0 else 0.0,
+            "season_name": season.get("season_name", ""),
+            "minutes": mins,
+        }
+    return {}
+
+
+def get_team_strength_priors(teams: dict) -> dict:
+    """
+    Team-level goal-scoring/conceding priors derived from FPL's own
+    strength ratings (strength_attack_home/away, strength_defence_home/away).
+
+    These ratings are FPL's own continuously-updated, multi-season-informed
+    quality estimate per team, already present on every team dict from
+    build_team_map(). We use them as the "previous season" proxy because
+    this app doesn't otherwise fetch historical prior-season fixture
+    results - if that's added later, pass real results into
+    build_team_stats(previous_season_stats=...) instead of this.
+
+    Returns {team_id: {"gf_per_game": float, "ga_per_game": float}}
+    """
+    LEAGUE_AVG_GOALS = 1.35
+    BASELINE_RATING = 1200.0  # FPL's strength scale is centred ~1000-1400
+
+    priors = {}
+    for tid, t in teams.items():
+        atk = (t.get("strength_attack_home", BASELINE_RATING) +
+               t.get("strength_attack_away", BASELINE_RATING)) / 2.0
+        defn = (t.get("strength_defence_home", BASELINE_RATING) +
+                t.get("strength_defence_away", BASELINE_RATING)) / 2.0
+
+        gf = LEAGUE_AVG_GOALS * (atk / BASELINE_RATING)
+        # Higher defence rating = concedes fewer goals -> inverse relationship
+        ga = LEAGUE_AVG_GOALS * (BASELINE_RATING / defn) if defn > 0 else LEAGUE_AVG_GOALS
+
+        priors[tid] = {
+            "gf_per_game": round(max(0.6, min(gf, 2.6)), 3),
+            "ga_per_game": round(max(0.6, min(ga, 2.6)), 3),
+        }
+    return priors
 
 
 def fetch_gameweek_live(event_id: int) -> dict:

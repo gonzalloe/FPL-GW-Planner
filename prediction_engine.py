@@ -31,12 +31,25 @@ from data_fetcher import (
     fetch_bootstrap, fetch_fixtures, fetch_player_detail,
     build_player_map, build_team_map, get_player_fixture,
     get_player_fixtures, get_dgw_teams, get_bgw_teams,
-    get_next_gameweek, get_current_gameweek
+    get_next_gameweek, get_current_gameweek,
+    get_last_season_rates, get_team_strength_priors,  
 )
 from team_analysis import (
     build_team_stats, get_h2h, get_fixture_xg,
     calc_team_momentum, get_team_analysis_summary
 )
+
+
+# ══════════════════════════════════════════════════════════════
+# Cold-start priors (position averages - used only when a player
+# has neither current-season nor previous-season data)
+# ══════════════════════════════════════════════════════════════
+POSITION_XG_PRIOR = {1: 0.0, 2: 0.05, 3: 0.20, 4: 0.35}      # GKP, DEF, MID, FWD
+POSITION_XA_PRIOR = {1: 0.0, 2: 0.05, 3: 0.15, 4: 0.10}
+POSITION_BONUS_PRIOR = {1: 0.15, 2: 0.20, 3: 0.25, 4: 0.20}   # bonus per start
+
+PRIOR_SHRINKAGE_MINUTES = 450   # ~5 full games: point where current-season data starts to dominate over the prior
+PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for players still under this many mins
 
 
 # ══════════════════════════════════════════════════════════════
@@ -99,15 +112,57 @@ class PredictionEngine:
     """
 
     def __init__(self):
-        self.bootstrap = fetch_bootstrap()
-        self.fixtures = fetch_fixtures()
-        self.players = build_player_map(self.bootstrap)
-        self.teams = build_team_map(self.bootstrap)
-        self.current_gw = get_current_gameweek(self.bootstrap)
-        self.next_gw = get_next_gameweek(self.bootstrap)
-        self.dgw_teams = {}
-        self.bgw_teams = set()
-        self.team_stats = build_team_stats(self.fixtures, self.teams)
+    self.bootstrap = fetch_bootstrap()
+    self.fixtures = fetch_fixtures()
+    self.players = build_player_map(self.bootstrap)
+    self.teams = build_team_map(self.bootstrap)
+    self.current_gw = get_current_gameweek(self.bootstrap)
+    self.next_gw = get_next_gameweek(self.bootstrap)
+    self.dgw_teams = {}
+    self.bgw_teams = set()
+    self.team_stats = build_team_stats(
+        self.fixtures, self.teams,
+        previous_season_stats=get_team_strength_priors(self.teams),
+    )
+
+
+    def _prepare_player_priors(self):
+    """
+    Populate p['_prior_xg_per90'] / p['_prior_xa_per90'] / p['_prior_bonus_per_start']
+    for every player, per the fallback hierarchy:
+        current-season data (applied later, per-fixture, via shrinkage)
+        -> previous PL season data (fetched here, only for players with 0 mins)
+        -> position-average fallback (never zero for attackers)
+
+    Called once per predict_all() run - not per fixture/per prediction -
+    so no API calls happen inside the hot prediction loop.
+    """
+        for pid, p in self.players.items():
+            pos = p.get("position_id", 3)
+            mins_played = int(p.get("minutes", 0))
+
+            prior_xg = POSITION_XG_PRIOR.get(pos, 0.15)
+            prior_xa = POSITION_XA_PRIOR.get(pos, 0.10)
+            prior_bonus = POSITION_BONUS_PRIOR.get(pos, 0.20)
+
+            # Only hit the network for players with zero current-season minutes.
+            # Once a player has any minutes, shrinkage already down-weights the
+            # prior proportionally, so a network fetch is no longer needed -
+            # this avoids one API call per player on every prediction run.
+            if mins_played == 0:
+                try:
+                    rates = get_last_season_rates(pid)
+                except Exception:
+                    rates = {}
+                if rates:
+                    prior_xg = rates.get("xg_per90") or prior_xg
+                    prior_xa = rates.get("xa_per90") or prior_xa
+                    prior_bonus = rates.get("bonus_per_start") or prior_bonus
+
+            p["_prior_xg_per90"] = prior_xg
+            p["_prior_xa_per90"] = prior_xa
+            p["_prior_bonus_per_start"] = prior_bonus
+        
 
     # ──────────────────────────────────────────────────────────
     #  Public API
@@ -331,6 +386,8 @@ class PredictionEngine:
                 self._team_injury_penalty[tid] = round(penalty, 3)
             else:
                 self._team_injury_penalty[tid] = 1.0
+            
+        self._prepare_player_priors()
 
         results = []
         for pid, p in self.players.items():
@@ -402,45 +459,40 @@ class PredictionEngine:
         mins_played = int(p.get("minutes", 0))
 
         # ── xMins → playing probability & minutes fraction ──
-        # xMins is a probability-weighted average (like FPL Review)
-        # We derive P(plays) and expected fraction of 90 from it
-        p_plays = min(xmins / 90.0, 1.0)  # Crude but effective
-        p_plays_60 = max(0, (xmins - 30) / 60.0)  # P(plays >= 60 mins)
+        p_plays = min(xmins / 90.0, 1.0)
+        p_plays_60 = max(0, (xmins - 30) / 60.0)
         p_plays_60 = min(p_plays_60, 1.0)
         mins_fraction = xmins / 90.0
 
         ev = 0.0
 
         # ── 1. Appearance points ──
-        # 2 pts if plays 60+, 1 pt if plays 1-59
         ev += p_plays_60 * 2.0 + (p_plays - p_plays_60) * 1.0
 
-        # ── 2. Goals (Poisson) ──
-        # Player's per-90 xG, scaled by fixture context
-        xg_season = float(p.get("expected_goals", 0))
-        xg_per90 = xg_season / max(mins_played / 90.0, 1.0) if mins_played > 0 else 0.0
+        # ── Cold-start blend weight (shared by goals + assists) ──
+        w_current = mins_played / (mins_played + PRIOR_SHRINKAGE_MINUTES)
 
-        # Position-aware fixture difficulty adjustment
+        # ── 2. Goals (Poisson) ──
+        xg_season = float(p.get("expected_goals", 0))
+        xg_current_per90 = (xg_season / (mins_played / 90.0)) if mins_played > 0 else 0.0
+        prior_xg_per90 = p.get("_prior_xg_per90", POSITION_XG_PRIOR.get(pos, 0.15))
+        xg_per90 = w_current * xg_current_per90 + (1 - w_current) * prior_xg_per90
+
         fdr = fix_info["fdr"]
         fdr_mod = self._position_fdr_modifier(pos, fdr, fix_info["is_home"])
 
-        # Team scoring context from opponent matchup
         team_xg = fix_xg_data.get("team_xg", 1.35)
-        scoring_context = team_xg / 1.35  # >1 = team expected to score more than avg
+        scoring_context = team_xg / 1.35
 
-        # Opponent injury penalty → easier to score against weakened opponents
         opp_id = fix_info.get("opponent_id", 0)
         opp_injury_pen = getattr(self, '_team_injury_penalty', {}).get(opp_id, 1.0)
         if opp_injury_pen < 1.0:
-            # Opponent is weakened → boost our scoring context, reduce their xG
-            opp_weakness = 1.0 + (1.0 - opp_injury_pen) * 0.5  # Up to 15% boost
+            opp_weakness = 1.0 + (1.0 - opp_injury_pen) * 0.5
             scoring_context *= opp_weakness
 
-        # xG delta regression: if player massively overperforming xG, regress
         actual_goals = int(p.get("goals_scored", 0))
         xg_delta = self._calc_xg_delta_regression(actual_goals, xg_season, starts)
 
-        # Effective xG for this fixture
         effective_xg = xg_per90 * mins_fraction * fdr_mod * scoring_context * xg_delta
         effective_xg = max(0.0, effective_xg)
 
@@ -449,12 +501,12 @@ class PredictionEngine:
 
         # ── 3. Assists (Poisson) ──
         xa_season = float(p.get("expected_assists", 0))
-        xa_per90 = xa_season / max(mins_played / 90.0, 1.0) if mins_played > 0 else 0.0
+        xa_current_per90 = (xa_season / (mins_played / 90.0)) if mins_played > 0 else 0.0
+        prior_xa_per90 = p.get("_prior_xa_per90", POSITION_XA_PRIOR.get(pos, 0.10))
+        xa_per90 = w_current * xa_current_per90 + (1 - w_current) * prior_xa_per90
 
-        # Assists also benefit from higher team xG (more goals = more assists)
         effective_xa = xa_per90 * mins_fraction * fdr_mod * scoring_context
         effective_xa = max(0.0, effective_xa)
-
         ev += poisson_ev_assists(effective_xa)
 
         # ── 4. Clean sheet (Poisson) ──
@@ -820,37 +872,28 @@ class PredictionEngine:
     # ══════════════════════════════════════════════════════════
 
     def _predict_bonus(self, p: dict, eff_xg: float, eff_xa: float,
-                       cs_prob: float, fdr_mod: float,
-                       mins_fraction: float) -> float:
-        """
-        Predict expected bonus points using a persistence + situational model.
-
-        Components:
-          1. Historical bonus rate (persistence)
-          2. Projected goal involvement (goals/assists boost BPS)
-          3. Clean sheet bonus (defenders get BPS for CS)
-          4. Position-specific base rate
-        """
+                    cs_prob: float, fdr_mod: float,
+                    mins_fraction: float) -> float:
         pos = p.get("position_id", 3)
         starts = max(int(p.get("starts", 0)), 1)
+        mins_played = int(p.get("minutes", 0))
+
         bonus_season = int(p.get("bonus", 0))
+        current_bonus_rate = bonus_season / starts
 
-        # Historical rate (persistence — from FPL Vault)
-        historical_rate = bonus_season / starts  # bonus per start
+        prior_bonus_rate = p.get("_prior_bonus_per_start", POSITION_BONUS_PRIOR.get(pos, 0.20))
+        w_current = mins_played / (mins_played + PRIOR_SHRINKAGE_MINUTES)
+        historical_rate = w_current * current_bonus_rate + (1 - w_current) * prior_bonus_rate
 
-        # Goal involvement boost (goals and assists heavily influence BPS)
-        gi_boost = (eff_xg * 12.0 + eff_xa * 9.0) / 30.0  # BPS weights for goals/assists
+        gi_boost = (eff_xg * 12.0 + eff_xa * 9.0) / 30.0
 
-        # CS boost for defenders
         cs_boost = 0.0
         if pos in (1, 2):
-            cs_boost = cs_prob * 0.5  # CS gives significant BPS
+            cs_boost = cs_prob * 0.5
 
-        # Position base rates (from observed averages)
         pos_base = {1: 0.25, 2: 0.30, 3: 0.35, 4: 0.28}
         base = pos_base.get(pos, 0.30)
 
-        # Blend: 50% historical persistence, 30% projected, 20% base
         predicted_bonus = (
             0.50 * historical_rate +
             0.30 * (gi_boost + cs_boost) +

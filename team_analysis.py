@@ -5,12 +5,28 @@ All derived from the FPL fixtures data (319 finished matches).
 """
 
 
-def build_team_stats(fixtures: list, teams: dict) -> dict:
+def build_team_stats(fixtures: list, teams: dict,
+                      previous_season_stats: dict | None = None) -> dict:
     """
-    Build comprehensive team stats from finished fixtures.
-    Returns {team_id: {wins, draws, losses, goals_for, goals_against,
-                       recent_results, h2h, xg_per_game, xgc_per_game, ...}}
+    Build comprehensive team stats from finished fixtures, blended with a
+    previous-season prior for cold-start robustness.
+
+    previous_season_stats: optional {team_id: {"gf_per_game":.., "ga_per_game":..}}
+        Pass data_fetcher.get_team_strength_priors(teams) - see caller in
+        prediction_engine.py. Used instead of a flat league-average default,
+        per the "never use flat defaults unless no historical data exists" rule.
+
+    Blending (shrinkage): weight_current = played / (played + K)
+        played=0             -> 100% previous-season prior
+        played small (early) -> blended
+        played large (late)  -> current-season dominates
     """
+    LEAGUE_AVG_GOALS = 1.35   # last-resort fallback only if no prior available at all
+    K_MATCHES = 6             # shrinkage constant (~6 matches to mostly trust current data)
+    K_LAST5 = 3               # last5 rates are noisier -> shrink faster
+
+    previous_season_stats = previous_season_stats or {}
+
     stats = {}
     for tid in teams:
         stats[tid] = {
@@ -20,34 +36,24 @@ def build_team_stats(fixtures: list, teams: dict) -> dict:
             "wins": 0, "draws": 0, "losses": 0,
             "goals_for": 0, "goals_against": 0,
             "clean_sheets": 0,
-            "results": [],       # list of (gw, opponent_id, gf, ga, is_home, result)
+            "results": [],
             "home_results": [],
             "away_results": [],
         }
 
-    # Process all finished fixtures in order
     finished = sorted(
         [f for f in fixtures if f.get("finished") and f.get("team_h_score") is not None],
         key=lambda f: (f.get("event", 0), f.get("id", 0))
     )
-
     for f in finished:
-        th = f["team_h"]
-        ta = f["team_a"]
-        sh = f["team_h_score"]
-        sa = f["team_a_score"]
+        th = f["team_h"]; ta = f["team_a"]
+        sh = f["team_h_score"]; sa = f["team_a_score"]
         gw = f.get("event", 0)
-
         if th not in stats or ta not in stats:
             continue
-
-        # Home team
-        if sh > sa:
-            hr, ar = "W", "L"
-        elif sh == sa:
-            hr, ar = "D", "D"
-        else:
-            hr, ar = "L", "W"
+        if sh > sa: hr, ar = "W", "L"
+        elif sh == sa: hr, ar = "D", "D"
+        else: hr, ar = "L", "W"
 
         stats[th]["goals_for"] += sh
         stats[th]["goals_against"] += sa
@@ -59,7 +65,6 @@ def build_team_stats(fixtures: list, teams: dict) -> dict:
         stats[th]["results"].append((gw, ta, sh, sa, True, hr))
         stats[th]["home_results"].append((gw, ta, sh, sa, hr))
 
-        # Away team
         stats[ta]["goals_for"] += sa
         stats[ta]["goals_against"] += sh
         stats[ta]["wins"] += 1 if ar == "W" else 0
@@ -70,28 +75,44 @@ def build_team_stats(fixtures: list, teams: dict) -> dict:
         stats[ta]["results"].append((gw, th, sa, sh, False, ar))
         stats[ta]["away_results"].append((gw, th, sa, sh, ar))
 
-    # Compute derived stats
     for tid, s in stats.items():
         played = s["wins"] + s["draws"] + s["losses"]
         s["played"] = played
         s["win_rate"] = s["wins"] / played if played > 0 else 0
-        s["gf_per_game"] = s["goals_for"] / played if played > 0 else 0
-        s["ga_per_game"] = s["goals_against"] / played if played > 0 else 0
+
+        # ── Previous-season / strength-derived prior for this team ──
+        prior = previous_season_stats.get(tid, {})
+        prior_gf = prior.get("gf_per_game", LEAGUE_AVG_GOALS)
+        prior_ga = prior.get("ga_per_game", LEAGUE_AVG_GOALS)
+
+        current_gf = s["goals_for"] / played if played > 0 else prior_gf
+        current_ga = s["goals_against"] / played if played > 0 else prior_ga
+
+        weight_current = played / (played + K_MATCHES)
+        weight_prior = 1.0 - weight_current
+
+        s["gf_per_game"] = round(weight_current * current_gf + weight_prior * prior_gf, 3)
+        s["ga_per_game"] = round(weight_current * current_ga + weight_prior * prior_ga, 3)
         s["cs_rate"] = s["clean_sheets"] / played if played > 0 else 0
 
-        # Last 5 results
+        # Last 5 (blended the same way, faster shrinkage since noisier)
         last5 = s["results"][-5:] if len(s["results"]) >= 5 else s["results"]
+        n5 = len(last5)
         s["last5_wins"] = sum(1 for r in last5 if r[5] == "W")
         s["last5_draws"] = sum(1 for r in last5 if r[5] == "D")
         s["last5_losses"] = sum(1 for r in last5 if r[5] == "L")
         s["last5_gf"] = sum(r[2] for r in last5)
         s["last5_ga"] = sum(r[3] for r in last5)
         s["last5_cs"] = sum(1 for r in last5 if r[3] == 0)
-        n5 = len(last5)
         s["last5_win_rate"] = s["last5_wins"] / n5 if n5 > 0 else 0
-        s["last5_gf_pg"] = s["last5_gf"] / n5 if n5 > 0 else 0
-        s["last5_ga_pg"] = s["last5_ga"] / n5 if n5 > 0 else 0
-        # Form string like "WWDLW"
+
+        current_gf_l5 = s["last5_gf"] / n5 if n5 > 0 else prior_gf
+        current_ga_l5 = s["last5_ga"] / n5 if n5 > 0 else prior_ga
+        w_cur5 = n5 / (n5 + K_LAST5)
+        w_pri5 = 1.0 - w_cur5
+
+        s["last5_gf_pg"] = round(w_cur5 * current_gf_l5 + w_pri5 * prior_gf, 3)
+        s["last5_ga_pg"] = round(w_cur5 * current_ga_l5 + w_pri5 * prior_ga, 3)
         s["last5_form_str"] = "".join(r[5] for r in last5)
 
     return stats
