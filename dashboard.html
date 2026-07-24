@@ -1099,6 +1099,42 @@ table tr:hover { background:var(--surface2); }
   .footer-bottom .footer-bottom-left,
   .footer-bottom .footer-bottom-right { justify-content:center; }
 }
+.players-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  margin: 20px 0;
+  flex-wrap: wrap;
+}
+.page-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  transition: var(--transition);
+}
+.page-btn:hover:not(:disabled) {
+  background: var(--surface3);
+  border-color: var(--accent);
+}
+.page-btn.active {
+  background: var(--accent);
+  color: #000;
+  font-weight: 700;
+  border-color: var(--accent);
+}
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.page-ellipsis {
+  color: var(--text3);
+  padding: 0 4px;
+}
 </style>
 </head>
 <body>
@@ -1294,7 +1330,7 @@ table tr:hover { background:var(--surface2); }
     <button class="filter-btn" data-pstatus="nailed" onclick="toggleStatusFilter(this)" style="font-size:11px;">🔒 Nailed</button>
   </div>
   <div id="players-info-banner" class="card" style="display:none;margin-bottom:16px;"></div>
-  <div class="card"><div class="tbl-wrap"><table id="tbl-players"></table></div></div>
+  <div class="card"><div class="tbl-wrap"><table id="tbl-players"></table><div id="players-pagination" class="players-pagination"></div></div></div>
   <div id="players-count" style="text-align:center;padding:8px;font-size:12px;color:var(--text3);"></div>
   </div><!-- /players-content -->
 </div>
@@ -3093,13 +3129,58 @@ function filterPlayers(clickedBtn) {
   if (banner) { bannerEl.innerHTML = banner; bannerEl.style.display = ''; }
   else { bannerEl.style.display = 'none'; }
 
-  // Limit display
-  const hasSearch = !!search || pos || _playersStatusFilters.size > 0;
-  const maxShow = _playersMode === 'all' ? 200 : hasSearch ? 100 : 50;
-  const shown = filtered.slice(0, maxShow);
-  document.getElementById('tbl-players').innerHTML = playerTableHTML(shown);
-  document.getElementById('players-count').textContent = `Showing ${shown.length} of ${filtered.length} players`;
+  // Store filtered results, reset to page 1, render via pagination
+  _playersPage = 1;
+  window._playersFiltered = filtered;
+  renderPlayersTable();
 }
+
+let _playersPage = 1;
+const PLAYERS_PER_PAGE = 50;
+
+function renderPlayersTable() {
+  const filtered = window._playersFiltered || [];
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PLAYERS_PER_PAGE));
+  _playersPage = Math.min(Math.max(1, _playersPage), totalPages);
+
+  const start = (_playersPage - 1) * PLAYERS_PER_PAGE;
+  const shown = filtered.slice(start, start + PLAYERS_PER_PAGE);
+
+  document.getElementById('tbl-players').innerHTML = playerTableHTML(shown);
+  document.getElementById('players-count').textContent =
+    filtered.length > 0
+      ? `Showing ${start + 1}-${start + shown.length} of ${filtered.length} players`
+      : `No players found`;
+
+  renderPlayersPagination(totalPages);
+}
+
+function renderPlayersPagination(totalPages) {
+  const el = document.getElementById('players-pagination');
+  if (!el) return;
+  if (totalPages <= 1) { el.innerHTML = ''; return; }
+
+  let html = `<button class="page-btn" onclick="goToPlayersPage(${_playersPage - 1})" ${_playersPage === 1 ? 'disabled' : ''}>‹ Prev</button>`;
+
+  const windowSize = 2;
+  for (let i = 1; i <= totalPages; i++) {
+    if (i === 1 || i === totalPages || Math.abs(i - _playersPage) <= windowSize) {
+      html += `<button class="page-btn ${i === _playersPage ? 'active' : ''}" onclick="goToPlayersPage(${i})">${i}</button>`;
+    } else if (Math.abs(i - _playersPage) === windowSize + 1) {
+      html += `<span class="page-ellipsis">…</span>`;
+    }
+  }
+
+  html += `<button class="page-btn" onclick="goToPlayersPage(${_playersPage + 1})" ${_playersPage === totalPages ? 'disabled' : ''}>Next ›</button>`;
+  el.innerHTML = html;
+}
+
+function goToPlayersPage(page) {
+  _playersPage = page;
+  renderPlayersTable();
+  document.getElementById('tbl-players')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 
 function toggleStatusFilter(btn) {
   const key = btn.dataset.pstatus;
