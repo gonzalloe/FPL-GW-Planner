@@ -190,11 +190,15 @@ class SquadOptimizer:
                     for p in state["players"]
                 }
 
-                affordable = [
-                    c for c in candidates
-                    if c.get("price", 0) <= state["budget"]
-                    and c["player_id"] not in selected_ids
-                ]
+                affordable = sorted(
+                    [
+                        c for c in candidates
+                        if c.get("price", 0) <= state["budget"]
+                        and c["player_id"] not in selected_ids
+                    ],
+                    key=lambda c: c["predicted_points"],
+                    reverse=True,
+                )
 
                 # Limit combinations for performance
                 max_cands = min(
