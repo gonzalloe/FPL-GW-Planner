@@ -83,7 +83,14 @@ class SquadOptimizer:
 
         # temp debug check
         print("TOP SQUAD:",[(p["name"], p["predicted_points"]) for p in squad])
-        print("HAALAND AVAILABLE:",[p["predicted_points"]for p in self.predictionsif "Haaland" in p["name"]])
+        print(
+            "HAALAND AVAILABLE:",
+            [
+            p["predicted_points"]
+            for p in self.predictions
+            if "Haaland" in p["name"]
+            ]
+        )
 
         return {
             "squad": sorted(squad, key=lambda x: (x["position_id"], -x["predicted_points"])),
