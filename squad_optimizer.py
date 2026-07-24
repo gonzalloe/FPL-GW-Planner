@@ -20,6 +20,30 @@ class SquadOptimizer:
         self.predictions = [p for p in predictions if p.get("predicted_points", 0) > 0]
         self.budget = budget or (SQUAD_BUDGET / 10)
 
+    @staticmethod
+    def _squad_score(players: list) -> float:
+        """
+        Optimizer objective:
+        total predicted points + captain bonus.
+        Used during squad construction so premium captain candidates
+        are not undervalued.
+        """
+        if not players:
+            return 0.0
+
+        total = sum(
+            p.get("predicted_points", 0)
+            for p in players
+        )
+
+        captain_bonus = max(
+            (p.get("predicted_points", 0) for p in players),
+            default=0
+        )
+
+        return total + captain_bonus
+
+
     def optimize_squad(self, chip: str | None = None) -> dict:
         """
         Find the best 15-man squad maximizing total xPts.
