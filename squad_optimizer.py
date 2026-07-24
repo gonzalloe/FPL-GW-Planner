@@ -21,27 +21,25 @@ class SquadOptimizer:
         self.budget = budget or (SQUAD_BUDGET / 10)
 
     @staticmethod
-    def _squad_score(players: list) -> float:
-        """
-        Optimizer objective:
-        total predicted points + captain bonus.
-        Used during squad construction so premium captain candidates
-        are not undervalued.
-        """
+    def _squad_score(players):
         if not players:
-            return 0.0
+            return 0
 
+        # highest predicted players are starters approximation
+        xi = sorted(
+            players,
+            key=lambda p: p.get("predicted_points",0),
+            reverse=True
+        )[:11]
         total = sum(
-            p.get("predicted_points", 0)
-            for p in players
+            p.get("predicted_points",0)
+            for p in xi
         )
-
-        captain_bonus = max(
-            (p.get("predicted_points", 0) for p in players),
-            default=0
+        captain = max(
+            xi,
+            key=lambda p:p.get("predicted_points",0)
         )
-
-        return total + captain_bonus
+        return total + captain.get("predicted_points",0)
 
 
     def optimize_squad(self, chip: str | None = None) -> dict:
@@ -142,7 +140,7 @@ class SquadOptimizer:
         # Fallback: greedy approach
         return self._greedy_squad(by_pos)
 
-    def _beam_search_squad(self, by_pos: dict, beam_width: int = 300) -> list:
+    def _beam_search_squad(self, by_pos: dict, beam_width: int = 100) -> list:
         """
         Beam search across positions to find highest-xPts squad.
         Each state = (selected_players, budget_left, team_counts).
