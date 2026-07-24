@@ -155,106 +155,154 @@ class SquadOptimizer:
         """
         Beam search across positions to find highest-xPts squad.
         Each state = (selected_players, budget_left, team_counts).
+
+        Uses _squad_score() so captain bonus is included during optimization.
         """
+
         # Order: GKP(2) → FWD(3) → MID(5) → DEF(5)
-        # Pick restrictive positions first, then fill flexible ones
         pos_order = [
-            (1, 2),  # 2 GKP
-            (4, 3),  # 3 FWD
-            (3, 5),  # 5 MID
-            (2, 5),  # 5 DEF
+            (1, 2),  # GKP
+            (4, 3),  # FWD
+            (3, 5),  # MID
+            (2, 5),  # DEF
         ]
 
-        # Initial state: no players, full budget
-        states = [{"players": [], "budget": self.budget, "teams": {}, "xpts": 0.0}]
+        # Initial state
+        states = [{
+            "players": [],
+            "budget": self.budget,
+            "teams": {},
+            "xpts": 0.0
+        }]
 
         for pos_id, count in pos_order:
             candidates = by_pos.get(pos_id, [])
+
             if not candidates:
                 continue
 
             new_states = []
 
             for state in states:
-                # Generate all valid combinations of `count` players from candidates
-                # For efficiency, only try top candidates that fit budget
-                affordable = [c for c in candidates
-                              if c.get("price", 0) <= state["budget"]
-                              and c["player_id"] not in {p["player_id"] for p in state["players"]}]
 
-                # For large candidate pools, limit combinations
-                max_cands = min(len(affordable), 12 if count <= 2 else 15)
+                selected_ids = {
+                    p["player_id"]
+                    for p in state["players"]
+                }
+
+                affordable = [
+                    c for c in candidates
+                    if c.get("price", 0) <= state["budget"]
+                    and c["player_id"] not in selected_ids
+                ]
+
+                # Limit combinations for performance
+                max_cands = min(
+                    len(affordable),
+                    12 if count <= 2 else 15
+                )
+
                 pool = affordable[:max_cands]
 
                 if len(pool) < count:
-                    # Not enough candidates — try with all affordable
                     pool = affordable[:count + 5]
+
                     if len(pool) < count:
                         continue
 
                 for combo in itertools.combinations(pool, count):
-                    # Check team limits
+
                     new_teams = dict(state["teams"])
                     valid = True
                     combo_cost = 0
-                    combo_xpts = 0
 
                     for p in combo:
-                        tid = p.get("team_id", p.get("team", 0))
-                        new_teams[tid] = new_teams.get(tid, 0) + 1
+                        tid = p.get(
+                            "team_id",
+                            p.get("team", 0)
+                        )
+
+                        new_teams[tid] = (
+                            new_teams.get(tid, 0) + 1
+                        )
+
                         if new_teams[tid] > MAX_PER_TEAM:
                             valid = False
                             break
+
                         combo_cost += p.get("price", 0)
-                        combo_xpts += p["predicted_points"]
 
                     if not valid:
                         continue
 
                     new_budget = state["budget"] - combo_cost
+
                     if new_budget < 0:
                         continue
 
-                    new_players = state["players"] + list(combo)
+                    new_players = (
+                        state["players"] +
+                        list(combo)
+                    )
 
-                    # haaland appear in search check
-                    if any(p.get("web_name") == "Haaland" for p in new_players):
+                    # Debug Haaland survival
+                    if any(
+                        p.get("web_name") == "Haaland"
+                        for p in new_players
+                    ):
                         print(
                             "HAALAND STATE",
+                            f"stage={pos_id}",
                             f"players={len(new_players)}",
-                            f"cost={sum(p.get('price', 0) for p in new_players):.1f}",
+                            f"cost={sum(p.get('price',0) for p in new_players):.1f}",
                             f"score={self._squad_score(new_players):.2f}",
-                            [p.get("web_name") for p in new_players],
+                            [
+                                p.get("web_name")
+                                for p in new_players
+                            ]
                         )
-
                     new_states.append({
                         "players": new_players,
                         "budget": new_budget,
                         "teams": new_teams,
-                        "xpts": self._squad_score(new_players),
-                    })
-
-                    new_states.append({
-                        "players": state["players"] + list(combo),
-                        "budget": new_budget,
-                        "teams": new_teams,
-                        "xpts": state["xpts"] + combo_xpts,
+                        "xpts": self._squad_score(new_players)
                     })
 
             if not new_states:
-                # If no valid states, keep old states (shouldn't happen)
                 continue
 
-            # Keep top beam_width states by xPts
-            new_states.sort(key=lambda s: s["xpts"], reverse=True)
+            # Rank by captain-aware score
+            new_states.sort(
+                key=lambda s: s["xpts"],
+                reverse=True
+            )
+
             states = new_states[:beam_width]
 
-        if not states:
-            return []
 
-        # Return best squad
-        best = max(states, key=lambda s: s["xpts"])
-        return best["players"]
+            # Beam survival debug
+            print(
+                "BEAM DEBUG",
+                f"stage={pos_id}",
+                f"states={len(states)}",
+                "haaland_states=",
+                sum(
+                    1
+                    for s in states
+                    if any(
+                        p.get("web_name") == "Haaland"
+                        for p in s["players"]
+                    )
+                )
+            )
+    if not states:
+        return []
+    best = max(
+        states,
+        key=lambda s: s["xpts"]
+    )
+    return best["players"]
+
 
     def _greedy_squad(self, by_pos: dict) -> list:
         """Fallback greedy approach: pick best available player-by-player."""
