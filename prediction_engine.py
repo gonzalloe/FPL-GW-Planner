@@ -127,16 +127,16 @@ class PredictionEngine:
 
 
     def _prepare_player_priors(self):
-    """
-    Populate p['_prior_xg_per90'] / p['_prior_xa_per90'] / p['_prior_bonus_per_start']
-    for every player, per the fallback hierarchy:
-        current-season data (applied later, per-fixture, via shrinkage)
-        -> previous PL season data (fetched here, only for players with 0 mins)
-        -> position-average fallback (never zero for attackers)
+        """
+        Populate p['_prior_xg_per90'] / p['_prior_xa_per90'] / p['_prior_bonus_per_start']
+        for every player, per the fallback hierarchy:
+            current-season data (applied later, per-fixture, via shrinkage)
+            -> previous PL season data (fetched here, only for players with 0 mins)
+            -> position-average fallback (never zero for attackers)
 
-    Called once per predict_all() run - not per fixture/per prediction -
-    so no API calls happen inside the hot prediction loop.
-    """
+        Called once per predict_all() run - not per fixture/per prediction -
+        so no API calls happen inside the hot prediction loop.
+        """
         for pid, p in self.players.items():
             pos = p.get("position_id", 3)
             mins_played = int(p.get("minutes", 0))
