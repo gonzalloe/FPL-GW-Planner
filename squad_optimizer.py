@@ -56,6 +56,12 @@ class SquadOptimizer:
         # Step 2: Local search improvement — try swaps to increase total xPts
         squad = self._local_search_improve(squad)
 
+        # temp check 
+        print(
+            "AFTER LOCAL SEARCH:",
+            [(p["name"], p["predicted_points"]) for p in squad]
+        )
+
         # Step 3: Select starting XI (best 11 from 15)
         starting_xi, bench = self._select_best_xi(squad, chip)
 
@@ -246,14 +252,20 @@ class SquadOptimizer:
                 continue
 
             # Keep top beam_width states by xPts
-            new_states.sort(key=lambda s: s["xpts"], reverse=True)
+            new_states.sort(
+                key=lambda s: self._squad_score(s["players"]),
+                reverse=True
+            )
             states = new_states[:beam_width]
 
         if not states:
             return []
 
         # Return best squad
-        best = max(states, key=lambda s: s["xpts"])
+        best = max(
+            states,
+            key=lambda s: self._squad_score(s["players"])
+        )
         return best["players"]
 
     def _greedy_squad(self, by_pos: dict) -> list:
