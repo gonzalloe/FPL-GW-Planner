@@ -112,18 +112,18 @@ class PredictionEngine:
     """
 
     def __init__(self):
-    self.bootstrap = fetch_bootstrap()
-    self.fixtures = fetch_fixtures()
-    self.players = build_player_map(self.bootstrap)
-    self.teams = build_team_map(self.bootstrap)
-    self.current_gw = get_current_gameweek(self.bootstrap)
-    self.next_gw = get_next_gameweek(self.bootstrap)
-    self.dgw_teams = {}
-    self.bgw_teams = set()
-    self.team_stats = build_team_stats(
-        self.fixtures, self.teams,
-        previous_season_stats=get_team_strength_priors(self.teams),
-    )
+        self.bootstrap = fetch_bootstrap()
+        self.fixtures = fetch_fixtures()
+        self.players = build_player_map(self.bootstrap)
+        self.teams = build_team_map(self.bootstrap)
+        self.current_gw = get_current_gameweek(self.bootstrap)
+        self.next_gw = get_next_gameweek(self.bootstrap)
+        self.dgw_teams = {}
+        self.bgw_teams = set()
+        self.team_stats = build_team_stats(
+            self.fixtures, self.teams,
+            previous_season_stats=get_team_strength_priors(self.teams),
+        )
 
 
     def _prepare_player_priors(self):
