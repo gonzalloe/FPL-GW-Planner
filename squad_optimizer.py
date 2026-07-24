@@ -221,7 +221,7 @@ class SquadOptimizer:
                     if any(p["web_name"] == "Haaland" for p in players):
                         print(
                             "HAALAND STATE",
-                            len(players),
+                            len(new_players),
                             sum(p["price"] for p in players),
                             self._squad_score(players)
                         )
