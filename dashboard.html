@@ -2758,7 +2758,7 @@ function render() {
 // ── Overview Stats ──
 function renderOverviewStats(squad, gwInfo, chips) {
   const best = chips.best_chip;
-  const squadTotal = squad.predicted_total_points || 0;
+  const squadTotal = squad.squad_total_xpts || 0;
   const isLocked = v => v === '🔒' || v === '\uD83D\uDD12';
   const lockUpgrade = `<span class="lock-cell" onclick="upgradeToPremium()" title="Upgrade to unlock" style="font-size:12px;">🔒 Unlock</span>`;
 
@@ -2785,7 +2785,7 @@ function renderOverviewStats(squad, gwInfo, chips) {
 
   const html = `
     <div class="stat-box"><div class="label">XI + Captain</div><div class="value">${isLocked(squad.predicted_total_points) ? lockUpgrade : squad.predicted_total_points || '--'}</div><div class="sub">Starting XI points</div></div>
-    <div class="stat-box"><div class="label">Starting XI xPts</div><div class="value">${isLocked(squadTotal) ? lockUpgrade : (squadTotal || '--')}</div><div class="sub">XI + captain bonus</div></div>
+    <div class="stat-box"><div class="label">Squad Total</div><div class="value">${isLocked(squadTotal) ? lockUpgrade : (squadTotal || '--')}</div><div class="sub">All 15 players xPts</div></div>
     <div class="stat-box"><div class="label">Formation</div><div class="value">${squad.formation || '--'}</div><div class="sub">Cost: &pound;${squad.total_cost || '--'}m</div></div>
     <div class="stat-box"><div class="label">DGW Players</div><div class="value" style="color:var(--dgw);">${squad.dgw_players || 0}</div><div class="sub">${squad.dgw_in_xi || 0} in Starting XI</div></div>
     <div class="stat-box"><div class="label">Best Chip</div><div class="value">${chipDisplay}</div><div class="sub">${chipSub}</div></div>
@@ -2875,7 +2875,7 @@ function renderSquadTables(squad) {
 
   document.getElementById('squad-stats').innerHTML = `
     <div class="stat-box"><div class="label">XI + Captain</div><div class="value" style="color:var(--accent);">${squad.predicted_total_points}</div></div>
-    <div class="stat-box"><div class="label">Starting XI xPts</div><div class="value" style="color:var(--blue);">${squad.predicted_total_points || '?'}</div></div>
+    <div class="stat-box"><div class="label">Squad Total xPts</div><div class="value" style="color:var(--blue);">${squad.squad_total_xpts || '?'}</div></div>
     <div class="stat-box"><div class="label">Formation</div><div class="value">${squad.formation}</div></div>
     <div class="stat-box"><div class="label">Cost</div><div class="value">&pound;${squad.total_cost}m</div></div>
     <div class="stat-box"><div class="label">DGW in XI</div><div class="value" style="color:var(--dgw);">${squad.dgw_in_xi}/${xi.length}</div></div>
