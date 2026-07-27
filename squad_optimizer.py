@@ -270,8 +270,8 @@ class SquadOptimizer:
             if not candidates:
                 continue
 
+            counter = 0
             state_heap = []
-
             sorted_candidates = sorted(
                 candidates,
                 key=safe_points,
@@ -293,20 +293,12 @@ class SquadOptimizer:
                     )
                 ]
 
-                affordable.sort(
-                    key=safe_points,
-                    reverse=True
-                )
-
-
                 pool = affordable[
                     :candidate_limits[pos_id]
                 ]
 
-
                 if len(pool) < count:
                     continue
-
 
                 for combo in itertools.combinations(
                     pool,
@@ -330,7 +322,6 @@ class SquadOptimizer:
                             + 1
                         )
 
-
                         if (
                             state["teams"].get(tid, 0)
                             + team_deltas[tid]
@@ -338,24 +329,18 @@ class SquadOptimizer:
                         ):
                             valid = False
                             break
-
-
                         combo_cost += safe_price(p)
-
 
                     if not valid:
                         continue
-
 
                     new_budget = (
                         state["budget"]
                         - combo_cost
                     )
 
-
                     if new_budget < 0:
                         continue
-
 
                     if (
                         new_budget
@@ -363,12 +348,10 @@ class SquadOptimizer:
                     ):
                         continue
 
-
                     combo_sum = sum(
                         safe_points(p)
                         for p in combo
                     )
-
 
                     combo_max = max(
                         (
@@ -378,11 +361,9 @@ class SquadOptimizer:
                         default=0
                     )
 
-
                     new_teams = dict(
                         state["teams"]
                     )
-
 
                     for tid, amount in team_deltas.items():
 
@@ -391,12 +372,10 @@ class SquadOptimizer:
                             + amount
                         )
 
-
                     new_sum = (
                         state["xpts_sum"]
                         + combo_sum
                     )
-
 
                     new_max = max(
                         state["xpts_max"],
@@ -437,7 +416,7 @@ class SquadOptimizer:
             
             states = [
                 s
-                for _, s in sorted(
+                for _, _, s in sorted(
                     state_heap,
                     key=lambda x: x[0],
                     reverse=True
