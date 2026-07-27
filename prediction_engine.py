@@ -215,18 +215,16 @@ class PredictionEngine:
 
         for fix_idx, fix_info in enumerate(all_fixtures):
             fix_xg_data = get_fixture_xg(
-                p["team"], fix_info["opponent_id"],
-                fix_info["is_home"], self.team_stats
+                p["team"],
+                fix_info["opponent_id"],
+                fix_info["is_home"],
+                self.team_stats
             )
+            xmins = profile["xmins"]
 
-            # xMins for THIS fixture (drops for 2nd match in DGW)
-            minutes_profile = self.calculate_expected_minutes(
-                player,
-                num_fixtures=num_fixtures,
-                teammates_out=teammates_out,
-                out_minutes=out_minutes,
-            )
-            xmins = minutes_profile["xmins"]
+            # Reduce minutes expectation for second DGW fixture
+            if num_fixtures >= 2 and fix_idx > 0:
+                xmins *= 0.85
 
             # Compute EV for this fixture
             fix_ev = self._fixture_ev(p, fix_info, fix_xg_data, xmins)
