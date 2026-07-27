@@ -204,7 +204,8 @@ class PredictionEngine:
         out_minutes = injury_ctx.get("out_minutes", 0)
 
         # ── Starter quality (DGW-aware, injury-aware) ──
-        starter = self._assess_starter_quality(p, num_fixtures, teammates_out, out_minutes)
+        profile = self.calculate_expected_minutes(p, num_fixtures, teammates_out, out_minutes)
+        p["starter_quality"] = {**profile, "tier": self._derive_tier_label(profile)}
 
         # ── Per-fixture xPts ──
         total_raw = 0.0
@@ -219,10 +220,10 @@ class PredictionEngine:
             )
 
             # xMins for THIS fixture (drops for 2nd match in DGW)
-            xmins = self._calc_xmins(p, starter, fix_idx, num_fixtures)
+            xmins = self._calc_fixture_xmins(profile, fix_idx, num_fixtures)
 
             # Compute EV for this fixture
-            fix_ev = self._fixture_ev(p, fix_info, fix_xg_data, xmins, starter)
+            fix_ev = self._fixture_ev(p, fix_info, fix_xg_data, xmins)
 
             # Contextual factor modifiers
             factors = self._calc_all_factors(p, fix_info, fix_xg_data)
@@ -274,7 +275,7 @@ class PredictionEngine:
         total_raw = min(total_raw, max_pts)
         total_adj = min(total_adj, max_pts)
 
-        confidence = self._calc_confidence(p, all_fixtures, starter, availability, teammates_out)
+        confidence = self._calc_confidence(p, all_fixtures, p["starter_quality"], availability, teammates_out)
 
         ts = self.team_stats.get(team_id, {})
 
@@ -296,7 +297,7 @@ class PredictionEngine:
             "num_fixtures": num_fixtures,
             "is_dgw": is_dgw,
             "availability": availability,
-            "starter_quality": starter,
+            "starter_quality": p["starter_quality"],
             "factors": {k: round(v, 4) for k, v in all_factors.items()},
             "confidence": round(confidence, 2),
             "base_xp": round(total_raw, 2),
@@ -446,8 +447,7 @@ class PredictionEngine:
     # ══════════════════════════════════════════════════════════
 
     def _fixture_ev(self, p: dict, fix_info: dict,
-                    fix_xg_data: dict, xmins: float,
-                    starter: dict) -> float:
+                fix_xg_data: dict, xmins: float) -> float:
         """
         Calculate EV for ONE fixture using Poisson distributions.
 
@@ -512,7 +512,6 @@ class PredictionEngine:
         xa_current_per90 = (xa_season / (mins_played / 90.0)) if mins_played > 0 else 0.0
         prior_xa_per90 = p.get("_prior_xa_per90", POSITION_XA_PRIOR.get(pos, 0.10))
         xa_per90 = w_current * xa_current_per90 + (1 - w_current) * prior_xa_per90
-
         effective_xa = xa_per90 * mins_fraction * fdr_mod * scoring_context
         effective_xa = max(0.0, effective_xa)
         ev += poisson_ev_assists(effective_xa)
@@ -594,186 +593,93 @@ class PredictionEngine:
         return max(ev, 0.0)
 
     # ══════════════════════════════════════════════════════════
-    #  xMins (Expected Minutes)
-    # ══════════════════════════════════════════════════════════
-
-    def _calc_xmins(self, p: dict, starter: dict, fix_idx: int,
-                    num_fixtures: int) -> float:
-        """
-        Calculate expected minutes for a specific fixture.
-
-        Inspired by FPL Review's xMins: a probability-weighted average
-        across scenarios (starts, cameos, benched).
-
-        For DGW: second fixture has rotation risk factored in.
-        """
-        tier = starter["tier"]
-        avg_mins = starter["avg_mins"]
-        start_rate = starter["start_rate"]
-
-        # Base xMins from historical pattern
-        if tier == "nailed":
-            base_xmins = min(avg_mins * 1.0, 90.0)
-        elif tier == "regular":
-            # Blend: P(start)×85 + P(sub)×20 + P(bench)×0
-            p_start = start_rate
-            p_sub = min(0.20, 1.0 - start_rate)
-            base_xmins = p_start * 85.0 + p_sub * 20.0
-        elif tier == "rotation":
-            p_start = start_rate
-            p_sub = min(0.25, 1.0 - start_rate)
-            base_xmins = p_start * 80.0 + p_sub * 18.0
-        elif tier == "fringe":
-            p_start = start_rate
-            p_sub = min(0.30, 1.0 - start_rate)
-            base_xmins = p_start * 75.0 + p_sub * 15.0
-        else:
-            base_xmins = max(avg_mins * 0.5, 1.0)
-
-        # ── DGW rotation discount for 2nd match ──
-        if num_fixtures >= 2 and fix_idx >= 1:
-            if tier == "nailed":
-                # Nailed players almost always start both
-                base_xmins *= 0.92  # Slight rest risk
-            elif tier == "regular":
-                # Regular starters: meaningful rotation risk in 2nd match
-                base_xmins *= 0.75
-            elif tier == "rotation":
-                # Rotation players: high chance of being rested for 2nd
-                base_xmins *= 0.50
-            else:
-                # Fringe/bench: very unlikely to feature in 2nd
-                base_xmins *= 0.25
-
-        # Cap and floor
-        return max(0.0, min(base_xmins, 90.0))
-
-    # ══════════════════════════════════════════════════════════
     #  Starter Quality (DGW-aware)
     # ══════════════════════════════════════════════════════════
 
-    def _assess_starter_quality(self, p: dict, num_fixtures: int = 1,
+    def calculate_expected_minutes(self, p: dict, num_fixtures: int = 1,
                                 teammates_out: int = 0, out_minutes: int = 0) -> dict:
         """
-        Assess how nailed a player is, with DGW-specific and injury-aware adjustments.
-
-        Tiers:
-          nailed   : Start rate ≥75%, avg mins ≥65 → plays both DGW matches
-          regular  : Start rate ≥50%, avg mins ≥45 → likely starts both, maybe rested 1
-          rotation : Start rate ≥30%, avg mins ≥20 → starts 1, cameo/bench 1
-          fringe   : avg mins ≥8 → occasional cameo
-          bench_warmer: rarely plays
-
-        Injury boost: if teammates in same position are out, lower-tier players
-        get promoted (e.g., fringe → rotation, rotation → regular).
+        Continuous expected-minutes model. This is the ONLY source of playing-time
+        signal used in xPts math (_fixture_ev). Tier labels are derived from this
+        output afterward for display and are never read back into this function
+        or into any prediction calculation.
         """
         total_minutes = int(p.get("minutes", 0))
         starts = int(p.get("starts", 0))
         gws_played = max(self.current_gw - 1, 1)
-        max_possible = gws_played * 90
-        # ✅ fixed — blend season-long with last-5 recency, weighted toward recency
-        # once enough recent games exist. Shrinkage-style: with <2 recent games
-        # (early season, or player just returned), fall back fully to season-long
-        # to avoid over-reacting to a tiny sample - same philosophy as the
-        # cold-start priors elsewhere in this model.
+
         season_avg_mins = total_minutes / gws_played
-        season_start_rate = starts / gws_played if gws_played > 0 else 0
+        season_start_rate = starts / gws_played if gws_played > 0 else 0.0
+
+        # Recency blend (fixes stale season-average bug: a player benched the
+        # last 8 GWs no longer reads as reliable just because of an August hot streak)
         recent_games = p.get("_recent_games", 0)
         if recent_games >= 2:
             recent_start_rate = p.get("_recent_start_rate", season_start_rate)
             recent_avg_mins = p.get("_recent_avg_mins", season_avg_mins)
-            w_recent = min(recent_games / 5.0, 1.0) * 0.70  # up to 70% weight on recency at a full 5-game window
+            w_recent = min(recent_games / 5.0, 1.0) * 0.70
             start_rate = w_recent * recent_start_rate + (1 - w_recent) * season_start_rate
             avg_mins = w_recent * recent_avg_mins + (1 - w_recent) * season_avg_mins
         else:
             start_rate = season_start_rate
             avg_mins = season_avg_mins
-        minutes_pct = total_minutes / max_possible if max_possible > 0 else 0
 
-        # Minutes volatility (from XGBoost model research)
-        # High volatility = unreliable, even if per-appearance stats look good
         mins_volatility = self._calc_minutes_volatility(p)
+        availability = float(p.get("chance_of_playing_this_round") or 100) / 100.0
 
-        # Determine tier
-        if start_rate >= 0.75 and avg_mins >= 65:
-            tier = "nailed"
-            multiplier = 1.0
-        elif start_rate >= 0.50 and avg_mins >= 45:
-            tier = "regular"
-            multiplier = 0.92
-        elif start_rate >= 0.30 and avg_mins >= 20:
-            tier = "rotation"
-            multiplier = 0.70
-        elif avg_mins >= 8:
-            tier = "fringe"
-            multiplier = 0.40
-        else:
-            tier = "bench_warmer"
-            multiplier = 0.10
+        p_start = min(start_rate * availability, 1.0)
+        mins_ratio = min(avg_mins / 90.0, 1.0)
+        p_plays_60 = min(mins_ratio * availability * (1.0 - mins_volatility * 0.3), 1.0)
 
-        # ✅ fixed — a "nailed"-by-average player who's actually erratic week-to-week shouldn't be treated as fully reliable either
-        if mins_volatility > 0.6 and tier in ("nailed", "regular", "rotation"):
-            multiplier *= 0.90
+        # Rotation risk: ambiguous start rate (mid-range) is the actual risk signal,
+        # not "low tier" — a 5%-start benchwarmer isn't a rotation risk, they're just not playing.
+        rotation_risk = max(0.0, min(1.0 - abs(start_rate - 0.5) * 2.0, 1.0))
+        rotation_risk = max(rotation_risk, mins_volatility * 0.5)
 
-        # ── Teammate injury boost ──
-        # If teammates in the same position are injured/out, this player is more
-        # likely to start. Promote their tier and boost xMins accordingly.
-        injury_boost = False
+        # Injury boost applied directly to probabilities, not via tier-jump lookup
         if teammates_out >= 1:
-            # Significant boost: out_minutes means the injured player was a starter
-            injured_was_starter = out_minutes > gws_played * 30  # avg >30 mins/gw
-            if tier == "bench_warmer" and (teammates_out >= 2 or injured_was_starter):
-                tier = "fringe"
-                multiplier = max(multiplier, 0.50)
-                injury_boost = True
-            elif tier == "fringe" and injured_was_starter:
-                tier = "rotation"
-                multiplier = max(multiplier, 0.75)
-                injury_boost = True
-            elif tier == "rotation" and injured_was_starter:
-                tier = "regular"
-                multiplier = max(multiplier, 0.92)
-                injury_boost = True
-            elif tier == "regular" and teammates_out >= 2:
-                tier = "nailed"
-                multiplier = max(multiplier, 1.0)
-                injury_boost = True
+            injured_was_starter = out_minutes > gws_played * 30
+            boost = 0.0
+            if injured_was_starter:
+                boost = 0.15 if teammates_out == 1 else 0.25
+            p_start = min(p_start + boost, 1.0)
+            p_plays_60 = min(p_plays_60 + boost * 0.8, 1.0)
 
-        # ── DGW-specific: probability of starting both matches ──
+        xmins = p_plays_60 * 90.0 + max(p_start - p_plays_60, 0.0) * 45.0
+
+        # DGW: expected effective matches, scaled continuously by p_start (no tier lookup)
         if num_fixtures >= 2:
-            if tier == "nailed":
-                dgw_both_prob = 0.88  # Even nailed players occasionally rest 1
-                dgw_effective = 1.92
-            elif tier == "regular":
-                dgw_both_prob = 0.60
-                dgw_effective = 1.55
-            elif tier == "rotation":
-                dgw_both_prob = 0.25
-                dgw_effective = 1.10
-            elif tier == "fringe":
-                dgw_both_prob = 0.08
-                dgw_effective = 0.55
-            else:
-                dgw_both_prob = 0.02
-                dgw_effective = 0.15
+            dgw_both_prob = p_start * (0.9 - rotation_risk * 0.5)
+            dgw_effective = 1.0 + dgw_both_prob
         else:
             dgw_both_prob = None
-            dgw_effective = 1.0 if tier != "bench_warmer" else 0.2
+            dgw_effective = 1.0
 
         return {
-            "tier": tier,
-            "multiplier": multiplier,
-            "avg_mins": round(avg_mins, 1),
-            "start_rate": round(start_rate, 2),
-            "minutes_pct": round(minutes_pct, 2),
-            "starts": starts,
-            "total_minutes": total_minutes,
+            "p_start": round(p_start, 3),
+            "p_plays_60": round(p_plays_60, 3),
+            "xmins": round(xmins, 1),
+            "rotation_risk": round(rotation_risk, 3),
             "mins_volatility": round(mins_volatility, 2),
             "dgw_both_start_prob": round(dgw_both_prob, 2) if dgw_both_prob is not None else None,
             "dgw_effective_matches": round(dgw_effective, 2),
-            "injury_boost": injury_boost,
-            "teammates_out": teammates_out,
         }
+
+
+    def _derive_tier_label(self, profile: dict) -> str:
+        """Display-only label derived from calculate_expected_minutes() output.
+        Never read by any prediction function — UI/filtering use only."""
+        p_start = profile["p_start"]
+        risk = profile["rotation_risk"]
+        if p_start >= 0.85 and risk < 0.2:
+            return "nailed"
+        if p_start >= 0.55:
+            return "regular"
+        if p_start >= 0.25:
+            return "rotation"
+        if profile["xmins"] >= 8:
+            return "fringe"
+        return "bench_warmer"
 
     def _calc_minutes_volatility(self, p: dict) -> float:
         """

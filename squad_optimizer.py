@@ -49,19 +49,14 @@ class SquadOptimizer:
         Find the best 15-man squad maximizing total xPts.
         Then pick the best starting XI from that squad.
         """
-        # Step 1: Build optimal 15-man squad
-        squad = self._optimize_full_squad()
+        #squad = self._solve_ilp_squad()
+        if not squad:
+            return {"squad": [], "error": "No feasible squad found within budget/constraints."}
 
-        if len(squad) < 15:
-            squad = self._fill_remaining(squad)
-
-        # Step 2: Local search improvement — try swaps to increase total xPts
-        squad = self._local_search_improve(squad)
-
-        # Step 3: Select starting XI (best 11 from 15)
+        # Select starting XI (best 11 from 15)
         starting_xi, bench = self._select_best_xi(squad, chip)
 
-        # Step 4: Captain & vice-captain
+        # Captain & vice-captain
         captain, vice_captain = self._select_captain(starting_xi)
 
         # Calculate totals
@@ -153,431 +148,6 @@ class SquadOptimizer:
         # Fallback: greedy approach
         return self._greedy_squad(by_pos)
 
-    def _beam_search_squad(self, by_pos: dict, beam_width: int = 120) -> list:
-        """
-        Beam search to maximize:
-            predicted points + captain bonus
-        No premium-player bias.
-        Expensive players are selected only when their xPts justify cost.
-        Optimized:
-            - incremental xpts tracking
-            - deferred team copying
-            - heap top-k pruning
-            - budget feasibility pruning
-            - reduced memory usage
-            - safe numeric handling
-        """
-
-        pos_order = [
-            (4, 3),  # FWD
-            (3, 5),  # MID
-            (2, 5),  # DEF
-            (1, 2),  # GKP
-        ]
-
-        candidate_limits = {
-            4: 15,
-            3: 18,
-            2: 18,
-            1: 8,
-        }
-
-
-        def safe_price(p):
-            """
-            Always return numeric price.
-            """
-            value = p.get("price", 0)
-
-            if isinstance(value, (int, float)):
-                return float(value)
-
-            if isinstance(value, dict):
-                return float(
-                    value.get("value", 0)
-                )
-
-            try:
-                return float(value)
-            except Exception:
-                return 0.0
-
-
-        def safe_points(p):
-            value = p.get(
-                "predicted_points",
-                0
-            )
-
-            try:
-                return float(value)
-            except Exception:
-                return 0.0
-
-
-        def player_name(p):
-            return (
-                p.get("name")
-                or p.get("web_name")
-                or ""
-            )
-
-
-        # Precompute cheapest completion
-        min_position_cost = {}
-
-        for pos_id, count in pos_order:
-
-            prices = sorted(
-                safe_price(p)
-                for p in by_pos.get(pos_id, [])
-            )
-
-            if len(prices) >= count:
-                min_position_cost[pos_id] = sum(
-                    prices[:count]
-                )
-            else:
-                min_position_cost[pos_id] = float("inf")
-
-
-        def remaining_min_cost(index):
-
-            total = 0
-
-            for pos_id, _ in pos_order[index + 1:]:
-                total += min_position_cost[pos_id]
-
-            return total
-
-
-        states = [{
-            "players": [],
-            "budget": float(self.budget),
-            "teams": {},
-            "xpts_sum": 0.0,
-            "xpts_max": 0.0,
-            "xpts": 0.0,
-        }]
-
-
-        for index, (pos_id, count) in enumerate(pos_order):
-
-            candidates = by_pos.get(
-                pos_id,
-                []
-            )
-            if not candidates:
-                continue
-
-            counter = 0
-            state_heap = []
-            sorted_candidates = sorted(
-                candidates,
-                key=safe_points,
-                reverse=True
-            )
-
-            for state in states:
-                selected_ids = {
-                    p["player_id"]
-                    for p in state["players"]
-                }
-
-                affordable = [
-                    p
-                    for p in sorted_candidates
-                    if (
-                        p["player_id"] not in selected_ids
-                        and safe_price(p) <= state["budget"]
-                    )
-                ]
-
-                pool = affordable[
-                    :candidate_limits[pos_id]
-                ]
-
-                if len(pool) < count:
-                    continue
-
-                for combo in itertools.combinations(
-                    pool,
-                    count
-                ):
-
-                    team_deltas = {}
-                    combo_cost = 0.0
-                    valid = True
-
-
-                    for p in combo:
-
-                        tid = p.get(
-                            "team_id",
-                            p.get("team", 0)
-                        )
-
-                        team_deltas[tid] = (
-                            team_deltas.get(tid, 0)
-                            + 1
-                        )
-
-                        if (
-                            state["teams"].get(tid, 0)
-                            + team_deltas[tid]
-                            > MAX_PER_TEAM
-                        ):
-                            valid = False
-                            break
-                        combo_cost += safe_price(p)
-
-                    if not valid:
-                        continue
-
-                    new_budget = (
-                        state["budget"]
-                        - combo_cost
-                    )
-
-                    if new_budget < 0:
-                        continue
-
-                    if (
-                        new_budget
-                        < remaining_min_cost(index)
-                    ):
-                        continue
-
-                    combo_sum = sum(
-                        safe_points(p)
-                        for p in combo
-                    )
-
-                    combo_max = max(
-                        (
-                            safe_points(p)
-                            for p in combo
-                        ),
-                        default=0
-                    )
-
-                    new_teams = dict(
-                        state["teams"]
-                    )
-
-                    for tid, amount in team_deltas.items():
-
-                        new_teams[tid] = (
-                            new_teams.get(tid, 0)
-                            + amount
-                        )
-
-                    new_sum = (
-                        state["xpts_sum"]
-                        + combo_sum
-                    )
-
-                    new_max = max(
-                        state["xpts_max"],
-                        combo_max
-                    )
-
-                    new_players = state["players"] + list(combo)
-                    new_state = {
-                        "players": new_players,
-                        "budget": new_budget,
-                        "teams": new_teams,
-                        "xpts_sum": new_sum,
-                        "xpts_max": new_max,
-                        "xpts": new_sum + new_max,
-                    }
-                    score = new_state["xpts"]
-                    counter += 1
-                    if len(state_heap) < beam_width:
-                        heapq.heappush(
-                            state_heap,
-                            (score, counter, new_state)
-                        )
-                    elif score > state_heap[0][0]:
-                        heapq.heapreplace(
-                            state_heap,
-                            (score, counter, new_state)
-                        )
-
-            if not state_heap:
-                continue
-
-            if DEBUG_OPTIMIZER:
-                print(
-                    "BEAM GENERATED",
-                    f"stage={pos_id}",
-                    f"states={len(state_heap)}"
-                )
-            
-            states = [
-                s
-                for _, _, s in sorted(
-                    state_heap,
-                    key=lambda x: x[0],
-                    reverse=True
-                )
-            ]
-
-            if DEBUG_OPTIMIZER:
-                print(
-                    "BEAM DEBUG",
-                    f"stage={pos_id}",
-                    f"states={len(states)}"
-                )
-
-        if not states:
-            return []
-
-
-        best = max(
-            states,
-            key=lambda s: s["xpts"]
-        )
-
-
-        if DEBUG_OPTIMIZER:
-
-            print(
-                "BEST SQUAD",
-                round(best["xpts"], 2),
-                round(
-                    self.budget - best["budget"],
-                    1
-                ),
-                [
-                    player_name(p)
-                    for p in best["players"]
-                ]
-            )
-        return best["players"]
-
-
-    def _greedy_squad(self, by_pos: dict) -> list:
-        """Fallback greedy approach: pick best available player-by-player."""
-        squad = []
-        budget_left = self.budget
-        team_counts = {}
-        squad_ids = set()
-        pos_counts = {1: 0, 2: 0, 3: 0, 4: 0}
-
-        # Build global list sorted by xPts
-        all_candidates = []
-        for pos_id, players in by_pos.items():
-            all_candidates.extend(players)
-        all_candidates.sort(key=lambda x: x["predicted_points"], reverse=True)
-
-        # Pass 1: Fill minimum positions first to guarantee validity
-        for pos_id, limits in POSITION_LIMITS.items():
-            needed = limits["squad_min"]
-            for p in by_pos.get(pos_id, []):
-                if needed <= 0:
-                    break
-                if p["player_id"] in squad_ids:
-                    continue
-                if p.get("price", 0) > budget_left:
-                    continue
-                tid = p.get("team_id", p.get("team", 0))
-                if team_counts.get(tid, 0) >= MAX_PER_TEAM:
-                    continue
-                squad.append(p)
-                squad_ids.add(p["player_id"])
-                budget_left -= p.get("price", 0)
-                team_counts[tid] = team_counts.get(tid, 0) + 1
-                pos_counts[pos_id] = pos_counts.get(pos_id, 0) + 1
-                needed -= 1
-
-        # Pass 2: Fill remaining to 15 with highest xPts
-        for p in all_candidates:
-            if len(squad) >= SQUAD_SIZE:
-                break
-            if p["player_id"] in squad_ids:
-                continue
-            pos_id = p.get("position_id", 0)
-            max_allowed = POSITION_LIMITS.get(pos_id, {}).get("squad_max", 5)
-            if pos_counts.get(pos_id, 0) >= max_allowed:
-                continue
-            if p.get("price", 0) > budget_left:
-                continue
-            tid = p.get("team_id", p.get("team", 0))
-            if team_counts.get(tid, 0) >= MAX_PER_TEAM:
-                continue
-            squad.append(p)
-            squad_ids.add(p["player_id"])
-            budget_left -= p.get("price", 0)
-            team_counts[tid] = team_counts.get(tid, 0) + 1
-            pos_counts[pos_id] = pos_counts.get(pos_id, 0) + 1
-
-        return squad
-
-    def _local_search_improve(self, squad: list, max_iterations: int = 200) -> list:
-        """
-        Iteratively try to swap squad players with non-squad players
-        to increase total xPts while respecting all constraints.
-        """
-        squad_ids = {p["player_id"] for p in squad}
-        eligible = self._get_eligible_players()
-        non_squad = [p for p in eligible if p["player_id"] not in squad_ids]
-        non_squad.sort(key=lambda x: x["predicted_points"], reverse=True)
-
-        # Only consider top non-squad players (no point swapping for worse)
-        min_squad_xpts = min(p["predicted_points"] for p in squad) if squad else 0
-        non_squad = [p for p in non_squad if p["predicted_points"] > min_squad_xpts * 0.8]
-
-        improved = True
-        iterations = 0
-        while improved and iterations < max_iterations:
-            improved = False
-            iterations += 1
-
-            # Try swapping each squad player with each non-squad player
-            squad_sorted = sorted(squad, key=lambda x: x["predicted_points"])
-
-            for i, out_player in enumerate(squad_sorted):
-                if improved:
-                    break
-                for in_player in non_squad:
-                    if in_player["player_id"] in squad_ids:
-                        continue
-                    # Same position required
-                    if in_player.get("position_id") != out_player.get("position_id"):
-                        continue
-                    # Must improve xPts
-                    gain = in_player["predicted_points"] - out_player["predicted_points"]
-                    if gain <= 0.05:  # Min threshold to swap
-                        continue
-                    # Budget check
-                    cost_diff = in_player.get("price", 0) - out_player.get("price", 0)
-                    budget_remaining = self.budget - sum(p.get("price", 0) for p in squad)
-                    if cost_diff > budget_remaining + 0.01:
-                        continue
-                    # Team limit check
-                    in_tid = in_player.get("team_id", in_player.get("team", 0))
-                    out_tid = out_player.get("team_id", out_player.get("team", 0))
-                    team_counts = {}
-                    for p in squad:
-                        if p["player_id"] != out_player["player_id"]:
-                            tid = p.get("team_id", p.get("team", 0))
-                            team_counts[tid] = team_counts.get(tid, 0) + 1
-                    team_counts[in_tid] = team_counts.get(in_tid, 0) + 1
-                    if team_counts[in_tid] > MAX_PER_TEAM:
-                        continue
-
-                    # Valid swap — do it
-                    squad = [p for p in squad if p["player_id"] != out_player["player_id"]]
-                    squad.append(in_player)
-                    squad_ids.discard(out_player["player_id"])
-                    squad_ids.add(in_player["player_id"])
-                    non_squad = [p for p in non_squad if p["player_id"] != in_player["player_id"]]
-                    non_squad.append(out_player)
-                    improved = True
-                    break
-
-        return squad
 
     def _get_eligible_players(self) -> list:
         """Filter predictions to eligible players only."""
@@ -599,42 +169,50 @@ class SquadOptimizer:
             eligible.append(p)
         return eligible
 
-    def _fill_remaining(self, squad: list) -> list:
-        """Fill remaining spots if beam search didn't get to 15."""
-        budget_left = self.budget - sum(p.get("price", 0) for p in squad)
-        team_counts = {}
-        for p in squad:
-            tid = p.get("team_id", p.get("team", 0))
-            team_counts[tid] = team_counts.get(tid, 0) + 1
-        squad_ids = {p["player_id"] for p in squad}
-        pos_counts = {}
-        for p in squad:
-            pid = p.get("position_id", 0)
-            pos_counts[pid] = pos_counts.get(pid, 0) + 1
+    def _solve_ilp_squad(self) -> list:
+        """
+        Exact 0/1 ILP replacement for beam search. Guarantees the globally
+        optimal 15-man squad (by predicted_points + captain bonus) under
+        budget, position-quota, and per-team constraints — no heuristic
+        pruning, no candidate-pool truncation, no risk of a top-xPts player
+        being excluded by search approximation.
+        """
+        from pulp import LpProblem, LpMaximize, LpVariable, lpSum, LpBinary, PULP_CBC_CMD, LpStatus
 
-        eligible = self._get_eligible_players()
-        remaining = [p for p in eligible if p["player_id"] not in squad_ids]
-        remaining.sort(key=lambda x: x["predicted_points"], reverse=True)
+        players = self.predictions
+        n = len(players)
+        if n < 15:
+            return []
 
-        for p in remaining:
-            if len(squad) >= SQUAD_SIZE:
-                break
-            pos_id = p.get("position_id", 0)
-            max_allowed = POSITION_LIMITS.get(pos_id, {}).get("squad_max", 5)
-            if pos_counts.get(pos_id, 0) >= max_allowed:
-                continue
-            if p.get("price", 0) > budget_left:
-                continue
-            tid = p.get("team_id", p.get("team", 0))
-            if team_counts.get(tid, 0) >= MAX_PER_TEAM:
-                continue
-            squad.append(p)
-            squad_ids.add(p["player_id"])
-            budget_left -= p.get("price", 0)
-            team_counts[tid] = team_counts.get(tid, 0) + 1
-            pos_counts[pos_id] = pos_counts.get(pos_id, 0) + 1
+        prob = LpProblem("fpl_squad", LpMaximize)
+        x = [LpVariable(f"x_{i}", cat=LpBinary) for i in range(n)]
+        c = [LpVariable(f"c_{i}", cat=LpBinary) for i in range(n)]
 
-        return squad
+        pts = [p["predicted_points"] for p in players]
+        price = [p.get("price", 0) for p in players]
+        pos = [p.get("position_id", 0) for p in players]
+        team = [p.get("team_id", p.get("team", 0)) for p in players]
+
+        prob += lpSum(x[i] * pts[i] for i in range(n)) + lpSum(c[i] * pts[i] for i in range(n))
+
+        prob += lpSum(x) == 15
+        for pos_id, quota in ((1, 2), (2, 5), (3, 5), (4, 3)):
+            prob += lpSum(x[i] for i in range(n) if pos[i] == pos_id) == quota
+
+        prob += lpSum(x[i] * price[i] for i in range(n)) <= self.budget
+
+        for tid in set(team):
+            prob += lpSum(x[i] for i in range(n) if team[i] == tid) <= MAX_PER_TEAM
+
+        for i in range(n):
+            prob += c[i] <= x[i]
+        prob += lpSum(c) == 1
+
+        status = prob.solve(PULP_CBC_CMD(msg=0))
+        if LpStatus[status] != "Optimal":
+            return []
+
+        return [players[i] for i in range(n) if x[i].value() == 1]
 
     def _select_best_xi(self, squad: list, chip: str | None = None) -> tuple[list, list]:
         """
