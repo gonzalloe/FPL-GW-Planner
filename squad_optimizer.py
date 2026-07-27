@@ -272,20 +272,24 @@ class SquadOptimizer:
 
             state_heap = []
 
-            for state in states:
+            sorted_candidates = sorted(
+                candidates,
+                key=safe_points,
+                reverse=True
+            )
 
+            for state in states:
                 selected_ids = {
                     p["player_id"]
                     for p in state["players"]
                 }
 
                 affordable = [
-                    p for p in candidates
+                    p
+                    for p in sorted_candidates
                     if (
-                        p.get("player_id")
-                        not in selected_ids
-                        and safe_price(p)
-                        <= state["budget"]
+                        p["player_id"] not in selected_ids
+                        and safe_price(p) <= state["budget"]
                     )
                 ]
 
@@ -399,7 +403,7 @@ class SquadOptimizer:
                         combo_max
                     )
 
-
+                    new_players = state["players"] + list(combo)
                     new_state = {
                         "players": new_players,
                         "budget": new_budget,
@@ -409,29 +413,27 @@ class SquadOptimizer:
                         "xpts": new_sum + new_max,
                     }
                     score = new_state["xpts"]
+                    counter += 1
                     if len(state_heap) < beam_width:
                         heapq.heappush(
                             state_heap,
-                            (score, new_state)
+                            (score, counter, new_state)
                         )
                     elif score > state_heap[0][0]:
                         heapq.heapreplace(
                             state_heap,
-                            (score, new_state)
+                            (score, counter, new_state)
                         )
-
 
             if not state_heap:
                 continue
 
             if DEBUG_OPTIMIZER:
-
                 print(
                     "BEAM GENERATED",
                     f"stage={pos_id}",
-                    f"states={len(new_states)}"
+                    f"states={len(state_heap)}"
                 )
-
             
             states = [
                 s
@@ -443,13 +445,11 @@ class SquadOptimizer:
             ]
 
             if DEBUG_OPTIMIZER:
-
                 print(
                     "BEAM DEBUG",
                     f"stage={pos_id}",
                     f"states={len(states)}"
                 )
-
 
         if not states:
             return []
