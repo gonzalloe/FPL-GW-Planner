@@ -153,7 +153,7 @@ class SquadOptimizer:
         # Fallback: greedy approach
         return self._greedy_squad(by_pos)
 
-    def _beam_search_squad(self, by_pos: dict, beam_width: int = 100) -> list:
+    def _beam_search_squad(self, by_pos: dict, beam_width: int = 500) -> list:
         """
         Beam search across positions to find highest-xPts squad.
         Each state = (selected_players, budget_left, team_counts).
@@ -165,10 +165,10 @@ class SquadOptimizer:
 
         # Order: GKP(2) → FWD(3) → MID(5) → DEF(5)
         pos_order = [
-            (1, 2),  # GKP
             (4, 3),  # FWD
-            (3, 5),  # MID
             (2, 5),  # DEF
+            (3, 5),  # MID
+            (1, 2),  # GKP
         ]
 
         # Initial state — must include xpts_sum/xpts_max since combo scoring
