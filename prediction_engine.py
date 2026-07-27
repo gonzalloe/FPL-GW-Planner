@@ -220,7 +220,13 @@ class PredictionEngine:
             )
 
             # xMins for THIS fixture (drops for 2nd match in DGW)
-            xmins = self._calc_fixture_xmins(profile, fix_idx, num_fixtures)
+            minutes_profile = self.calculate_expected_minutes(
+                player,
+                num_fixtures=num_fixtures,
+                teammates_out=teammates_out,
+                out_minutes=out_minutes,
+            )
+            xmins = minutes_profile["xmins"]
 
             # Compute EV for this fixture
             fix_ev = self._fixture_ev(p, fix_info, fix_xg_data, xmins)
