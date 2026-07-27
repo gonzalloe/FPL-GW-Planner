@@ -153,7 +153,7 @@ class SquadOptimizer:
         # Fallback: greedy approach
         return self._greedy_squad(by_pos)
 
-    def _beam_search_squad(self, by_pos: dict, beam_width: int = 150) -> list:
+    def _beam_search_squad(self, by_pos: dict, beam_width: int = 120) -> list:
         """
         Beam search to maximize:
             predicted points + captain bonus
@@ -176,10 +176,10 @@ class SquadOptimizer:
         ]
 
         candidate_limits = {
-            4: 20,
-            3: 25,
-            2: 25,
-            1: 10,
+            4: 18,
+            3: 20,
+            2: 20,
+            1: 8,
         }
 
 
