@@ -217,6 +217,15 @@ def _run_predictions(gw=None):
     OUTPUT_DIR.mkdir(exist_ok=True)
     filename = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
     filename.write_text(json.dumps(output, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    # debug temp
+    print(
+        "[REFRESH SAVED]",
+        filename,
+        "exists=",
+        filename.exists(),
+        "size=",
+        filename.stat().st_size
+    )
     invalidate_cache()  # Clear all cached responses when predictions change
     return output
 
@@ -362,24 +371,54 @@ _PREDICTIONS_MEMO = {"key": None, "preds": [], "data": {}}
 _PREDICTIONS_LOCK = threading.Lock()
 
 def _cached_predictions():
-    """Load cached predictions. Returns (predictions_list, full_data_dict) or ([], {}).
-    Caches parsed JSON in process memory, invalidated by file mtime."""
-    files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
+    """Load newest GW prediction cache."""
+    files = list(OUTPUT_DIR.glob("gw*_predictions.json"))
     if not files:
         return [], {}
+    def gw_number(path):
+        import re
+        m = re.search(r"gw(\d+)_predictions", path.name)
+        return int(m.group(1)) if m else -1
+    files.sort(key=gw_number,reverse=True)
     p = files[0]
-    try: mtime = p.stat().st_mtime
-    except Exception: mtime = 0
+    try:
+        mtime = p.stat().st_mtime
+    except Exception:
+        mtime = 0
     key = (str(p), mtime)
     with _PREDICTIONS_LOCK:
         if _PREDICTIONS_MEMO.get("key") == key:
-            return _PREDICTIONS_MEMO["preds"], _PREDICTIONS_MEMO["data"]
-    data = json.loads(p.read_text(encoding="utf-8"))
-    preds = data.get("predictions", [])
+            return (
+                _PREDICTIONS_MEMO["preds"],
+                _PREDICTIONS_MEMO["data"]
+            )
+    try:
+        data = json.loads(
+            p.read_text(
+                encoding="utf-8"
+            )
+        )
+        preds = data.get(
+            "predictions",
+            []
+        )
+    except Exception as e:
+        print(
+            "[CACHE LOAD ERROR]",
+            p,
+            e
+        )
+        return [], {}
     with _PREDICTIONS_LOCK:
         _PREDICTIONS_MEMO["key"] = key
         _PREDICTIONS_MEMO["preds"] = preds
         _PREDICTIONS_MEMO["data"] = data
+    print(
+        "[CACHE LOADED]",
+        p.name,
+        len(preds),
+        "players"
+    )
     return preds, data
 
 
