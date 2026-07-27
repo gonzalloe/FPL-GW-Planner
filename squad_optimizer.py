@@ -205,7 +205,7 @@ class SquadOptimizer:
                 if DEBUG_OPTIMIZER and pos_id == 4:
                     print(
                         "FWD POOL TOP:",
-                        [(p.get("web_name"), p.get("predicted_points")) for p in affordable[:15]]
+                        [(p.get("name") or p.get("web_name"), p.get("predicted_points"), p.get("price")) for p in affordable[:15]]
                     )
 
                 # Limit combinations for performance
@@ -294,6 +294,35 @@ class SquadOptimizer:
 
             if not new_states:
                 continue
+
+            if DEBUG_OPTIMIZER and pos_id == 4:
+                haaland_generated = [
+                    s for s in new_states
+                    if any(
+                        "Haaland" in (
+                            p.get("name") or
+                            p.get("web_name") or
+                            ""
+                        )
+                        for p in s["players"]
+                    )
+                ]
+
+                print(
+                    "HAALAND GENERATED:",
+                    len(haaland_generated)
+                )
+
+                for s in haaland_generated[:5]:
+                    print(
+                        "HAALAND COMBO:",
+                        round(s["xpts"],2),
+                        round(s["budget"],2),
+                        [
+                            p.get("name") or p.get("web_name")
+                            for p in s["players"]
+                        ]
+                    )    
 
             # Top-K via heap: O(n log k) instead of full sort's O(n log n)
             states = heapq.nlargest(beam_width, new_states, key=lambda s: s["xpts"])
