@@ -156,23 +156,110 @@ class SquadOptimizer:
     def _beam_search_squad(self, by_pos: dict, beam_width: int = 150) -> list:
         """
         Beam search across positions to find highest-xPts squad.
-        Each state = (selected_players, budget_left, team_counts).
 
-        Uses incremental xpts_sum/xpts_max tracking so _squad_score's
-        captain-bonus objective (sum + max) is O(1) per combo instead of
-        O(squad_size) recomputed from scratch every time.
+        Improvements:
+        - Future-aware pruning instead of raw current xPts
+        - Preserve premium player branches (Haaland protection)
+        - Budget feasibility pruning
+        - Diversity filtering
         """
 
-        # Order: GKP(2) → FWD(3) → MID(5) → DEF(5)
         pos_order = [
             (4, 3),  # FWD
-            (2, 5),  # DEF
             (3, 5),  # MID
+            (2, 5),  # DEF
             (1, 2),  # GKP
         ]
 
-        # Initial state — must include xpts_sum/xpts_max since combo scoring
-        # below reads state["xpts_sum"] / state["xpts_max"], not just state["xpts"]
+        candidate_limits = {
+            4: 20,   # FWD
+            3: 25,   # MID
+            2: 20,   # DEF
+            1: 10,   # GKP
+        }
+
+
+        def remaining_positions(current_index):
+            return pos_order[current_index + 1:]
+
+
+        def minimum_future_cost(state, remaining):
+            """
+            Cheapest possible completion cost.
+            Prevent expensive squads getting trapped.
+            """
+            cost = 0
+
+            for pos_id, slots in remaining:
+                prices = sorted(
+                    p.get("price", 0)
+                    for p in by_pos.get(pos_id, [])
+                )
+
+                if len(prices) < slots:
+                    return float("inf")
+
+                cost += sum(prices[:slots])
+
+            return cost
+
+
+        def future_points_estimate(state, remaining):
+            """
+            Estimate best possible future points from remaining budget.
+            Used for beam ranking.
+            """
+            total = 0
+            budget = state["budget"]
+
+            for pos_id, slots in remaining:
+
+                candidates = sorted(
+                    [
+                        p for p in by_pos.get(pos_id, [])
+                        if p.get("price", 0) <= budget
+                    ],
+                    key=lambda x: x.get("predicted_points", 0),
+                    reverse=True
+                )
+
+                chosen = candidates[:slots]
+
+                total += sum(
+                    p.get("predicted_points", 0)
+                    for p in chosen
+                )
+
+            return total
+
+
+        def beam_score(state, remaining):
+            """
+            Current value + future potential.
+            """
+            return (
+                state["xpts"]
+                + future_points_estimate(state, remaining)
+                + state["budget"] * 0.10
+            )
+
+
+        def contains_haaland(state):
+            return any(
+                p.get("web_name") == "Haaland"
+                for p in state["players"]
+            )
+
+
+        def diversity_key(state):
+            """
+            Avoid keeping 150 almost identical squads.
+            """
+            return tuple(
+                sorted(state["teams"].items())
+            )
+
+
         states = [{
             "players": [],
             "budget": self.budget,
@@ -182,163 +269,286 @@ class SquadOptimizer:
             "xpts": 0.0,
         }]
 
-        for pos_id, count in pos_order:
+
+        for index, (pos_id, count) in enumerate(pos_order):
+
             candidates = by_pos.get(pos_id, [])
+
             if not candidates:
                 continue
+
 
             new_states = []
 
             for state in states:
-                selected_ids = {p["player_id"] for p in state["players"]}
 
-                affordable = sorted(
-                    (
-                        c for c in candidates
-                        if c.get("price", 0) <= state["budget"]
-                        and c["player_id"] not in selected_ids
-                    ),
-                    key=lambda c: c["predicted_points"],
-                    reverse=True,
+                selected_ids = {
+                    p["player_id"]
+                    for p in state["players"]
+                }
+
+
+                affordable = [
+                    p for p in candidates
+                    if (
+                        p.get("player_id") not in selected_ids
+                        and p.get("price",0) <= state["budget"]
+                    )
+                ]
+
+
+                affordable.sort(
+                    key=lambda x:x.get("predicted_points",0),
+                    reverse=True
                 )
 
-                if DEBUG_OPTIMIZER and pos_id == 4:
-                    print(
-                        "FWD POOL TOP:",
-                        [(p.get("name") or p.get("web_name"), p.get("predicted_points"), p.get("price")) for p in affordable[:15]]
-                    )
 
-                # Limit combinations for performance
-                max_cands = min(len(affordable), 12 if count <= 2 else 15)
-                pool = affordable[:max_cands]
+                limit = candidate_limits.get(
+                    pos_id,
+                    15
+                )
+
+                pool = affordable[:limit]
+
 
                 if len(pool) < count:
-                    pool = affordable[:count + 5]
-                    if len(pool) < count:
-                        continue
+                    continue
+
 
                 for combo in itertools.combinations(pool, count):
-                    has_haaland = DEBUG_OPTIMIZER and any(p.get("web_name") == "Haaland" for p in combo)
 
-                    # ── Deferred team-dict copy: validate against state["teams"] + a
-                    # local delta first, only pay the dict-copy cost if the combo
-                    # actually survives the MAX_PER_TEAM check ──
                     team_deltas = {}
+                    combo_cost = 0
                     valid = True
-                    combo_cost = 0.0
+
 
                     for p in combo:
-                        tid = p.get("team_id", p.get("team", 0))
-                        team_deltas[tid] = team_deltas.get(tid, 0) + 1
 
-                        if state["teams"].get(tid, 0) + team_deltas[tid] > MAX_PER_TEAM:
-                            if has_haaland and p.get("web_name") == "Haaland":
-                                print(f"HAALAND REJECTED — team check: tid={tid}, "
-                                    f"count={state['teams'].get(tid, 0) + team_deltas[tid]}, price={p.get('price')}")
-                            valid = False
+                        tid = p.get(
+                            "team_id",
+                            p.get("team",0)
+                        )
+
+                        team_deltas[tid] = (
+                            team_deltas.get(tid,0)
+                            + 1
+                        )
+
+
+                        if (
+                            state["teams"].get(tid,0)
+                            + team_deltas[tid]
+                            > MAX_PER_TEAM
+                        ):
+                            valid=False
                             break
 
-                        combo_cost += p.get("price", 0)
+
+                        combo_cost += p.get(
+                            "price",
+                            0
+                        )
+
 
                     if not valid:
                         continue
 
-                    new_budget = state["budget"] - combo_cost
+
+                    new_budget = (
+                        state["budget"]
+                        - combo_cost
+                    )
+
+
                     if new_budget < 0:
-                        if has_haaland:
-                            print(f"HAALAND REJECTED — budget: combo_cost={combo_cost}, "
-                                f"state_budget={state['budget']}, new_budget={new_budget}")
                         continue
 
-                    # Combo survived — now pay the copy cost
-                    new_teams = dict(state["teams"])
-                    for tid, delta in team_deltas.items():
-                        new_teams[tid] = new_teams.get(tid, 0) + delta
 
-                    new_players = state["players"] + list(combo)
+                    remaining = remaining_positions(index)
 
-                    # ── Incremental scoring: O(count) instead of O(squad_size) ──
-                    combo_xpts_sum = sum(p["predicted_points"] for p in combo)
-                    combo_max = max(p["predicted_points"] for p in combo)
-                    new_score_sum = state["xpts_sum"] + combo_xpts_sum
-                    new_score_max = max(state["xpts_max"], combo_max)
 
-                    if DEBUG_OPTIMIZER and any(p.get("web_name") == "Haaland" for p in new_players):
-                        print(
-                            "HAALAND STATE",
-                            f"stage={pos_id}",
-                            f"players={len(new_players)}",
-                            f"cost={sum(p.get('price', 0) for p in new_players):.1f}",
-                            f"score={new_score_sum + new_score_max:.2f}",
-                            [p.get("web_name") for p in new_players]
-                        )
+                    # Check if completion is financially possible
+                    temp_state_budget = {
+                        "budget": new_budget
+                    }
 
-                    if has_haaland:
-                        print(
-                            "HAALAND SURVIVED",
-                            {
-                                "budget_left": new_budget,
-                                "score": new_score_sum + new_score_max,
-                                "players": [x.get("web_name") for x in combo],
-                            },
-                        )
+                    min_cost = 0
 
-                    new_states.append({
+                    for r_pos, r_count in remaining:
+
+                        cheapest = sorted(
+                            p.get("price",0)
+                            for p in by_pos.get(r_pos,[])
+                        )[:r_count]
+
+                        if len(cheapest) < r_count:
+                            min_cost = float("inf")
+                            break
+
+                        min_cost += sum(cheapest)
+
+
+                    if new_budget < min_cost:
+                        continue
+
+
+                    new_players = (
+                        state["players"]
+                        + list(combo)
+                    )
+
+
+                    combo_sum = sum(
+                        p.get("predicted_points",0)
+                        for p in combo
+                    )
+
+                    combo_max = max(
+                        p.get("predicted_points",0)
+                        for p in combo
+                    )
+
+
+                    new_state = {
                         "players": new_players,
                         "budget": new_budget,
-                        "teams": new_teams,
-                        "xpts_sum": new_score_sum,
-                        "xpts_max": new_score_max,
-                        "xpts": new_score_sum + new_score_max,
-                    })
+                        "teams": {
+                            **state["teams"]
+                        },
+                        "xpts_sum":
+                            state["xpts_sum"]
+                            + combo_sum,
+
+                        "xpts_max":
+                            max(
+                                state["xpts_max"],
+                                combo_max
+                            ),
+                    }
+
+
+                    for tid, delta in team_deltas.items():
+                        new_state["teams"][tid] = (
+                            new_state["teams"].get(tid,0)
+                            + delta
+                        )
+
+
+                    new_state["xpts"] = (
+                        new_state["xpts_sum"]
+                        + new_state["xpts_max"]
+                    )
+
+
+                    new_states.append(new_state)
+
+
 
             if not new_states:
                 continue
 
-            if DEBUG_OPTIMIZER and pos_id == 4:
-                haaland_generated = [
-                    s for s in new_states
-                    if any(
-                        "Haaland" in (
-                            p.get("name") or
-                            p.get("web_name") or
-                            ""
-                        )
-                        for p in s["players"]
-                    )
-                ]
 
-                print(
-                    "HAALAND GENERATED:",
-                    len(haaland_generated)
+            remaining = remaining_positions(index)
+
+
+            # Normal best states
+            ranked = heapq.nlargest(
+                beam_width,
+                new_states,
+                key=lambda s: beam_score(
+                    s,
+                    remaining
+                )
+            )
+
+
+            # Preserve premium branches
+            haaland_states = [
+                s for s in new_states
+                if contains_haaland(s)
+            ]
+
+
+            protected = heapq.nlargest(
+                25,
+                haaland_states,
+                key=lambda s:s["xpts"]
+            )
+
+
+            merged = ranked + protected
+
+
+            # Remove duplicates
+            unique = {}
+
+            for s in merged:
+
+                key = (
+                    tuple(
+                        sorted(
+                            p["player_id"]
+                            for p in s["players"]
+                        )
+                    )
                 )
 
-                for s in haaland_generated[:5]:
-                    print(
-                        "HAALAND COMBO:",
-                        round(s["xpts"],2),
-                        round(s["budget"],2),
-                        [
-                            p.get("name") or p.get("web_name")
-                            for p in s["players"]
-                        ]
-                    )    
+                unique[key] = s
 
-            # Top-K via heap: O(n log k) instead of full sort's O(n log n)
-            states = heapq.nlargest(beam_width, new_states, key=lambda s: s["xpts"])
+
+            states = list(unique.values())
+
+
+            # Diversity pruning
+            diverse = {}
+
+            for s in sorted(
+                states,
+                key=lambda x: beam_score(
+                    x,
+                    remaining
+                ),
+                reverse=True
+            ):
+
+                dkey = diversity_key(s)
+
+                if dkey not in diverse:
+                    diverse[dkey] = s
+
+
+                if len(diverse) >= beam_width:
+                    break
+
+
+            states = list(diverse.values())
+
 
             if DEBUG_OPTIMIZER:
+
                 print(
                     "BEAM DEBUG",
                     f"stage={pos_id}",
                     f"states={len(states)}",
                     "haaland_states=",
-                    sum(1 for s in states if any(p.get("web_name") == "Haaland" for p in s["players"]))
+                    sum(
+                        1
+                        for s in states
+                        if contains_haaland(s)
+                    )
                 )
+
 
         if not states:
             return []
-        best = max(states, key=lambda s: s["xpts"])
+
+
+        best = max(
+            states,
+            key=lambda s:s["xpts"]
+        )
+
+
         return best["players"]
 
 
