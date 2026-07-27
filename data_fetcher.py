@@ -100,6 +100,39 @@ def get_last_season_rates(player_id: int) -> dict:
         }
     return {}
 
+def get_recent_gw_stats(player_id: int, window: int = 5) -> dict:
+    """
+    Current-season per-gameweek minutes/starts from the last `window` GWs,
+    via element-summary's `history` array (distinct from `history_past`,
+    which covers prior completed seasons). Used to detect a player who has
+    fallen out of / into the team recently - something season-long
+    cumulative starts/minutes cannot see, since it treats August and this
+    week's form identically.
+    Returns {} if fewer than 2 games are available (too little to trust).
+    """
+    try:
+        detail = fetch_player_detail(player_id)
+    except Exception:
+        return {}
+
+    history = detail.get("history", []) if isinstance(detail, dict) else []
+    if not history:
+        return {}
+
+    recent = history[-window:]
+    if len(recent) < 2:
+        return {}
+
+    starts = sum(1 for gw in recent if int(gw.get("minutes", 0) or 0) >= 60)
+    total_mins = sum(int(gw.get("minutes", 0) or 0) for gw in recent)
+    n = len(recent)
+
+    return {
+        "recent_start_rate": starts / n,
+        "recent_avg_mins": total_mins / n,
+        "recent_games": n,
+    }
+
 
 def fetch_gameweek_live(event_id: int) -> dict:
     """Fetch live stats for a specific gameweek."""

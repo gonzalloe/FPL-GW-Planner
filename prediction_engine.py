@@ -32,7 +32,7 @@ from data_fetcher import (
     build_player_map, build_team_map, get_player_fixture,
     get_player_fixtures, get_dgw_teams, get_bgw_teams,
     get_next_gameweek, get_current_gameweek,
-    get_last_season_rates, get_previous_season_team_stats
+    get_last_season_rates, get_previous_season_team_stats, get_recent_gw_stats
 )
 from team_analysis import (
     build_team_stats, get_h2h, get_fixture_xg,
@@ -162,6 +162,14 @@ class PredictionEngine:
             p["_prior_xg_per90"] = prior_xg
             p["_prior_xa_per90"] = prior_xa
             p["_prior_bonus_per_start"] = prior_bonus
+
+            try:
+                recent = get_recent_gw_stats(pid, window=5)
+            except Exception:
+                recent = {}
+            p["_recent_start_rate"] = recent.get("recent_start_rate")
+            p["_recent_avg_mins"] = recent.get("recent_avg_mins")
+            p["_recent_games"] = recent.get("recent_games", 0)
         
 
     # ──────────────────────────────────────────────────────────
@@ -663,8 +671,23 @@ class PredictionEngine:
         starts = int(p.get("starts", 0))
         gws_played = max(self.current_gw - 1, 1)
         max_possible = gws_played * 90
-        avg_mins = total_minutes / gws_played
-        start_rate = starts / gws_played if gws_played > 0 else 0
+        # ✅ fixed — blend season-long with last-5 recency, weighted toward recency
+        # once enough recent games exist. Shrinkage-style: with <2 recent games
+        # (early season, or player just returned), fall back fully to season-long
+        # to avoid over-reacting to a tiny sample - same philosophy as the
+        # cold-start priors elsewhere in this model.
+        season_avg_mins = total_minutes / gws_played
+        season_start_rate = starts / gws_played if gws_played > 0 else 0
+        recent_games = p.get("_recent_games", 0)
+        if recent_games >= 2:
+            recent_start_rate = p.get("_recent_start_rate", season_start_rate)
+            recent_avg_mins = p.get("_recent_avg_mins", season_avg_mins)
+            w_recent = min(recent_games / 5.0, 1.0) * 0.70  # up to 70% weight on recency at a full 5-game window
+            start_rate = w_recent * recent_start_rate + (1 - w_recent) * season_start_rate
+            avg_mins = w_recent * recent_avg_mins + (1 - w_recent) * season_avg_mins
+        else:
+            start_rate = season_start_rate
+            avg_mins = season_avg_mins
         minutes_pct = total_minutes / max_possible if max_possible > 0 else 0
 
         # Minutes volatility (from XGBoost model research)
@@ -688,9 +711,9 @@ class PredictionEngine:
             tier = "bench_warmer"
             multiplier = 0.10
 
-        # Volatility penalty (from XGBoost research: minutes volatility is key risk signal)
-        if mins_volatility > 0.6 and tier in ("regular", "rotation"):
-            multiplier *= 0.90  # Volatile minutes = less reliable
+        # ✅ fixed — a "nailed"-by-average player who's actually erratic week-to-week shouldn't be treated as fully reliable either
+        if mins_volatility > 0.6 and tier in ("nailed", "regular", "rotation"):
+            multiplier *= 0.90
 
         # ── Teammate injury boost ──
         # If teammates in the same position are injured/out, this player is more
