@@ -157,17 +157,15 @@ class SquadOptimizer:
         """
         Beam search to maximize:
             predicted points + captain bonus
-
-        Objective:
-            No player bias.
-            Premium players win only if their xPts justify their price.
-
+        No premium-player bias.
+        Expensive players are selected only when their xPts justify cost.
         Optimized:
-            - Incremental xpts_sum/xpts_max tracking
-            - Streaming top-k pruning during generation
-            - Deferred team copying
-            - Budget feasibility pruning
-            - Reduced memory usage
+            - incremental xpts tracking
+            - deferred team copying
+            - heap top-k pruning
+            - budget feasibility pruning
+            - reduced memory usage
+            - safe numeric handling
         """
 
         pos_order = [
@@ -178,40 +176,43 @@ class SquadOptimizer:
         ]
 
         candidate_limits = {
-            4: 18,
-            3: 22,
-            2: 22,
+            4: 20,
+            3: 25,
+            2: 25,
             1: 10,
         }
 
-        GENERATION_BUFFER = beam_width * 300
 
+        def safe_price(p):
+            """
+            Always return numeric price.
+            """
+            value = p.get("price", 0)
 
-        # Precompute cheapest completion cost
-        min_position_cost = {}
+            if isinstance(value, (int, float)):
+                return float(value)
 
-        for pos_id, count in pos_order:
-            cheapest = sorted(
-                p.get("price", 0)
-                for p in by_pos.get(pos_id, [])
-            )[:count]
-
-            min_position_cost[pos_id] = (
-                sum(cheapest)
-                if len(cheapest) == count
-                else float("inf")
-            )
-
-
-        remaining_costs = []
-
-        for i in range(len(pos_order)):
-            remaining_costs.append(
-                sum(
-                    min_position_cost[pos_id]
-                    for pos_id, _ in pos_order[i + 1:]
+            if isinstance(value, dict):
+                return float(
+                    value.get("value", 0)
                 )
+
+            try:
+                return float(value)
+            except Exception:
+                return 0.0
+
+
+        def safe_points(p):
+            value = p.get(
+                "predicted_points",
+                0
             )
+
+            try:
+                return float(value)
+            except Exception:
+                return 0.0
 
 
         def player_name(p):
@@ -222,9 +223,37 @@ class SquadOptimizer:
             )
 
 
+        # Precompute cheapest completion
+        min_position_cost = {}
+
+        for pos_id, count in pos_order:
+
+            prices = sorted(
+                safe_price(p)
+                for p in by_pos.get(pos_id, [])
+            )
+
+            if len(prices) >= count:
+                min_position_cost[pos_id] = sum(
+                    prices[:count]
+                )
+            else:
+                min_position_cost[pos_id] = float("inf")
+
+
+        def remaining_min_cost(index):
+
+            total = 0
+
+            for pos_id, _ in pos_order[index + 1:]:
+                total += min_position_cost[pos_id]
+
+            return total
+
+
         states = [{
-            "players": tuple(),
-            "budget": self.budget,
+            "players": [],
+            "budget": float(self.budget),
             "teams": {},
             "xpts_sum": 0.0,
             "xpts_max": 0.0,
@@ -234,15 +263,16 @@ class SquadOptimizer:
 
         for index, (pos_id, count) in enumerate(pos_order):
 
-            candidates = by_pos.get(pos_id, [])
+            candidates = by_pos.get(
+                pos_id,
+                []
+            )
 
             if not candidates:
                 continue
 
 
-            # Streaming heap:
-            # prevents millions of temporary states
-            stage_heap = []
+            new_states = []
 
 
             for state in states:
@@ -253,20 +283,20 @@ class SquadOptimizer:
                 }
 
 
-                affordable = sorted(
-                    (
-                        p for p in candidates
-                        if (
-                            p.get("player_id") not in selected_ids
-                            and p.get("price", 0)
-                            <= state["budget"]
-                        )
-                    ),
-                    key=lambda p: p.get(
-                        "predicted_points",
-                        0
-                    ),
-                    reverse=True,
+                affordable = [
+                    p for p in candidates
+                    if (
+                        p.get("player_id")
+                        not in selected_ids
+                        and safe_price(p)
+                        <= state["budget"]
+                    )
+                ]
+
+
+                affordable.sort(
+                    key=safe_points,
+                    reverse=True
                 )
 
 
@@ -285,7 +315,7 @@ class SquadOptimizer:
                 ):
 
                     team_deltas = {}
-                    combo_cost = 0
+                    combo_cost = 0.0
                     valid = True
 
 
@@ -311,10 +341,7 @@ class SquadOptimizer:
                             break
 
 
-                        combo_cost += p.get(
-                            "price",
-                            0
-                        )
+                        combo_cost += safe_price(p)
 
 
                     if not valid:
@@ -333,37 +360,23 @@ class SquadOptimizer:
 
                     if (
                         new_budget
-                        < remaining_costs[index]
+                        < remaining_min_cost(index)
                     ):
                         continue
 
 
                     combo_sum = sum(
-                        p.get(
-                            "predicted_points",
-                            0
-                        )
+                        safe_points(p)
                         for p in combo
                     )
 
 
                     combo_max = max(
-                        p.get(
-                            "predicted_points",
-                            0
-                        )
-                        for p in combo
-                    )
-
-
-                    new_sum = (
-                        state["xpts_sum"]
-                        + combo_sum
-                    )
-
-                    new_max = max(
-                        state["xpts_max"],
-                        combo_max
+                        (
+                            safe_points(p)
+                            for p in combo
+                        ),
+                        default=0
                     )
 
 
@@ -371,17 +384,32 @@ class SquadOptimizer:
                         state["teams"]
                     )
 
+
                     for tid, amount in team_deltas.items():
+
                         new_teams[tid] = (
                             new_teams.get(tid, 0)
                             + amount
                         )
 
 
-                    new_state = {
+                    new_sum = (
+                        state["xpts_sum"]
+                        + combo_sum
+                    )
+
+
+                    new_max = max(
+                        state["xpts_max"],
+                        combo_max
+                    )
+
+
+                    new_states.append({
+
                         "players":
                             state["players"]
-                            + tuple(combo),
+                            + list(combo),
 
                         "budget":
                             new_budget,
@@ -397,46 +425,27 @@ class SquadOptimizer:
 
                         "xpts":
                             new_sum + new_max,
-                    }
+                    })
 
 
-                    score = new_state["xpts"]
-
-
-                    if len(stage_heap) < GENERATION_BUFFER:
-
-                        heapq.heappush(
-                            stage_heap,
-                            (
-                                score,
-                                new_state
-                            )
-                        )
-
-                    elif score > stage_heap[0][0]:
-
-                        heapq.heapreplace(
-                            stage_heap,
-                            (
-                                score,
-                                new_state
-                            )
-                        )
-
-
-            if not stage_heap:
+            if not new_states:
                 continue
 
 
-            # Final beam prune for this stage
-            states = [
-                state
-                for _, state in heapq.nlargest(
-                    beam_width,
-                    stage_heap,
-                    key=lambda x: x[0]
+            if DEBUG_OPTIMIZER:
+
+                print(
+                    "BEAM GENERATED",
+                    f"stage={pos_id}",
+                    f"states={len(new_states)}"
                 )
-            ]
+
+
+            states = heapq.nlargest(
+                beam_width,
+                new_states,
+                key=lambda s: s["xpts"]
+            )
 
 
             if DEBUG_OPTIMIZER:
@@ -444,7 +453,6 @@ class SquadOptimizer:
                 print(
                     "BEAM DEBUG",
                     f"stage={pos_id}",
-                    f"generated_kept={len(stage_heap)}",
                     f"states={len(states)}"
                 )
 
@@ -473,9 +481,7 @@ class SquadOptimizer:
                     for p in best["players"]
                 ]
             )
-
-
-        return list(best["players"])
+        return best["players"]
 
 
     def _greedy_squad(self, by_pos: dict) -> list:
