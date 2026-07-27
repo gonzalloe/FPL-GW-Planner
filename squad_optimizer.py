@@ -153,7 +153,7 @@ class SquadOptimizer:
         # Fallback: greedy approach
         return self._greedy_squad(by_pos)
 
-    def _beam_search_squad(self, by_pos: dict, beam_width: int = 500) -> list:
+    def _beam_search_squad(self, by_pos: dict, beam_width: int = 150) -> list:
         """
         Beam search across positions to find highest-xPts squad.
         Each state = (selected_players, budget_left, team_counts).
