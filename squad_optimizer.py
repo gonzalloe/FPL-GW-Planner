@@ -176,9 +176,9 @@ class SquadOptimizer:
         ]
 
         candidate_limits = {
-            4: 18,
-            3: 20,
-            2: 20,
+            4: 15,
+            3: 18,
+            2: 18,
             1: 8,
         }
 
@@ -267,13 +267,10 @@ class SquadOptimizer:
                 pos_id,
                 []
             )
-
             if not candidates:
                 continue
 
-
-            new_states = []
-
+            state_heap = []
 
             for state in states:
 
@@ -281,7 +278,6 @@ class SquadOptimizer:
                     p["player_id"]
                     for p in state["players"]
                 }
-
 
                 affordable = [
                     p for p in candidates
@@ -292,7 +288,6 @@ class SquadOptimizer:
                         <= state["budget"]
                     )
                 ]
-
 
                 affordable.sort(
                     key=safe_points,
@@ -405,32 +400,29 @@ class SquadOptimizer:
                     )
 
 
-                    new_states.append({
-
-                        "players":
-                            state["players"]
-                            + list(combo),
-
-                        "budget":
-                            new_budget,
-
-                        "teams":
-                            new_teams,
-
-                        "xpts_sum":
-                            new_sum,
-
-                        "xpts_max":
-                            new_max,
-
-                        "xpts":
-                            new_sum + new_max,
-                    })
+                    new_state = {
+                        "players": new_players,
+                        "budget": new_budget,
+                        "teams": new_teams,
+                        "xpts_sum": new_sum,
+                        "xpts_max": new_max,
+                        "xpts": new_sum + new_max,
+                    }
+                    score = new_state["xpts"]
+                    if len(state_heap) < beam_width:
+                        heapq.heappush(
+                            state_heap,
+                            (score, new_state)
+                        )
+                    elif score > state_heap[0][0]:
+                        heapq.heapreplace(
+                            state_heap,
+                            (score, new_state)
+                        )
 
 
-            if not new_states:
+            if not state_heap:
                 continue
-
 
             if DEBUG_OPTIMIZER:
 
@@ -440,13 +432,15 @@ class SquadOptimizer:
                     f"states={len(new_states)}"
                 )
 
-
-            states = heapq.nlargest(
-                beam_width,
-                new_states,
-                key=lambda s: s["xpts"]
-            )
-
+            
+            states = [
+                s
+                for _, s in sorted(
+                    state_heap,
+                    key=lambda x: x[0],
+                    reverse=True
+                )
+            ]
 
             if DEBUG_OPTIMIZER:
 
