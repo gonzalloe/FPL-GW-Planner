@@ -207,6 +207,19 @@ class PredictionEngine:
         profile = self.calculate_expected_minutes(p, num_fixtures, teammates_out, out_minutes)
         p["starter_quality"] = {**profile, "tier": self._derive_tier_label(profile)}
 
+        # debug temp
+        print(
+            "START DEBUG:",
+            p["web_name"],
+            {
+                "minutes": p.get("minutes"),
+                "starts": p.get("starts"),
+                "chance": p.get("chance_of_playing_next_round"),
+                "profile": profile,
+                "tier": p["starter_quality"]["tier"]
+            }
+        )
+
         # ── Per-fixture xPts ──
         total_raw = 0.0
         total_adj = 0.0
