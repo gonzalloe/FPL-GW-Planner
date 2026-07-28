@@ -195,8 +195,10 @@ except Exception as _e:
 def _run_predictions(gw=None):
     from prediction_engine import PredictionEngine
     from squad_optimizer import SquadOptimizer, ChipAdvisor
+    
     engine = PredictionEngine()
     target_gw = gw or engine.next_gw
+    prediction_file = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
     gw_info = engine.get_gw_info(target_gw)
     predictions = engine.predict_all(target_gw)
     optimizer = SquadOptimizer(predictions)
