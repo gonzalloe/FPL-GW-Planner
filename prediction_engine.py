@@ -623,10 +623,10 @@ class PredictionEngine:
         """
         total_minutes = int(p.get("minutes", 0))
         starts = int(p.get("starts", 0))
-        gws_played = max(self.current_gw - 1, 1)
+        matches_played = max(int(p.get("appearances", 38)),1)
 
-        season_avg_mins = total_minutes / gws_played
-        season_start_rate = starts / gws_played if gws_played > 0 else 0.0
+        season_avg_mins = total_minutes / matches_played
+        season_start_rate = min(starts / matches_played,1.0)
 
         # Recency blend (fixes stale season-average bug: a player benched the
         # last 8 GWs no longer reads as reliable just because of an August hot streak)
@@ -636,6 +636,7 @@ class PredictionEngine:
             recent_avg_mins = p.get("_recent_avg_mins", season_avg_mins)
             w_recent = min(recent_games / 5.0, 1.0) * 0.70
             start_rate = w_recent * recent_start_rate + (1 - w_recent) * season_start_rate
+            start_rate = min(max(start_rate, 0.0), 1.0)
             avg_mins = w_recent * recent_avg_mins + (1 - w_recent) * season_avg_mins
         else:
             start_rate = season_start_rate
