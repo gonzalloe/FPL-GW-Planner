@@ -193,19 +193,34 @@ except Exception as _e:
 
 
 def _run_predictions(gw=None):
+    import tine as _t
     from prediction_engine import PredictionEngine
     from squad_optimizer import SquadOptimizer, ChipAdvisor
-    
+
+    t0 = _t.time()
     engine = PredictionEngine()
+    print(f"  [TIMING] PredictionEngine init: {_t.time()-t0:.1f}s")
+
     target_gw = gw or engine.next_gw
-    prediction_file = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
     gw_info = engine.get_gw_info(target_gw)
+
+    t1 = _t.time()
     predictions = engine.predict_all(target_gw)
+    print(f"  [TIMING] predict_all: {_t.time()-t1:.1f}s")
+
+    t2 = _t.time()
     optimizer = SquadOptimizer(predictions)
     squad = optimizer.optimize_squad()
+    print(f"  [TIMING] optimize_squad (normal): {_t.time()-t2:.1f}s")
+
+    t3 = _t.time()
+    bb_squad = optimizer.optimize_squad(chip="bench_boost")
+    print(f"  [TIMING] optimize_squad (bench_boost): {_t.time()-t3:.1f}s")
+    
+    target_gw = gw or engine.next_gw
+    prediction_file = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
     chip_advisor = ChipAdvisor(predictions, gw_info)
     chip_analysis = chip_advisor.analyze()
-    bb_squad = optimizer.optimize_squad(chip="bench_boost")
     output = {
         "generated_at": datetime.now().isoformat(), "gameweek": target_gw,
         "gw_info": gw_info, "predictions": predictions, "squad": squad,
@@ -259,7 +274,7 @@ def _refresh_data():
         traceback.print_exc()
     finally:
         _refresh_lock.release()
-        
+
 
 def _auto_refresh_loop():
     global _last_refresh
@@ -1036,6 +1051,7 @@ def api_my_team():
         _save_settings(settings)
         team_data = fetch_my_team(team_id)
         if team_data.get("error"):
+            print(f"  [MY-TEAM] fetch failed for id={team_id}: {team_data.get('error')}") 
             return jsonify(team_data), 400
         preds, _ = _cached_predictions()
         if not preds:

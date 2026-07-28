@@ -221,13 +221,10 @@ class PredictionEngine:
                 self.team_stats
             )
             xmins = profile["xmins"]
-
             # Reduce minutes expectation for second DGW fixture
             if num_fixtures >= 2 and fix_idx > 0:
                 xmins *= 0.85
-
-            # Compute EV for this fixture
-            fix_ev = self._fixture_ev(p, fix_info, fix_xg_data, xmins)
+            fix_ev = self._fixture_ev(p, fix_info, fix_xg_data, xmins, profile["p_plays_60"])
 
             # Contextual factor modifiers
             factors = self._calc_all_factors(p, fix_info, fix_xg_data)
@@ -241,7 +238,7 @@ class PredictionEngine:
             total_raw += fix_xp
 
             # Availability discount
-            adj_xp = self._apply_availability_discount(fix_xp, availability)
+            adj_xp = fix_xp
             total_adj += adj_xp
 
             opp_team = self.teams.get(fix_info["opponent_id"], {})
@@ -451,7 +448,7 @@ class PredictionEngine:
     # ══════════════════════════════════════════════════════════
 
     def _fixture_ev(self, p: dict, fix_info: dict,
-                fix_xg_data: dict, xmins: float) -> float:
+                fix_xg_data: dict, xmins: float, p_plays_60=None) -> float:
         """
         Calculate EV for ONE fixture using Poisson distributions.
 
@@ -472,8 +469,9 @@ class PredictionEngine:
 
         # ── xMins → playing probability & minutes fraction ──
         p_plays = min(xmins / 90.0, 1.0)
-        p_plays_60 = max(0, (xmins - 30) / 60.0)
-        p_plays_60 = min(p_plays_60, 1.0)
+        if p_plays_60 is None:  # fallback only if not passed
+            p_plays_60 = max(0, (xmins - 30) / 60.0)
+            p_plays_60 = min(p_plays_60, 1.0)
         mins_fraction = xmins / 90.0
 
         ev = 0.0
@@ -610,11 +608,10 @@ class PredictionEngine:
         """
         total_minutes = int(p.get("minutes", 0))
         starts = int(p.get("starts", 0))
-        matches_played = max(int(p.get("appearances", 38)),1)
         gws_played = max(p.get("history_games", 38),self.current_gw - 1,1)
 
-        season_avg_mins = total_minutes / matches_played
-        season_start_rate = min(starts / matches_played,1.0)
+        season_avg_mins = total_minutes / gws_played
+        season_start_rate = min(starts / gws_played,1.0)
 
         # Recency blend (fixes stale season-average bug: a player benched the
         # last 8 GWs no longer reads as reliable just because of an August hot streak)
