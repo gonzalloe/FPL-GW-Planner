@@ -234,7 +234,9 @@ def _run_predictions(gw=None):
     }
     OUTPUT_DIR.mkdir(exist_ok=True)
     filename = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
-    filename.write_text(json.dumps(output, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    tmp = filename.with_suffix(".tmp")
+    tmp.write_text(json.dumps(output, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    os.replace(tmp, filename)
     invalidate_cache()  # Clear all cached responses when predictions change
     return output
 
@@ -407,22 +409,11 @@ def _cached_predictions():
                 _PREDICTIONS_MEMO["data"]
             )
     try:
-        data = json.loads(
-            p.read_text(
-                encoding="utf-8"
-            )
-        )
-        preds = data.get(
-            "predictions",
-            []
-        )
-    except Exception as e:
-        print(
-            "[CACHE LOAD ERROR]",
-            p,
-            e
-        )
-        return [], {}
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  [PREDICTIONS] Corrupt/partial file {p.name}: {e}")
+        return _PREDICTIONS_MEMO.get("preds", []), _PREDICTIONS_MEMO.get("data", {})  # fall back to last-good memo, or empty
+    preds = data.get("predictions", [])
     with _PREDICTIONS_LOCK:
         _PREDICTIONS_MEMO["key"] = key
         _PREDICTIONS_MEMO["preds"] = preds
@@ -885,11 +876,7 @@ def _filter_chip_analysis(chip_analysis, used_codes):
 def api_predictions():
     preds, data = _cached_predictions()
     if not data:
-        return jsonify({
-            "status": "refreshing",
-            "message": "Predictions are being generated",
-            "predictions": []
-        }), 200
+        return jsonify({"status": "loading", "message": "Generating predictions..."}), 202
 
     # Filter chips already used this half so UI never recommends an unusable chip.
     # IMPORTANT: do NOT mutate the memoized dict -- shallow-copy then swap chip_analysis.
@@ -963,6 +950,7 @@ def api_predictions():
     else:
         data["user_plan"] = user.get("plan", "premium")  # 'premium' or 'admin'
 
+    data["status"] = "ready"
     return jsonify(data)
 
 @app.route("/api/run")
