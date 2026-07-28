@@ -18,6 +18,7 @@ import threading
 import hashlib
 import os
 import requests
+import traceback
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
@@ -261,7 +262,8 @@ def _refresh_data():
         _last_refresh = time.time()
         print(f"  [REFRESH] {datetime.now().strftime('%H:%M:%S')} — Done.")
     except Exception as e:
-        print(f"  [REFRESH] ERROR: {e}")
+        print(e)
+        traceback.print_exc()
     finally:
         _refresh_lock.release()
 

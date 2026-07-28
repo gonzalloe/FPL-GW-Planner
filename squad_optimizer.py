@@ -49,9 +49,12 @@ class SquadOptimizer:
         Find the best 15-man squad maximizing total xPts.
         Then pick the best starting XI from that squad.
         """
-        #squad = self._solve_ilp_squad()
+        squad = self._solve_ilp_squad()
         if not squad:
-            return {"squad": [], "error": "No feasible squad found within budget/constraints."}
+            return {
+                "squad": [],
+                "error": "No feasible squad found within budget/constraints."
+            }
 
         # Select starting XI (best 11 from 15)
         starting_xi, bench = self._select_best_xi(squad, chip)
@@ -77,17 +80,6 @@ class SquadOptimizer:
 
         dgw_count = sum(1 for p in squad if p.get("is_dgw"))
         dgw_xi = sum(1 for p in starting_xi if p.get("is_dgw"))
-
-        # temp debug check
-        print("TOP SQUAD:",[(p["name"], p["predicted_points"]) for p in squad])
-        print(
-            "HAALAND AVAILABLE:",
-            [
-            p["predicted_points"]
-            for p in self.predictions
-            if "Haaland" in p["name"]
-            ]
-        )
 
         return {
             "squad": sorted(squad, key=lambda x: (x["position_id"], -x["predicted_points"])),
@@ -327,7 +319,7 @@ class ChipAdvisor:
         # ── Bench Boost ──
         if "bench_boost" in chips_available and is_dgw:
             optimizer = SquadOptimizer(self.predictions)
-            bb_squad = optimizer.optimize_squad(chip="bench_boost")
+            bb_ optimizer.optimize_squad(chip="bench_boost")
             bench_xp = sum(p["predicted_points"] for p in bb_squad["bench"])
             bench_dgw = sum(1 for p in bb_squad["bench"] if p.get("is_dgw"))
 
