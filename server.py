@@ -876,7 +876,7 @@ def _filter_chip_analysis(chip_analysis, used_codes):
 def api_predictions():
     preds, data = _cached_predictions()
     if not data:
-        return jsonify({"status": "loading", "message": "Generating predictions..."}), 202
+        return jsonify({"status": "preparing", "error": "No predictions yet. Please wait for data refresh."}), 404
 
     # Filter chips already used this half so UI never recommends an unusable chip.
     # IMPORTANT: do NOT mutate the memoized dict -- shallow-copy then swap chip_analysis.
