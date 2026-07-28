@@ -220,15 +220,6 @@ def _run_predictions(gw=None):
     OUTPUT_DIR.mkdir(exist_ok=True)
     filename = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
     filename.write_text(json.dumps(output, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-    # debug temp
-    print(
-        "[REFRESH SAVED]",
-        filename,
-        "exists=",
-        filename.exists(),
-        "size=",
-        filename.stat().st_size
-    )
     invalidate_cache()  # Clear all cached responses when predictions change
     return output
 
@@ -268,6 +259,7 @@ def _refresh_data():
         traceback.print_exc()
     finally:
         _refresh_lock.release()
+        
 
 def _auto_refresh_loop():
     global _last_refresh
@@ -379,7 +371,7 @@ def _cached_predictions():
     print("[CACHE DEBUG] OUTPUT_DIR =", OUTPUT_DIR)
     print("[CACHE DEBUG] files =", list(OUTPUT_DIR.glob("*")))
     """Load newest GW prediction cache."""
-    files = list(OUTPUT_DIR.glob("gw*_predictions.json"))
+    files = list(OUTPUT_DIR.glob("*_predictions.json"))
     if not files:
         return [], {}
     def gw_number(path):
@@ -878,7 +870,11 @@ def _filter_chip_analysis(chip_analysis, used_codes):
 def api_predictions():
     preds, data = _cached_predictions()
     if not data:
-        return jsonify({"error": "No predictions yet. Please wait for data refresh."}), 404
+        return jsonify({
+            "status": "refreshing",
+            "message": "Predictions are being generated",
+            "predictions": []
+        }), 200
 
     # Filter chips already used this half so UI never recommends an unusable chip.
     # IMPORTANT: do NOT mutate the memoized dict -- shallow-copy then swap chip_analysis.
