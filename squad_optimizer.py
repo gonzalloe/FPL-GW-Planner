@@ -319,7 +319,7 @@ class ChipAdvisor:
         # ── Bench Boost ──
         if "bench_boost" in chips_available and is_dgw:
             optimizer = SquadOptimizer(self.predictions)
-            bb_ optimizer.optimize_squad(chip="bench_boost")
+            bb_optimizer.optimize_squad(chip="bench_boost")
             bench_xp = sum(p["predicted_points"] for p in bb_squad["bench"])
             bench_dgw = sum(1 for p in bb_squad["bench"] if p.get("is_dgw"))
 
