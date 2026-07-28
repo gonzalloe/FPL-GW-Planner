@@ -193,7 +193,7 @@ except Exception as _e:
 
 
 def _run_predictions(gw=None):
-    import tine as _t
+    import time as _t
     from prediction_engine import PredictionEngine
     from squad_optimizer import SquadOptimizer, ChipAdvisor
 
