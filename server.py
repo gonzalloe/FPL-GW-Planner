@@ -373,6 +373,9 @@ _PREDICTIONS_MEMO = {"key": None, "preds": [], "data": {}}
 _PREDICTIONS_LOCK = threading.Lock()
 
 def _cached_predictions():
+    # debug temp
+    print("[CACHE DEBUG] OUTPUT_DIR =", OUTPUT_DIR)
+    print("[CACHE DEBUG] files =", list(OUTPUT_DIR.glob("*")))
     """Load newest GW prediction cache."""
     files = list(OUTPUT_DIR.glob("gw*_predictions.json"))
     if not files:

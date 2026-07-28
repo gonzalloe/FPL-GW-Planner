@@ -624,6 +624,7 @@ class PredictionEngine:
         total_minutes = int(p.get("minutes", 0))
         starts = int(p.get("starts", 0))
         matches_played = max(int(p.get("appearances", 38)),1)
+        gws_played = max(p.get("history_games", 38),self.current_gw - 1,1)
 
         season_avg_mins = total_minutes / matches_played
         season_start_rate = min(starts / matches_played,1.0)
