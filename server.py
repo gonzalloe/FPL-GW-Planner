@@ -960,12 +960,23 @@ def api_run():
     user = _get_auth_user()
     if not user or user.get("plan") != "admin":
         return jsonify({"error": "Admin access required to trigger prediction run"}), 403
+    gw = request.args.get("gw", 0, type=int) or None
+    if not _refresh_lock.acquire(blocking=False):
+        return jsonify({"ok": False, "message": "A refresh is already running"}), 409
+    _refresh_lock.release()  # just checking availability; _run_predictions_bg re-acquires it
+    threading.Thread(target=_run_predictions_bg, args=(gw,), daemon=True).start()
+    return jsonify({"ok": True, "message": "Prediction run started"})
+
+def _run_predictions_bg(gw):
+    if not _refresh_lock.acquire(blocking=False):
+        print("  [RUN] Already running, skipping.")
+        return
     try:
-        gw = request.args.get("gw", 0, type=int) or None
-        return jsonify(_run_predictions(gw))
+        _run_predictions(gw)
     except Exception as e:
         import traceback; traceback.print_exc()
-        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        _refresh_lock.release()
 
 @app.route("/api/refresh")
 @limiter.limit("5 per minute")
