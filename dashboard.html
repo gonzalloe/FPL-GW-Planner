@@ -2608,16 +2608,10 @@ async function loadData() {
   if (isAdmin) {
     try {
       const overlay = document.getElementById('loading-overlay');
-      if (overlay) overlay.querySelector('p').textContent = 'Running prediction engine... (this may take 30-60s on first load)';
-      const r2 = await fetch('/api/run', {headers: authHeaders()});
-      if (r2.ok) {
-        DATA = await r2.json();
-        ALL_PREDICTIONS = DATA.predictions || [];
-        const overlay2 = document.getElementById('loading-overlay');
-        if (overlay2) overlay2.remove();
-        render();
-        return;
-      }
+      if (overlay) overlay.querySelector('p').textContent = 'Predictions are being generated — this can take a few minutes. Checking again shortly...';
+      await fetch('/api/refresh', {headers: authHeaders()});  // fire-and-forget, backend already guards duplicates
+      setTimeout(() => location.reload(), 15000);  // poll by reload instead of blocking on the result
+      return;
     } catch(e2) {
       console.error('Failed to run predictions:', e2.message);
     }
