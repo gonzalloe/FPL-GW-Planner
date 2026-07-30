@@ -451,8 +451,10 @@ _PREDICTIONS_LOCK = threading.Lock()
 
 def _cached_predictions():
     # debug temp
-    print("[CACHE DEBUG] OUTPUT_DIR =", OUTPUT_DIR)
-    print("[CACHE DEBUG] files =", list(OUTPUT_DIR.glob("*")))
+    print("[CACHE DEBUG] Local files =", [f.name for f in OUTPUT_DIR.glob("*")])
+    print("[CACHE DEBUG] Prediction running =",_prediction_status["running"])
+    print("[CACHE DEBUG] Last started =",_prediction_status["started_at"])
+    print("[CACHE DEBUG] Last finished =",_prediction_status["finished_at"])
 
     """Load newest GW prediction cache. Falls back to latest_predictions.json if refresh cache is unavailable."""
     files = list(OUTPUT_DIR.glob("*_predictions.json"))
@@ -485,7 +487,6 @@ def _cached_predictions():
                 _PREDICTIONS_MEMO["data"],
                 status
             )
-
     try:
         data = json.loads(
             p.read_text(encoding="utf-8")
@@ -507,7 +508,6 @@ def _cached_predictions():
         _PREDICTIONS_MEMO["data"] = data
 
     print("[CACHE LOADED]",p.name,len(preds),"players","status:",status)
-
     return preds, data, status
 
 
@@ -1052,14 +1052,23 @@ def api_run():
     return jsonify({"ok": True, "message": "Prediction run started"})
 
 def _run_predictions_bg(gw):
+    global _prediction_status
     if not _refresh_lock.acquire(blocking=False):
-        print("  [RUN] Already running, skipping.")
+        print("[RUN] Already running, skipping.")
         return
     try:
+        _prediction_status["running"] = True
+        _prediction_status["started_at"] = datetime.now().isoformat()
+        _prediction_status["last_error"] = None
+        print("[RUN] Prediction generation started")
         _run_predictions(gw)
+        _prediction_status["finished_at"] = datetime.now().isoformat()
+        print("[RUN] Prediction generation finished")
     except Exception as e:
-        import traceback; traceback.print_exc()
+        _prediction_status["last_error"] = str(e)
+        print("[RUN] Prediction failed:", e)
     finally:
+        _prediction_status["running"] = False
         _refresh_lock.release()
 
 @app.route("/api/refresh")
