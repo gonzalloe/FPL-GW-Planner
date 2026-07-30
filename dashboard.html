@@ -2882,7 +2882,7 @@ function renderSquadTables(squad) {
 }
 
 function playerTableHTML(players, captain, vice) {
-  let html = `<thead><tr><th>Pos</th><th>Player</th><th>Team</th><th>Status</th><th>Fixtures</th><th>Win Prob</th><th>xPts</th><th>Price</th><th>Tier</th><th>Form</th><th>Team L5</th><th>WR</th><th>Conf</th></tr></thead><tbody>`;
+  let html = `<thead><tr><th>Pos</th><th>Player</th><th>Team</th><th>Status</th><th>Fixtures</th><th>Win Prob</th><th>xPts</th><th>Price</th><th>Tier</th><th>Form</th><th>Team L5</th><th>WR</th><th>Starting XI</th></tr></thead><tbody>`;
   players.forEach(p => {
     const isCap = captain && captain.player_id === p.player_id;
     const isVice = vice && vice.player_id === p.player_id;

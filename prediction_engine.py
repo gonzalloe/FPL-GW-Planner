@@ -670,17 +670,24 @@ class PredictionEngine:
 
 
     def _derive_tier_label(self, profile: dict) -> str:
-        """Display-only label derived from calculate_expected_minutes() output.
-        Never read by any prediction function — UI/filtering use only."""
+        """Display-only squad role label."""
         p_start = profile["p_start"]
         risk = profile["rotation_risk"]
-        if p_start >= 0.85 and risk < 0.2:
+        xmins = profile["xmins"]
+
+        # First-choice starter
+        if p_start >= 0.85 and risk < 0.35:
             return "nailed"
-        if p_start >= 0.55:
-            return "regular"
-        if p_start >= 0.25:
+        # Usually starts, but not completely secure
+        if p_start >= 0.70:
+            if risk < 0.65:
+                return "regular"
             return "rotation"
-        if profile["xmins"] >= 8:
+        # Genuine rotation player
+        if p_start >= 0.40:
+            return "rotation"
+        # Occasional starter / squad depth
+        if p_start >= 0.20 or xmins >= 8:
             return "fringe"
         return "bench_warmer"
 
