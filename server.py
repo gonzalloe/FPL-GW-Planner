@@ -111,7 +111,7 @@ def restore_prediction_cache():
         return False
     try:
         data = supabase.storage.from_(CACHE_BUCKET).download(CACHE_FILE)
-     OUTPUT_DIR.mkdir(
+        OUTPUT_DIR.mkdir(
             parents=True,
             exist_ok=True
         )
