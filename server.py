@@ -22,6 +22,16 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
+from supabase import create_client
+
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL,SUPABASE_KEY)
+CACHE_BUCKET = "prediction-cache"
+CACHE_FILE = "latest_predictions.json"
 
 DIFY_API_KEY = os.environ.get("DIFY_API_KEY", "")
 DIFY_API_URL = os.environ.get("DIFY_API_URL", "https://api.dify.ai/v1")
@@ -73,11 +83,49 @@ else:
         def exempt(self, f): return f
     limiter = _NoopLimiter()
 
+def upload_prediction_cache(data):
+    if not supabase:
+        print("[CACHE] Supabase disabled")
+        return
+    try:
+        import json
+        content = json.dumps(
+            data,
+            ensure_ascii=False,
+            default=str
+        ).encode("utf-8")
+        supabase.storage.from_(CACHE_BUCKET).upload(
+            CACHE_FILE,
+            content,
+            {
+                "content-type": "application/json",
+                "upsert": "true"
+            }
+        )
+        print("[CACHE] Uploaded to Supabase")
+    except Exception as e:
+        print("[CACHE] Upload failed:", e)    
+
+def restore_prediction_cache():
+    if not supabase:
+        return False
+    try:
+        data = supabase.storage.from_(CACHE_BUCKET).download(CACHE_FILE)
+     OUTPUT_DIR.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+        path = OUTPUT_DIR / "latest_predictions.json"
+        path.write_bytes(data)
+        print("[CACHE] Restored prediction cache")
+        return True
+    except Exception as e:
+        print("[CACHE] No remote cache:", e)
+        return False
+
 # ── In-Memory Response Cache ──
 _response_cache = {}  # {cache_key: {"data": ..., "expires": timestamp}}
 _cache_lock = threading.Lock()
-
-
 def cached_response(ttl_seconds: int = 60, key_prefix: str = ""):
     """Decorator: cache JSON responses in memory with TTL.
     Greatly reduces CPU load for repeat requests to heavy endpoints."""
@@ -249,6 +297,7 @@ def _run_predictions(gw=None):
         encoding="utf-8"
     )
     os.replace(latest_tmp, latest)
+    upload_prediction_cache(output)
     invalidate_cache()  # Clear all cached responses when predictions change
     return output
 
@@ -1820,5 +1869,6 @@ def api_health():
 # ── Entry point ──
 
 if __name__ == "__main__":
+    restore_prediction_cache()
     print(f"  [DEV] Starting Flask dev server on port {PORT}")
     app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
