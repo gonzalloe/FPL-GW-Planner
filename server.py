@@ -30,7 +30,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase = None
 if SUPABASE_URL and SUPABASE_KEY:
     supabase = create_client(SUPABASE_URL,SUPABASE_KEY)
-CACHE_BUCKET = "prediction-cache"
+CACHE_BUCKET = "fpl-prediction-cache"
 CACHE_FILE = "latest_predictions.json"
 
 DIFY_API_KEY = os.environ.get("DIFY_API_KEY", "")
@@ -351,13 +351,18 @@ def _auto_refresh_loop():
     except Exception:
         existing = []
     if not existing:
-        try:
-            print("  [AUTO-REFRESH] No predictions on disk - generating immediately (cold start).")
-            _refresh_data()
-        except Exception as e:
-            print(f"  [AUTO-REFRESH] Initial cold-start refresh failed: {e}")
+        restored = restore_prediction_cache()
+        if restored:
+            print("  [AUTO-REFRESH] Restored cache from Supabase - serving stale data and refreshing in background.")
+            time.sleep(20)
+        else:
+            try:
+                print("  [AUTO-REFRESH] No cache available - generating immediately.")
+                _refresh_data()
+            except Exception as e:
+                print(f"  [AUTO-REFRESH] Initial cold-start refresh failed: {e}")
     else:
-        # Short stabilization delay only when we already have data to serve.
+        print("  [AUTO-REFRESH] Existing predictions found - delaying refresh.")
         time.sleep(20)
 
     while True:
