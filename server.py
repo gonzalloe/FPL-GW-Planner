@@ -234,9 +234,21 @@ def _run_predictions(gw=None):
     }
     OUTPUT_DIR.mkdir(exist_ok=True)
     filename = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
+    # Atomic write for current GW cache
     tmp = filename.with_suffix(".tmp")
-    tmp.write_text(json.dumps(output, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    tmp.write_text(
+        json.dumps(output, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8"
+    )
     os.replace(tmp, filename)
+    # Update stale fallback cache only after successful prediction
+    latest = OUTPUT_DIR / "latest_predictions.json"
+    latest_tmp = latest.with_suffix(".tmp")
+    latest_tmp.write_text(
+        json.dumps(output, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8"
+    )
+    os.replace(latest_tmp, latest)
     invalidate_cache()  # Clear all cached responses when predictions change
     return output
 
@@ -387,44 +399,62 @@ def _cached_predictions():
     # debug temp
     print("[CACHE DEBUG] OUTPUT_DIR =", OUTPUT_DIR)
     print("[CACHE DEBUG] files =", list(OUTPUT_DIR.glob("*")))
-    """Load newest GW prediction cache."""
+
+    """Load newest GW prediction cache. Falls back to latest_predictions.json if refresh cache is unavailable."""
     files = list(OUTPUT_DIR.glob("*_predictions.json"))
-    if not files:
-        return [], {}
     def gw_number(path):
         import re
         m = re.search(r"gw(\d+)_predictions", path.name)
         return int(m.group(1)) if m else -1
     files.sort(key=gw_number,reverse=True)
-    p = files[0]
+    # Prefer normal GW cache
+    if files:
+        p = files[0]
+        status = "ready"
+    else:
+        # fallback cache
+        p = OUTPUT_DIR / "latest_predictions.json"
+        if not p.exists():
+            return [], {}, "preparing"
+        status = "stale"
+
     try:
         mtime = p.stat().st_mtime
     except Exception:
         mtime = 0
     key = (str(p), mtime)
+
     with _PREDICTIONS_LOCK:
         if _PREDICTIONS_MEMO.get("key") == key:
             return (
                 _PREDICTIONS_MEMO["preds"],
-                _PREDICTIONS_MEMO["data"]
+                _PREDICTIONS_MEMO["data"],
+                status
             )
+
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(
+            p.read_text(encoding="utf-8")
+        )
     except (json.JSONDecodeError, OSError) as e:
-        print(f"  [PREDICTIONS] Corrupt/partial file {p.name}: {e}")
-        return _PREDICTIONS_MEMO.get("preds", []), _PREDICTIONS_MEMO.get("data", {})  # fall back to last-good memo, or empty
+        print(
+            f"[PREDICTIONS] Corrupt cache {p.name}: {e}"
+        )
+        return (
+            _PREDICTIONS_MEMO.get("preds", []),
+            _PREDICTIONS_MEMO.get("data", {}),
+            "stale"
+        )
     preds = data.get("predictions", [])
+
     with _PREDICTIONS_LOCK:
         _PREDICTIONS_MEMO["key"] = key
         _PREDICTIONS_MEMO["preds"] = preds
         _PREDICTIONS_MEMO["data"] = data
-    print(
-        "[CACHE LOADED]",
-        p.name,
-        len(preds),
-        "players"
-    )
-    return preds, data
+
+    print("[CACHE LOADED]",p.name,len(preds),"players","status:",status)
+
+    return preds, data, status
 
 
 # ── Middleware ──
@@ -874,9 +904,9 @@ def _filter_chip_analysis(chip_analysis, used_codes):
 
 @app.route("/api/predictions")
 def api_predictions():
-    preds, data = _cached_predictions()
+    preds, data, cache_status = _cached_predictions()
     if not data:
-        return jsonify({"status": "preparing", "message": "Predictions are being generated"}), 200
+        return jsonify({"status": "preparing","message": "Predictions are being generated"}), 200
 
     # Filter chips already used this half so UI never recommends an unusable chip.
     # IMPORTANT: do NOT mutate the memoized dict -- shallow-copy then swap chip_analysis.
@@ -950,7 +980,7 @@ def api_predictions():
     else:
         data["user_plan"] = user.get("plan", "premium")  # 'premium' or 'admin'
 
-    data["status"] = "ready"
+    data["status"] = cache_status
     return jsonify(data)
 
 @app.route("/api/run")
