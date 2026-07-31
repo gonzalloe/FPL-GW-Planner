@@ -99,22 +99,6 @@ def poisson_goals_conceded_ev(team_xgc: float, max_k: int = 8) -> float:
         ev += poisson_pmf(k, team_xgc) * deduction
     return ev  # This will be negative
 
-
-def _build_previous_season_priors(self) -> dict:
-    """
-    Real prior-season results (Vaastav) for established teams, backfilled
-    with regression-calibrated strength-rating priors only for teams
-    absent from that dataset (newly promoted).
-    """
-    from data_fetcher import get_previous_season_team_stats, get_strength_rating_priors
-
-    real_priors = get_previous_season_team_stats(self.bootstrap, self.teams)
-    fallback_priors = get_strength_rating_priors(self.teams, real_priors)
-
-    merged = dict(fallback_priors)  # promoted teams start here
-    merged.update(real_priors)      # established teams overwrite with real data
-    return merged
-
 # ══════════════════════════════════════════════════════════════
 #  Main Engine
 # ══════════════════════════════════════════════════════════════
@@ -125,7 +109,6 @@ class PredictionEngine:
     v4: Poisson-based, multi-window form, xG delta regression,
         DGW-aware starter tiers, position-aware FDR.
     """
-
     def __init__(self):
         self.bootstrap = fetch_bootstrap()
         self.fixtures = fetch_fixtures()
@@ -141,6 +124,20 @@ class PredictionEngine:
         )
 
 
+    def _build_previous_season_priors(self) -> dict:
+        """
+        Real prior-season results (Vaastav) for established teams, backfilled
+        with regression-calibrated strength-rating priors only for teams
+        absent from that dataset (newly promoted).
+        """
+        from data_fetcher import get_previous_season_team_stats, get_strength_rating_priors
+        real_priors = get_previous_season_team_stats(self.bootstrap, self.teams)
+        fallback_priors = get_strength_rating_priors(self.teams, real_priors)
+        merged = dict(fallback_priors)  # promoted teams start here
+        merged.update(real_priors)      # established teams overwrite with real data
+        return merged
+
+
     def _prepare_player_priors(self):
         """
         Populate p['_prior_xg_per90'] / p['_prior_xa_per90'] / p['_prior_bonus_per_start']
@@ -148,7 +145,6 @@ class PredictionEngine:
             current-season data (applied later, per-fixture, via shrinkage)
             -> previous PL season data (fetched here, only for players with 0 mins)
             -> position-average fallback (never zero for attackers)
-
         Called once per predict_all() run - not per fixture/per prediction -
         so no API calls happen inside the hot prediction loop.
         """
@@ -159,7 +155,6 @@ class PredictionEngine:
             prior_xg = POSITION_XG_PRIOR.get(pos, 0.15)
             prior_xa = POSITION_XA_PRIOR.get(pos, 0.10)
             prior_bonus = POSITION_BONUS_PRIOR.get(pos, 0.20)
-
             # Only hit the network for players with zero current-season minutes.
             # Once a player has any minutes, shrinkage already down-weights the
             # prior proportionally, so a network fetch is no longer needed -
@@ -173,19 +168,16 @@ class PredictionEngine:
                     prior_xg = rates.get("xg_per90") or prior_xg
                     prior_xa = rates.get("xa_per90") or prior_xa
                     prior_bonus = rates.get("bonus_per_start") or prior_bonus
-
             p["_prior_xg_per90"] = prior_xg
             p["_prior_xa_per90"] = prior_xa
             p["_prior_bonus_per_start"] = prior_bonus
-
             try:
                 recent = get_recent_gw_stats(pid, window=5)
             except Exception:
                 recent = {}
             p["_recent_start_rate"] = recent.get("recent_start_rate")
             p["_recent_avg_mins"] = recent.get("recent_avg_mins")
-            p["_recent_games"] = recent.get("recent_games", 0)
-        
+            p["_recent_games"] = recent.get("recent_games", 0)   
 
     # ──────────────────────────────────────────────────────────
     #  Public API
@@ -195,19 +187,15 @@ class PredictionEngine:
         """Predict xPts for a player.  DGW-aware: sums per-fixture EV."""
         if target_gw is None:
             target_gw = self.next_gw
-
         p = self.players.get(player_id)
         if not p:
             return {"player_id": player_id, "error": "Player not found"}
-
         availability = self._get_availability(p)
         if availability["status"] == "unavailable":
             return self._empty_prediction(p, availability)
-
         all_fixtures = get_player_fixtures(p["team"], target_gw, self.fixtures)
         if not all_fixtures:
             return self._empty_prediction(p, {"status": "blank_gw"})
-
         num_fixtures = len(all_fixtures)
         is_dgw = num_fixtures >= 2
 
