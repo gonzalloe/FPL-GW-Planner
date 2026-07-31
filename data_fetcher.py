@@ -60,6 +60,65 @@ def fetch_player_detail(player_id: int) -> dict:
     """Fetch detailed history for a single player."""
     url = FPL_ENDPOINTS["player_detail"].format(player_id=player_id)
     return _get(url, cache_key=f"player_{player_id}", cache_ttl=900)
+
+
+def get_strength_rating_priors(teams: dict, real_priors: dict) -> dict:
+    """
+    gf_per_game/ga_per_game for teams ABSENT from real_priors (i.e. newly
+    promoted, no prior-season PL results in the Vaastav archive).
+
+    Derived by fitting a linear regression of FPL bootstrap strength rating
+    -> actual gf/ga_per_game, using the established teams where BOTH the
+    rating and real historical results exist simultaneously. This calibrates
+    the rating->goals relationship from real data each season rather than
+    assuming a linear ratio a priori.
+
+    Established teams (present in real_priors) are NOT touched here -
+    build_team_stats() only consults this dict for the keys it's missing.
+    """
+    def team_ratings(t):
+        atk = (t.get("strength_attack_home", 0) + t.get("strength_attack_away", 0)) / 2.0
+        defn = (t.get("strength_defence_home", 0) + t.get("strength_defence_away", 0)) / 2.0
+        return atk, defn
+
+    atk_x, atk_y, def_x, def_y = [], [], [], []
+    for tid, t in teams.items():
+        if tid not in real_priors:
+            continue
+        atk, defn = team_ratings(t)
+        atk_x.append(atk); atk_y.append(real_priors[tid]["gf_per_game"])
+        def_x.append(defn); def_y.append(real_priors[tid]["ga_per_game"])
+
+    def fit_linear(xs, ys, fallback=1.35):
+        n = len(xs)
+        if n < 5:
+            return 0.0, (sum(ys) / n if n else fallback)
+        mean_x, mean_y = sum(xs) / n, sum(ys) / n
+        den = sum((x - mean_x) ** 2 for x in xs)
+        if den == 0:
+            return 0.0, mean_y
+        slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / den
+        return slope, mean_y - slope * mean_x
+
+    atk_slope, atk_intercept = fit_linear(atk_x, atk_y)
+    def_slope, def_intercept = fit_linear(def_x, def_y)
+
+    priors = {}
+    for tid, t in teams.items():
+        if tid in real_priors:
+            continue
+        atk, defn = team_ratings(t)
+        gf = atk_slope * atk + atk_intercept
+        ga = def_slope * defn + def_intercept
+        # Prevent small-sample regression from producing extreme promoted-team priors
+        print(real_priors)
+        gf = max(0.6, min(gf, 2.2))
+        ga = max(0.6, min(ga, 2.2))
+        priors[tid] = {
+            "gf_per_game": round(gf, 3),
+            "ga_per_game": round(ga, 3),
+        }
+    return priors
     
 
 def get_last_season_rates(player_id: int) -> dict:

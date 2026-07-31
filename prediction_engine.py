@@ -100,6 +100,21 @@ def poisson_goals_conceded_ev(team_xgc: float, max_k: int = 8) -> float:
     return ev  # This will be negative
 
 
+def _build_previous_season_priors(self) -> dict:
+    """
+    Real prior-season results (Vaastav) for established teams, backfilled
+    with regression-calibrated strength-rating priors only for teams
+    absent from that dataset (newly promoted).
+    """
+    from data_fetcher import get_previous_season_team_stats, get_strength_rating_priors
+
+    real_priors = get_previous_season_team_stats(self.bootstrap, self.teams)
+    fallback_priors = get_strength_rating_priors(self.teams, real_priors)
+
+    merged = dict(fallback_priors)  # promoted teams start here
+    merged.update(real_priors)      # established teams overwrite with real data
+    return merged
+
 # ══════════════════════════════════════════════════════════════
 #  Main Engine
 # ══════════════════════════════════════════════════════════════
@@ -122,7 +137,7 @@ class PredictionEngine:
         self.bgw_teams = set()
         self.team_stats = build_team_stats(
             self.fixtures, self.teams,
-            previous_season_stats=get_previous_season_team_stats(self.bootstrap, self.teams),
+            previous_season_stats=self._build_previous_season_priors()
         )
 
 
