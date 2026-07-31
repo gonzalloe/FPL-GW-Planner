@@ -58,6 +58,7 @@ REFRESH_INTERVAL = 2 * 3600
 _last_refresh = 0
 _refresh_lock = threading.Lock()
 _refresh_thread_started = False
+_prediction_status = {"running": False, "started_at": None, "finished_at": None, "last_error": None,}
 
 app = Flask(__name__, static_folder=None)  # Disable Flask's default static handling
 
