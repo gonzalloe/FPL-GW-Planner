@@ -123,6 +123,8 @@ class PredictionEngine:
             previous_season_stats=self._build_previous_season_priors()
         )
         self.fixture_xg_cache = {}
+        self.fixture_cache_hits = 0
+        self.fixture_cache_misses = 0
         # debug temp print
         for tid, team in self.teams.items():
             if team.get("short_name") in ["MUN", "HUL"]:
@@ -234,7 +236,6 @@ class PredictionEngine:
                 fix_info["opponent_id"],
                 fix_info["is_home"]
             )
-
             if cache_key not in self.fixture_xg_cache:
                 self.fixture_xg_cache[cache_key] = get_fixture_xg(
                     p["team"],
@@ -242,29 +243,7 @@ class PredictionEngine:
                     fix_info["is_home"],
                     self.team_stats
                 )
-
             fix_xg_data = self.fixture_xg_cache[cache_key]
-            if (
-                p["team_name"] == "Manchester United"
-                or self.teams.get(fix_info["opponent_id"], {}).get("short_name") == "HUL"
-            ):
-                if not hasattr(self, "_fixture_debug_seen"):
-                    self._fixture_debug_seen = set()
-
-                debug_key = (
-                    p["team"],
-                    fix_info["opponent_id"]
-                )
-
-                if debug_key not in self._fixture_debug_seen:
-                    print(
-                        "FIXTURE DEBUG",
-                        p["team_name"],
-                        "vs",
-                        self.teams.get(fix_info["opponent_id"], {}).get("short_name"),
-                        fix_xg_data
-                    )
-                    self._fixture_debug_seen.add(debug_key)
             xmins = profile["xmins"]
             # Reduce minutes expectation for second DGW fixture
             if num_fixtures >= 2 and fix_idx > 0:

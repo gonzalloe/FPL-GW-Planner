@@ -230,16 +230,15 @@ def get_fixture_xg(team_id: int, opponent_id: int, is_home: bool,
     # Win probability using Poisson distribution
     win_prob = calculate_win_probability(team_xg, opp_xg)
 
-    # debug temp print
-    print(
-        "XG INPUT DEBUG",
-        {
-            "team_id": team_id,
-            "opp_id": opponent_id,
-            "team_stats": team_stats.get(team_id),
-            "opp_stats": team_stats.get(opponent_id),
-        }
-    )
+    # debug temp
+    print({
+        "team_attack": team_attack,
+        "team_defence": team_defence,
+        "opp_attack": opp_attack,
+        "opp_defence": opp_defence,
+        "team_xg": team_xg,
+        "opp_xg": opp_xg,
+    })
         
     return {
         "team_xg": round(team_xg, 2),
