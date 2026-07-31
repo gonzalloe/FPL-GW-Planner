@@ -234,12 +234,10 @@ def get_fixture_xg(team_id: int, opponent_id: int, is_home: bool,
     print(
         "XG INPUT DEBUG",
         {
-            "team": team["short_name"],
-            "opp": opponent["short_name"],
-            "team_gf": team.get("gf_per_game"),
-            "team_ga": team.get("ga_per_game"),
-            "opp_gf": opponent.get("gf_per_game"),
-            "opp_ga": opponent.get("ga_per_game"),
+            "team_id": team_id,
+            "opp_id": opponent_id,
+            "team_stats": team_stats.get(team_id),
+            "opp_stats": team_stats.get(opponent_id),
         }
     )
         
