@@ -122,6 +122,13 @@ class PredictionEngine:
             self.fixtures, self.teams,
             previous_season_stats=self._build_previous_season_priors()
         )
+        # debug temp print
+        for tid, team in self.teams.items():
+            if team.get("short_name") in ["MUN", "HUL"]:
+                print(
+                    team.get("short_name"),
+                    self.team_stats.get(tid)
+                )
 
 
     def _build_previous_season_priors(self) -> dict:
@@ -133,8 +140,11 @@ class PredictionEngine:
         from data_fetcher import get_previous_season_team_stats, get_strength_rating_priors
         real_priors = get_previous_season_team_stats(self.bootstrap, self.teams)
         fallback_priors = get_strength_rating_priors(self.teams, real_priors)
+        print("REAL:", len(real_priors), real_priors.keys())
+        print("FALLBACK:", len(fallback_priors), fallback_priors.keys())
         merged = dict(fallback_priors)  # promoted teams start here
         merged.update(real_priors)      # established teams overwrite with real data
+        print("MERGED:", len(merged), merged.keys())
         return merged
 
 
@@ -223,6 +233,17 @@ class PredictionEngine:
                 fix_info["is_home"],
                 self.team_stats
             )
+            if (
+                p["team_name"] == "Manchester United"
+                or self.teams.get(fix_info["opponent_id"], {}).get("short_name") == "HUL"
+            ):
+                print(
+                    "FIXTURE DEBUG",
+                    p["team_name"],
+                    "vs",
+                    self.teams.get(fix_info["opponent_id"], {}).get("short_name"),
+                    fix_xg_data
+                )
             xmins = profile["xmins"]
             # Reduce minutes expectation for second DGW fixture
             if num_fixtures >= 2 and fix_idx > 0:
