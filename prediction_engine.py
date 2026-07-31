@@ -232,7 +232,7 @@ class PredictionEngine:
                                for k in PREDICTION_WEIGHTS)
             # Modifiers are bounded to avoid runaway inflation
             weighted_mod = max(-0.35, min(weighted_mod, 0.45))
-            fix_xp = fix_ev * (1.0 + weighted_mod)
+            fix_xp = fix_ev["appearance"] + fix_ev["other"] * (1.0 + weighted_mod)
             fix_xp = max(0.0, fix_xp)
 
             total_raw += fix_xp
@@ -474,10 +474,9 @@ class PredictionEngine:
             p_plays_60 = min(p_plays_60, 1.0)
         mins_fraction = xmins / 90.0
 
-        ev = 0.0
-
         # ── 1. Appearance points ──
-        ev += p_plays_60 * 2.0 + (p_plays - p_plays_60) * 1.0
+        appearance_pts = p_plays_60 * 2.0 + (p_plays - p_plays_60) * 1.0
+        other_ev = 0.0
 
         # ── Cold-start blend weight (shared by goals + assists) ──
         w_current = mins_played / (mins_played + PRIOR_SHRINKAGE_MINUTES)
@@ -487,27 +486,21 @@ class PredictionEngine:
         xg_current_per90 = (xg_season / (mins_played / 90.0)) if mins_played > 0 else 0.0
         prior_xg_per90 = p.get("_prior_xg_per90", POSITION_XG_PRIOR.get(pos, 0.15))
         xg_per90 = w_current * xg_current_per90 + (1 - w_current) * prior_xg_per90
-
         fdr = fix_info["fdr"]
         fdr_mod = self._position_fdr_modifier(pos, fdr, fix_info["is_home"])
-
         team_xg = fix_xg_data.get("team_xg", 1.35)
         scoring_context = team_xg / 1.35
-
         opp_id = fix_info.get("opponent_id", 0)
         opp_injury_pen = getattr(self, '_team_injury_penalty', {}).get(opp_id, 1.0)
         if opp_injury_pen < 1.0:
             opp_weakness = 1.0 + (1.0 - opp_injury_pen) * 0.5
             scoring_context *= opp_weakness
-
         actual_goals = int(p.get("goals_scored", 0))
         xg_delta = self._calc_xg_delta_regression(actual_goals, xg_season, starts)
-
         effective_xg = xg_per90 * mins_fraction * fdr_mod * scoring_context * xg_delta
         effective_xg = max(0.0, effective_xg)
-
         goal_pts = SCORING["goals"].get(pos, 4)
-        ev += poisson_ev_goals(effective_xg, goal_pts)
+        other_ev += poisson_ev_goals(effective_xg, goal_pts)
 
         # ── 3. Assists (Poisson) ──
         xa_season = float(p.get("expected_assists", 0))
@@ -516,7 +509,7 @@ class PredictionEngine:
         xa_per90 = w_current * xa_current_per90 + (1 - w_current) * prior_xa_per90
         effective_xa = xa_per90 * mins_fraction * fdr_mod * scoring_context
         effective_xa = max(0.0, effective_xa)
-        ev += poisson_ev_assists(effective_xa)
+        other_ev += poisson_ev_assists(effective_xa)
 
         # ── 4. Clean sheet (Poisson) ──
         team_xgc = fix_xg_data.get("team_xgc", 1.35)
@@ -524,32 +517,28 @@ class PredictionEngine:
         if opp_injury_pen < 1.0:
             team_xgc *= opp_injury_pen  # Reduce expected goals conceded
         cs_prob = poisson_cs_probability(team_xgc)
-
         # Blend Poisson CS with FDR-derived CS for robustness
         fdr_cs_prob = self._fdr_cs_probability(fdr, fix_info["is_home"])
         # Blended: 60% Poisson (data-driven), 40% FDR (structural)
         blended_cs = 0.60 * cs_prob + 0.40 * fdr_cs_prob
-
         # Recent defensive form adjustment
         team_id = p.get("team", 0)
         ts = self.team_stats.get(team_id, {})
         recent_cs_rate = ts.get("last5_cs", 0) / max(min(len(ts.get("results", [])), 5), 1) if ts else 0
         # Blend in recent form: 70% model, 30% recent CS rate
         blended_cs = 0.70 * blended_cs + 0.30 * recent_cs_rate
-
         cs_pts = SCORING["clean_sheet"].get(pos, 0)
         if cs_pts > 0:
             # Only count CS if player plays 60+ mins (FPL rule)
-            ev += blended_cs * cs_pts * p_plays_60
+            other_ev += blended_cs * cs_pts * p_plays_60
 
         # ── 5. Goals conceded penalty (DEF/GKP) ──
         if pos in (1, 2):
             gc_ev = poisson_goals_conceded_ev(team_xgc)
-            ev += gc_ev * p_plays_60 * 0.5  # Dampened: CS already captures defensive value
+            other_ev += gc_ev * p_plays_60 * 0.5
 
         # ── 6. Bonus points (persistence + position + fixture) ──
-        ev += self._predict_bonus(p, effective_xg, effective_xa, blended_cs,
-                                   fdr_mod, mins_fraction)
+        other_ev += self._predict_bonus(p, effective_xg, effective_xa, blended_cs, fdr_mod, mins_fraction)                       
 
         # ── 7. Saves (GKP) ──
         if pos == 1:
@@ -558,30 +547,27 @@ class PredictionEngine:
             # More saves expected vs stronger opponents (higher xGC = more shots)
             conceding_context = min(team_xgc / 1.35, 1.6)
             expected_saves = saves_per90 * mins_fraction * conceding_context
-            ev += (expected_saves / 3.0) * SCORING["saves_per_3"]
-
+            other_ev += (expected_saves / 3.0) * SCORING["saves_per_3"]
             # Penalty save (small probability based on history)
             pen_saved = int(p.get("penalties_saved", 0))
             if pen_saved > 0:
                 pen_save_rate = pen_saved / max(starts, 1)
-                ev += pen_save_rate * SCORING["penalty_save"] * 0.3
+                other_ev += pen_save_rate * SCORING["penalty_save"] * 0.3
 
         # ── 8. Negative events ──
         yellows = int(p.get("yellow_cards", 0))
         reds = int(p.get("red_cards", 0))
         own_goals = int(p.get("own_goals", 0))
         pen_missed = int(p.get("penalties_missed", 0))
-
         # Per-90 rates scaled by expected minutes
         yc_rate = yellows / max(mins_played / 90.0, 1.0) if mins_played > 0 else 0.1
         rc_rate = reds / max(mins_played / 90.0, 1.0) if mins_played > 0 else 0.005
         og_rate = own_goals / max(mins_played / 90.0, 1.0) if mins_played > 0 else 0.01
         pm_rate = pen_missed / max(mins_played / 90.0, 1.0) if mins_played > 0 else 0.0
-
-        ev += yc_rate * mins_fraction * SCORING["yellow_card"]
-        ev += rc_rate * mins_fraction * SCORING["red_card"]
-        ev += og_rate * mins_fraction * SCORING["own_goal"]
-        ev += pm_rate * mins_fraction * SCORING["penalty_miss"]
+        other_ev += yc_rate * mins_fraction * SCORING["yellow_card"]
+        other_ev += rc_rate * mins_fraction * SCORING["red_card"]
+        other_ev += og_rate * mins_fraction * SCORING["own_goal"]
+        other_ev += pm_rate * mins_fraction * SCORING["penalty_miss"]
 
         # ── 9. Defensive contributions (FPL 25/26 new rule) ──
         # 1 pt per 3 clearances+blocks+interceptions for DEF/GKP
@@ -590,9 +576,9 @@ class PredictionEngine:
             base_dc_rate = 8.0
             dc_fixture_mod = 1.0 + (fdr - 3) * 0.06
             expected_dc = base_dc_rate * mins_fraction * dc_fixture_mod
-            ev += (expected_dc / 3.0) * 1.0 * 0.35  # Dampened: uncertain data
+            other_ev += (expected_dc / 3.0) * 1.0 * 0.35
 
-        return max(ev, 0.0)
+        return {"appearance": appearance_pts, "other": max(other_ev, 0.0)}
 
     # ══════════════════════════════════════════════════════════
     #  Starter Quality (DGW-aware)
@@ -845,12 +831,11 @@ class PredictionEngine:
     #  Context Factor Calculations
     # ══════════════════════════════════════════════════════════
 
-    def _calc_all_factors(self, p: dict, fixture_info: dict,
-                          fix_xg_data: dict) -> dict:
+    def _calc_all_factors(self, p: dict, fixture_info: dict, fix_xg_data: dict) -> dict:
         """Calculate all prediction factors for a single fixture."""
         return {
             "form": self._calc_form(p),
-            "fixture_difficulty": self._calc_fixture_factor(p, fixture_info["fdr"], fixture_info["is_home"]),
+            # "fixture_difficulty": self._calc_fixture_factor(p, fixture_info["fdr"], fixture_info["is_home"]), # remove the fixture_difficulty entry from weighted_mod' 
             "season_avg": self._calc_season_avg(p),
             "home_away": self._calc_home_away(fixture_info["is_home"]),
             "ict_index": self._calc_ict(p),
@@ -861,7 +846,7 @@ class PredictionEngine:
             "bonus_tendency": self._calc_bonus_tendency(p),
             "team_form": self._calc_team_form_factor(p),
             "h2h_factor": self._calc_h2h_factor(p, fixture_info, fix_xg_data),
-            "win_probability": self._calc_win_prob_factor(fix_xg_data),
+            #"win_probability": self._calc_win_prob_factor(fix_xg_data),
         }
 
     def _calc_form(self, p: dict) -> float:
