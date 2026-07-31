@@ -122,6 +122,7 @@ class PredictionEngine:
             self.fixtures, self.teams,
             previous_season_stats=self._build_previous_season_priors()
         )
+        self.fixture_xg_cache = {}
         # debug temp print
         for tid, team in self.teams.items():
             if team.get("short_name") in ["MUN", "HUL"]:
@@ -226,24 +227,44 @@ class PredictionEngine:
         fixture_details = []
         all_factors = {}
 
+        # debug temp
         for fix_idx, fix_info in enumerate(all_fixtures):
-            fix_xg_data = get_fixture_xg(
+            cache_key = (
                 p["team"],
                 fix_info["opponent_id"],
-                fix_info["is_home"],
-                self.team_stats
+                fix_info["is_home"]
             )
+
+            if cache_key not in self.fixture_xg_cache:
+                self.fixture_xg_cache[cache_key] = get_fixture_xg(
+                    p["team"],
+                    fix_info["opponent_id"],
+                    fix_info["is_home"],
+                    self.team_stats
+                )
+
+            fix_xg_data = self.fixture_xg_cache[cache_key]
             if (
                 p["team_name"] == "Manchester United"
                 or self.teams.get(fix_info["opponent_id"], {}).get("short_name") == "HUL"
             ):
-                print(
-                    "FIXTURE DEBUG",
-                    p["team_name"],
-                    "vs",
-                    self.teams.get(fix_info["opponent_id"], {}).get("short_name"),
-                    fix_xg_data
+                if not hasattr(self, "_fixture_debug_seen"):
+                    self._fixture_debug_seen = set()
+
+                debug_key = (
+                    p["team"],
+                    fix_info["opponent_id"]
                 )
+
+                if debug_key not in self._fixture_debug_seen:
+                    print(
+                        "FIXTURE DEBUG",
+                        p["team_name"],
+                        "vs",
+                        self.teams.get(fix_info["opponent_id"], {}).get("short_name"),
+                        fix_xg_data
+                    )
+                    self._fixture_debug_seen.add(debug_key)
             xmins = profile["xmins"]
             # Reduce minutes expectation for second DGW fixture
             if num_fixtures >= 2 and fix_idx > 0:
