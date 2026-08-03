@@ -144,9 +144,8 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
     pl_avg_gf = sum(pl_gf_values) / len(pl_gf_values) if pl_gf_values else 1.35
     pl_avg_ga = sum(pl_ga_values) / len(pl_ga_values) if pl_ga_values else 1.35
 
-    # Separate factors: GF scales toward PL's average scoring rate,
-    # GA scales toward PL's average conceding rate - independently,
-    # since "moving up a division" affects attack and defense asymmetrically.
+    # Championship -> Premier League scoring environment adjustment
+    # GF and GA are treated separately.
     gf_adjustment = pl_avg_gf / champ_avg_goals if champ_avg_goals > 0 else 1.0
     ga_adjustment = pl_avg_ga / champ_avg_goals if champ_avg_goals > 0 else 1.0
 
@@ -166,25 +165,38 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
         if not a:
             print("NO MATCH:", t.get("name"), "normalized:", key)
             continue
-            for champ_name, champ_data in agg.items():
-                if key in champ_name or champ_name in key:
-                    a = champ_data
-                    break
-        LEAGUE_AVG = 1.35
-        weight = min(0.7, a["played"] / 100)
         champ_gf = a["gf"] / a["played"]
         champ_ga = a["ga"] / a["played"]
+
+        # Adjust Championship performance into PL environment
         adjusted_gf = champ_gf * gf_adjustment
         adjusted_ga = champ_ga * ga_adjustment
-        # debug temp
+
+        # --------------------------------------------------
+        # Regression toward PL average because promotion is
+        # a huge difficulty jump.
+        #
+        # 46 Championship games gives:
+        # 46/200 = 23% trust in Championship performance
+        #
+        # Current-season PL results will later replace this
+        # through build_team_stats() shrinkage.
+        # --------------------------------------------------
+        prior_weight = min(0.65, a["played"] / 200)
+        final_gf = (adjusted_gf * prior_weight +pl_avg_gf * (1 - prior_weight))
+        final_ga = (adjusted_ga * prior_weight +pl_avg_ga * (1 - prior_weight))
+
+        # Debug temp
         print(f"\n{t['name']}")
         print(f"Raw Championship: GF={champ_gf:.3f}, GA={champ_ga:.3f}")
-        print(f"After adjustment: GF={adjusted_gf:.3f}, GA={adjusted_ga:.3f}")
+        print(f"After PL adjustment: GF={adjusted_gf:.3f}, GA={adjusted_ga:.3f}")
+        print(f"Trust weight: {prior_weight:.3f}")
+        print(f"Final prior: GF={final_gf:.3f}, GA={final_ga:.3f}")
+
         priors[tid] = {
-            "gf_per_game": round(adjusted_gf * weight + LEAGUE_AVG * (1 - weight), 3),
-            "ga_per_game": round(adjusted_ga * weight + LEAGUE_AVG * (1 - weight), 3),
+            "gf_per_game": round(final_gf, 3),
+            "ga_per_game": round(final_ga, 3),
         }
-        print(t["name"], priors[tid])
     return priors
     
 
