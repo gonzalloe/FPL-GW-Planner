@@ -125,7 +125,7 @@ class PredictionEngine:
         self.fixture_xg_cache = {}
         self.fixture_cache_hits = 0
         self.fixture_cache_misses = 0
-        
+
         # debug temp print
         for pid, p in self.players.items():
             if p.get("team") == 16:  # Man Utd
@@ -145,9 +145,12 @@ class PredictionEngine:
         with regression-calibrated strength-rating priors only for teams
         absent from that dataset (newly promoted).
         """
-        from data_fetcher import get_previous_season_team_stats, get_strength_rating_priors
+        from data_fetcher import get_previous_season_team_stats, get_promoted_team_priors
         real_priors = get_previous_season_team_stats(self.bootstrap, self.teams)
-        fallback_priors = get_strength_rating_priors(self.teams, real_priors)
+        #debug temp
+        print("CHAMPIONSHIP FALLBACK:", fallback_priors)
+        fallback_priors = get_promoted_team_priors(self.bootstrap, self.teams, real_priors)
+        #debug temp
         print("REAL:", len(real_priors), real_priors.keys())
         print("FALLBACK:", len(fallback_priors), fallback_priors.keys())
         merged = dict(fallback_priors)  # promoted teams start here

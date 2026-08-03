@@ -26,17 +26,14 @@ def _get(url: str, cache_key: str | None = None, cache_ttl: int = 300) -> dict |
             age = time.time() - cache_file.stat().st_mtime
             if age < cache_ttl:
                 return json.loads(cache_file.read_text(encoding="utf-8"))
-
     try:
         time.sleep(REQUEST_DELAY)
         resp = requests.get(url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=30)
         resp.raise_for_status()
         data = resp.json()
-
         if cache_key:
             cache_file = CACHE_DIR / f"{cache_key}.json"
             cache_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-
         return data
     except (requests.ConnectionError, requests.Timeout, requests.RequestException) as e:
         # Fallback to stale cache if available
@@ -62,65 +59,95 @@ def fetch_player_detail(player_id: int) -> dict:
     return _get(url, cache_key=f"player_{player_id}", cache_ttl=900)
 
 
-def get_strength_rating_priors(teams: dict, real_priors: dict) -> dict:
-    print("=== TEAM 16 ===")
-    from pprint import pprint
-    pprint(teams[16]) 
+# data_fetcher.py — replaces the previous (unverified) Championship function entirely
+
+def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) -> dict:
     """
-    gf_per_game/ga_per_game for teams ABSENT from real_priors (i.e. newly
-    promoted, no prior-season PL results in the Vaastav archive).
+    Fallback priors for teams absent from real_priors (promoted teams),
+    sourced from football-data.co.uk's Championship (E1) results for their
+    most recent Championship season, adjusted for the step up to the PL.
 
-    Derived by fitting a linear regression of FPL bootstrap strength rating
-    -> actual gf/ga_per_game, using the established teams where BOTH the
-    rating and real historical results exist simultaneously. This calibrates
-    the rating->goals relationship from real data each season rather than
-    assuming a linear ratio a priori.
-
-    Established teams (present in real_priors) are NOT touched here -
-    build_team_stats() only consults this dict for the keys it's missing.
+    GF and GA are adjusted SEPARATELY (not by one symmetric ratio):
+      - GF deflates moving to PL (Championship attacks score more, on
+        average, against weaker PL-bound defenses is not guaranteed - PL
+        defenses are collectively stronger, so raw scoring rate overstates
+        PL output).
+      - GA inflates moving to PL (PL attacks are collectively stronger,
+        so a team's defense concedes more than their Championship rate
+        suggested).
+    Both factors are computed from real_priors vs a corresponding PL-wide
+    Championship-teams baseline where available, falling back to a
+    conservative default only if that comparison can't be computed.
     """
-    def team_ratings(t):
-        atk = (t.get("strength_attack_home", 0) + t.get("strength_attack_away", 0)) / 2.0
-        defn = (t.get("strength_defence_home", 0) + t.get("strength_defence_away", 0)) / 2.0
-        return atk, defn
+    events = bootstrap.get("events", [])
+    if not events:
+        return {}
+    try:
+        year = int(events[0]["deadline_time"][:4])
+    except (KeyError, ValueError, TypeError):
+        return {}
+    season_code = f"{str(year-1)[-2:]}{str(year)[-2:]}"  # e.g. 2025 -> "2425"
 
-    atk_x, atk_y, def_x, def_y = [], [], [], []
-    for tid, t in teams.items():
-        if tid not in real_priors:
+    url = f"https://www.football-data.co.uk/mmz4281/{season_code}/E1.csv"
+    rows = _fetch_csv(url, f"champ_e1_{season_code}")
+    if not rows:
+        return {}  # source unavailable -> caller's LEAGUE_AVG_GOALS last resort applies
+
+    def normalize(name: str) -> str:
+        n = name.lower().strip()
+        for suffix in (" fc", " afc", " f.c.", " a.f.c."):
+            n = n.replace(suffix, "")
+        aliases = {
+            "nott'm forest": "nottingham forest", "man utd": "manchester united",
+            "man united": "manchester united", "man city": "manchester city",
+            "spurs": "tottenham", "wolves": "wolverhampton",
+            "sheffield utd": "sheffield united", "newcastle": "newcastle united",
+        }
+        return aliases.get(n, n)
+
+    agg = {}
+    champ_total_gf, champ_total_games = 0, 0
+    for row in rows:
+        home, away = row.get("HomeTeam", ""), row.get("AwayTeam", "")
+        try:
+            fthg, ftag = int(row["FTHG"]), int(row["FTAG"])
+        except (KeyError, ValueError):
             continue
-        atk, defn = team_ratings(t)
-        atk_x.append(atk); atk_y.append(real_priors[tid]["gf_per_game"])
-        def_x.append(defn); def_y.append(real_priors[tid]["ga_per_game"])
+        champ_total_gf += fthg + ftag
+        champ_total_games += 2
+        for name, gf, ga in ((home, fthg, ftag), (away, ftag, fthg)):
+            if not name:
+                continue
+            key = normalize(name)
+            a = agg.setdefault(key, {"gf": 0, "ga": 0, "played": 0})
+            a["gf"] += gf; a["ga"] += ga; a["played"] += 1
 
-    def fit_linear(xs, ys, fallback=1.35):
-        n = len(xs)
-        if n < 5:
-            return 0.0, (sum(ys) / n if n else fallback)
-        mean_x, mean_y = sum(xs) / n, sum(ys) / n
-        den = sum((x - mean_x) ** 2 for x in xs)
-        if den == 0:
-            return 0.0, mean_y
-        slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / den
-        return slope, mean_y - slope * mean_x
+    if champ_total_games == 0:
+        return {}
+    champ_avg_goals = champ_total_gf / champ_total_games
 
-    atk_slope, atk_intercept = fit_linear(atk_x, atk_y)
-    def_slope, def_intercept = fit_linear(def_x, def_y)
+    pl_gf_values = [v["gf_per_game"] for v in real_priors.values()]
+    pl_ga_values = [v["ga_per_game"] for v in real_priors.values()]
+    pl_avg_gf = sum(pl_gf_values) / len(pl_gf_values) if pl_gf_values else 1.35
+    pl_avg_ga = sum(pl_ga_values) / len(pl_ga_values) if pl_ga_values else 1.35
+
+    # Separate factors: GF scales toward PL's average scoring rate,
+    # GA scales toward PL's average conceding rate - independently,
+    # since "moving up a division" affects attack and defense asymmetrically.
+    gf_adjustment = pl_avg_gf / champ_avg_goals if champ_avg_goals > 0 else 1.0
+    ga_adjustment = pl_avg_ga / champ_avg_goals if champ_avg_goals > 0 else 1.0
 
     priors = {}
-    print("Attack:", atk_slope, atk_intercept)
-    print("Defence:", def_slope, def_intercept)
     for tid, t in teams.items():
-        atk, defn = team_ratings(t)
         if tid in real_priors:
-            print(tid, t["name"], atk, defn)
-        gf = atk_slope * atk + atk_intercept
-        ga = def_slope * defn + def_intercept
-        # Prevent small-sample regression from producing extreme promoted-team priors
-        gf = max(0.6, min(gf, 2.2))
-        ga = max(0.6, min(ga, 2.2))
+            continue
+        key = normalize(t.get("name", ""))
+        a = agg.get(key)
+        if not a or a["played"] == 0:
+            continue
         priors[tid] = {
-            "gf_per_game": round(gf, 3),
-            "ga_per_game": round(ga, 3),
+            "gf_per_game": round((a["gf"] / a["played"]) * gf_adjustment, 3),
+            "ga_per_game": round((a["ga"] / a["played"]) * ga_adjustment, 3),
         }
     return priors
     
