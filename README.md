@@ -235,8 +235,8 @@ Premium price is configured in Stripe (see [Stripe setup](#6-stripe-payment-gate
 | Season Average       | 8%     | Points per game, normalized                               |
 | H2H Factor           | 8%     | Head-to-head record + fixture-specific xG                |
 | Win Probability      | 8%     | Poisson-based team win probability                       |
-| Home/Away            | 7%     | +12% home, -10% away                                       |
 | Minutes Consistency  | 7%     | With volatility penalty                                   |
+| Home/Away            | 5%     | +8% home, -5% away                                       |
 | Team Strength        | 5%     | FPL team ratings                                           |
 | Set Pieces           | 5%     | Penalty/corner/FK duties                                   |
 | Transfer Momentum    | 3%     | Community transfer trends                                 |

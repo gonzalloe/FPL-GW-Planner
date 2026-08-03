@@ -196,7 +196,9 @@ def get_fixture_xg(team_id: int, opponent_id: int, is_home: bool,
     opp_defence = 0.6 * opp_ga_l5 + 0.4 * opp_ga
 
     # League average goals per game (approx)
-    league_avg = 1.35
+    league_avg = sum(
+        x["gf_per_game"] for x in team_stats.values()
+    ) / len(team_stats)
 
     # xG = (team_attack * opponent_conceding) / league_avg
     # use the blended defence values, not raw season-only rates
@@ -205,11 +207,11 @@ def get_fixture_xg(team_id: int, opponent_id: int, is_home: bool,
 
     # Home/away adjustment
     if is_home:
-        team_xg *= 1.12  # Home scoring boost
-        opp_xg *= 0.90   # Away scoring penalty
+        team_xg *= 1.08  # Home scoring boost
+        opp_xg *= 0.95   # Away scoring penalty
     else:
-        team_xg *= 0.90
-        opp_xg *= 1.12
+        team_xg *= 0.95
+        opp_xg *= 1.08
 
     # H2H adjustment (small)
     h2h = get_h2h(team_id, opponent_id, team_stats)
