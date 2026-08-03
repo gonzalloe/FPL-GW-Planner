@@ -147,10 +147,9 @@ class PredictionEngine:
         """
         from data_fetcher import get_previous_season_team_stats, get_promoted_team_priors
         real_priors = get_previous_season_team_stats(self.bootstrap, self.teams)
-        #debug temp
-        print("CHAMPIONSHIP FALLBACK:", fallback_priors)
         fallback_priors = get_promoted_team_priors(self.bootstrap, self.teams, real_priors)
         #debug temp
+        print("CHAMPIONSHIP FALLBACK:", fallback_priors)
         print("REAL:", len(real_priors), real_priors.keys())
         print("FALLBACK:", len(fallback_priors), fallback_priors.keys())
         merged = dict(fallback_priors)  # promoted teams start here
