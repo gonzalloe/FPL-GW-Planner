@@ -150,6 +150,13 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
     gf_adjustment = pl_avg_gf / champ_avg_goals if champ_avg_goals > 0 else 1.0
     ga_adjustment = pl_avg_ga / champ_avg_goals if champ_avg_goals > 0 else 1.0
 
+    # ADD Debug Temp
+    print("PL avg GF:", pl_avg_gf)
+    print("PL avg GA:", pl_avg_ga)
+    print("Champ avg:", champ_avg_goals)
+    print("GF adjustment:", gf_adjustment)
+    print("GA adjustment:", ga_adjustment)
+
     priors = {}
     for tid, t in teams.items():
         if tid in real_priors:
