@@ -175,9 +175,11 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
         # Current-season PL results will later replace this
         # through build_team_stats() shrinkage.
         # --------------------------------------------------
-        prior_weight = min(0.25, a["played"] / 200)
-        final_gf = (adjusted_gf * prior_weight +pl_avg_gf * (1 - prior_weight))
-        final_ga = (adjusted_ga * prior_weight +pl_avg_ga * (1 - prior_weight))
+        prior_weight = min(0.25, a["played"] / 250)
+        PROMOTION_GF_PENALTY = 0.90
+        PROMOTION_GA_PENALTY = 1.05
+        final_gf = (adjusted_gf * PROMOTION_GF_PENALTY * prior_weight +pl_avg_gf * (1 - prior_weight))
+        final_ga = (adjusted_ga * PROMOTION_GA_PENALTY * prior_weight +pl_avg_ga * (1 - prior_weight))
         priors[tid] = {
             "gf_per_game": round(final_gf, 3),
             "ga_per_game": round(final_ga, 3),
