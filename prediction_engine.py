@@ -125,7 +125,11 @@ class PredictionEngine:
         self.fixture_xg_cache = {}
         self.fixture_cache_hits = 0
         self.fixture_cache_misses = 0
-
+        # debug temp
+        print("HULL:", self.team_stats[11])
+        print("IPS:", self.team_stats[12])
+        print("COV:", self.team_stats[7])
+        print("MUN:", self.team_stats[16])
 
     def _build_previous_season_priors(self) -> dict:
         """
