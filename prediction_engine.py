@@ -126,18 +126,6 @@ class PredictionEngine:
         self.fixture_cache_hits = 0
         self.fixture_cache_misses = 0
 
-        # debug temp print
-        for pid, p in self.players.items():
-            if p.get("team") == 16:  # Man Utd
-                print({
-                    "name": p.get("web_name"),
-                    "atk_home": p.get("team_strength_attack_home"),
-                    "atk_away": p.get("team_strength_attack_away"),
-                    "def_home": p.get("team_strength_defence_home"),
-                    "def_away": p.get("team_strength_defence_away"),
-                })
-                break
-
 
     def _build_previous_season_priors(self) -> dict:
         """
@@ -150,11 +138,8 @@ class PredictionEngine:
         fallback_priors = get_promoted_team_priors(self.bootstrap, self.teams, real_priors)
         #debug temp
         print("CHAMPIONSHIP FALLBACK:", fallback_priors)
-        print("REAL:", len(real_priors), real_priors.keys())
-        print("FALLBACK:", len(fallback_priors), fallback_priors.keys())
         merged = dict(fallback_priors)  # promoted teams start here
         merged.update(real_priors)      # established teams overwrite with real data
-        print("MERGED:", len(merged), merged.keys())
         return merged
 
 

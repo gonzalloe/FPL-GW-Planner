@@ -115,6 +115,9 @@ def build_team_stats(fixtures: list, teams: dict,
         s["last5_ga_pg"] = round(w_cur5 * current_ga_l5 + w_pri5 * prior_ga, 3)
         s["last5_form_str"] = "".join(r[5] for r in last5)
 
+        # debug temp
+        print(team_stats[11])
+        print(team_stats[16])
     return stats
 
 
