@@ -90,6 +90,10 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
 
     url = f"https://www.football-data.co.uk/mmz4281/{season_code}/E1.csv"
     rows = _fetch_csv(url, f"champ_e1_{season_code}")
+    # debug temp
+    print("CHAMP URL:", url)
+    print("CHAMP ROW COUNT:", len(rows) if rows else 0)
+
     if not rows:
         return {}  # source unavailable -> caller's LEAGUE_AVG_GOALS last resort applies
 
@@ -122,6 +126,9 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
             a = agg.setdefault(key, {"gf": 0, "ga": 0, "played": 0})
             a["gf"] += gf; a["ga"] += ga; a["played"] += 1
 
+    # debug temp
+    print("CHAMP TEAMS FOUND:", list(agg.keys()))
+    print("CHAMP TOTAL GAMES:", champ_total_games)
     if champ_total_games == 0:
         return {}
     champ_avg_goals = champ_total_gf / champ_total_games
@@ -137,14 +144,20 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
     gf_adjustment = pl_avg_gf / champ_avg_goals if champ_avg_goals > 0 else 1.0
     ga_adjustment = pl_avg_ga / champ_avg_goals if champ_avg_goals > 0 else 1.0
 
+    # debug temp
+    print("FPL TEAMS:")
+    print([t.get("name") for t in teams.values()])
     priors = {}
     for tid, t in teams.items():
         if tid in real_priors:
             continue
         key = normalize(t.get("name", ""))
         a = agg.get(key)
-        if not a or a["played"] == 0:
-            continue
+        if not a:
+            for champ_name, champ_data in agg.items():
+                if key in champ_name or champ_name in key:
+                    a = champ_data
+                    break
         priors[tid] = {
             "gf_per_game": round((a["gf"] / a["played"]) * gf_adjustment, 3),
             "ga_per_game": round((a["ga"] / a["played"]) * ga_adjustment, 3),
