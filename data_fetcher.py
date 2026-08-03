@@ -185,9 +185,12 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
             "GA:",
             round(a["ga"]/a["played"],3)
         )
+        weight = min(0.7, a["played"] / 100)
+        adjusted_gf = champ_gf * gf_adjustment
+        adjusted_ga = champ_ga * ga_adjustment
         priors[tid] = {
-            "gf_per_game": round((a["gf"] / a["played"]) * gf_adjustment, 3),
-            "ga_per_game": round((a["ga"] / a["played"]) * ga_adjustment, 3),
+            "gf_per_game": round(adjusted_gf * weight + LEAGUE_AVG * (1 - weight), 3),
+            "ga_per_game": round(adjusted_ga * weight + LEAGUE_AVG * (1 - weight), 3),
         }
     return priors
     
