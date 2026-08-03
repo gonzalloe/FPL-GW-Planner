@@ -110,8 +110,8 @@ def get_strength_rating_priors(teams: dict, real_priors: dict) -> dict:
     print("Attack:", atk_slope, atk_intercept)
     print("Defence:", def_slope, def_intercept)
     for tid, t in teams.items():
+        atk, defn = team_ratings(t)
         if tid in real_priors:
-            atk, defn = team_ratings(t)
             print(tid, t["name"], atk, defn)
         gf = atk_slope * atk + atk_intercept
         ga = def_slope * defn + def_intercept

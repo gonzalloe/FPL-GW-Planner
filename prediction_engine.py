@@ -111,6 +111,13 @@ class PredictionEngine:
     """
     def __init__(self):
         self.bootstrap = fetch_bootstrap()
+        # debug temp
+        from pprint import pprint
+        for t in self.bootstrap["teams"]:
+            if t["id"] == 16:  # Man Utd
+                print("=== RAW BOOTSTRAP MAN UTD ===")
+                pprint(t)
+                break
         self.fixtures = fetch_fixtures()
         self.players = build_player_map(self.bootstrap)
         self.teams = build_team_map(self.bootstrap)
@@ -142,6 +149,11 @@ class PredictionEngine:
         """
         from data_fetcher import get_previous_season_team_stats, get_strength_rating_priors
         real_priors = get_previous_season_team_stats(self.bootstrap, self.teams)
+        #debug temp
+        from pprint import pprint
+        print("SELF.TEAMS SAMPLE")
+        pprint(self.teams[16])
+
         fallback_priors = get_strength_rating_priors(self.teams, real_priors)
         print("REAL:", len(real_priors), real_priors.keys())
         print("FALLBACK:", len(fallback_priors), fallback_priors.keys())
@@ -745,10 +757,8 @@ class PredictionEngine:
                                    starts: int) -> float:
         """
         Detect overperformance vs xG and regress toward the mean.
-
         From XGBoost research (Meharpal Basi): players massively overperforming
         xG tend to regress. We apply a dampening factor.
-
         Returns a multiplier (0.7 - 1.1) applied to projected xG.
         """
         if starts < 5 or xg < 0.5:
