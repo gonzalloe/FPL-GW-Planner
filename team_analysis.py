@@ -231,20 +231,6 @@ def get_fixture_xg(team_id: int, opponent_id: int, is_home: bool,
 
     # Win probability using Poisson distribution
     win_prob = calculate_win_probability(team_xg, opp_xg)
-
-    # debug temp
-    #if not hasattr(get_fixture_xg, "_printed"):
-    if team_id in [16, 11] or opponent_id in [16, 11]:
-        print({
-            "team_attack": team_attack,
-            "team_defence": team_defence,
-            "opp_attack": opp_attack,
-            "opp_defence": opp_defence,
-            "team_xg": team_xg,
-            "opp_xg": opp_xg,
-            "win_prob": win_prob
-        })
-        get_fixture_xg._printed = True
         
     return {
         "team_xg": round(team_xg, 2),
