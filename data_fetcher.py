@@ -104,14 +104,15 @@ def get_strength_rating_priors(teams: dict, real_priors: dict) -> dict:
     def_slope, def_intercept = fit_linear(def_x, def_y)
 
     priors = {}
+    print("Attack:", atk_slope, atk_intercept)
+    print("Defence:", def_slope, def_intercept)
     for tid, t in teams.items():
         if tid in real_priors:
-            continue
-        atk, defn = team_ratings(t)
+            atk, defn = team_ratings(t)
+            print(tid, t["name"], atk, defn)
         gf = atk_slope * atk + atk_intercept
         ga = def_slope * defn + def_intercept
         # Prevent small-sample regression from producing extreme promoted-team priors
-        print(real_priors)
         gf = max(0.6, min(gf, 2.2))
         ga = max(0.6, min(ga, 2.2))
         priors[tid] = {
