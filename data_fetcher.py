@@ -61,8 +61,11 @@ def fetch_player_detail(player_id: int) -> dict:
     url = FPL_ENDPOINTS["player_detail"].format(player_id=player_id)
     return _get(url, cache_key=f"player_{player_id}", cache_ttl=900)
 
-
+ß
 def get_strength_rating_priors(teams: dict, real_priors: dict) -> dict:
+    print("=== TEAM 16 ===")
+    from pprint import pprint
+    pprint(teams[16]) 
     """
     gf_per_game/ga_per_game for teams ABSENT from real_priors (i.e. newly
     promoted, no prior-season PL results in the Vaastav archive).
