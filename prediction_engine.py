@@ -111,13 +111,6 @@ class PredictionEngine:
     """
     def __init__(self):
         self.bootstrap = fetch_bootstrap()
-        # debug temp
-        from pprint import pprint
-        for t in self.bootstrap["teams"]:
-            if t["id"] == 16:  # Man Utd
-                print("=== RAW BOOTSTRAP MAN UTD ===")
-                pprint(t)
-                break
         self.fixtures = fetch_fixtures()
         self.players = build_player_map(self.bootstrap)
         self.teams = build_team_map(self.bootstrap)
@@ -132,13 +125,18 @@ class PredictionEngine:
         self.fixture_xg_cache = {}
         self.fixture_cache_hits = 0
         self.fixture_cache_misses = 0
+        
         # debug temp print
-        for tid, team in self.teams.items():
-            if team.get("short_name") in ["MUN", "HUL"]:
-                print(
-                    team.get("short_name"),
-                    self.team_stats.get(tid)
-                )
+        for pid, p in self.players.items():
+            if p.get("team") == 16:  # Man Utd
+                print({
+                    "name": p.get("web_name"),
+                    "atk_home": p.get("team_strength_attack_home"),
+                    "atk_away": p.get("team_strength_attack_away"),
+                    "def_home": p.get("team_strength_defence_home"),
+                    "def_away": p.get("team_strength_defence_away"),
+                })
+                break
 
 
     def _build_previous_season_priors(self) -> dict:
@@ -149,11 +147,6 @@ class PredictionEngine:
         """
         from data_fetcher import get_previous_season_team_stats, get_strength_rating_priors
         real_priors = get_previous_season_team_stats(self.bootstrap, self.teams)
-        #debug temp
-        from pprint import pprint
-        print("SELF.TEAMS SAMPLE")
-        pprint(self.teams[16])
-
         fallback_priors = get_strength_rating_priors(self.teams, real_priors)
         print("REAL:", len(real_priors), real_priors.keys())
         print("FALLBACK:", len(fallback_priors), fallback_priors.keys())
