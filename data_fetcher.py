@@ -98,13 +98,28 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
 
     def normalize(name: str) -> str:
         n = name.lower().strip()
+        # remove punctuation/suffixes
         for suffix in (" fc", " afc", " f.c.", " a.f.c."):
             n = n.replace(suffix, "")
         aliases = {
-            "nott'm forest": "nottingham forest", "man utd": "manchester united",
-            "man united": "manchester united", "man city": "manchester city",
-            "spurs": "tottenham", "wolves": "wolverhampton",
-            "sheffield utd": "sheffield united", "newcastle": "newcastle united",
+            # Championship -> FPL naming
+            "hull": "hull",
+            "hull city": "hull",
+            "ipswich": "ipswich",
+            "ipswich town": "ipswich",
+            "coventry": "coventry",
+            "coventry city": "coventry",
+            # common names
+            "nott'm forest": "nottingham forest",
+            "nottingham forest": "nottingham forest",
+            "man utd": "manchester united",
+            "man united": "manchester united",
+            "man city": "manchester city",
+            "spurs": "tottenham",
+            "wolves": "wolverhampton",
+            "sheffield utd": "sheffield united",
+            "sheffield united": "sheffield united",
+            "newcastle": "newcastle united",
         }
         return aliases.get(n, n)
 
@@ -159,6 +174,17 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
                 if key in champ_name or champ_name in key:
                     a = champ_data
                     break
+        # debug temp
+        print(
+            "MATCHED:",
+            t.get("name"),
+            "=>",
+            key,
+            "GF:",
+            round(a["gf"]/a["played"],3),
+            "GA:",
+            round(a["ga"]/a["played"],3)
+        )
         priors[tid] = {
             "gf_per_game": round((a["gf"] / a["played"]) * gf_adjustment, 3),
             "ga_per_game": round((a["ga"] / a["played"]) * ga_adjustment, 3),
