@@ -59,9 +59,8 @@ def fetch_player_detail(player_id: int) -> dict:
     return _get(url, cache_key=f"player_{player_id}", cache_ttl=900)
 
 
-# data_fetcher.py — replaces the previous (unverified) Championship function entirely
-
 def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) -> dict:
+    print("===== CHAMP FUNCTION VERSION 2 =====") # debug
     """
     Fallback priors for teams absent from real_priors (promoted teams),
     sourced from football-data.co.uk's Championship (E1) results for their
@@ -80,6 +79,7 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
     conservative default only if that comparison can't be computed.
     """
     events = bootstrap.get("events", [])
+    print("BOOTSTRAP EVENTS:", len(bootstrap.get("events", []))) # debug
     if not events:
         return {}
     try:
@@ -89,10 +89,9 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
     season_code = f"{str(year-1)[-2:]}{str(year)[-2:]}"  # e.g. 2025 -> "2425"
 
     url = f"https://www.football-data.co.uk/mmz4281/{season_code}/E1.csv"
+    print("CHAMP URL:", url) # debug
     rows = _fetch_csv(url, f"champ_e1_{season_code}")
-    # debug temp
-    print("CHAMP URL:", url)
-    print("CHAMP ROW COUNT:", len(rows) if rows else 0)
+    print("CHAMP ROW COUNT:", len(rows) if rows else 0) # debug temp
 
     if not rows:
         return {}  # source unavailable -> caller's LEAGUE_AVG_GOALS last resort applies
@@ -154,6 +153,8 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
         key = normalize(t.get("name", ""))
         a = agg.get(key)
         if not a:
+            print("NO MATCH:", t.get("name"), "normalized:", key)
+            continue
             for champ_name, champ_data in agg.items():
                 if key in champ_name or champ_name in key:
                     a = champ_data
