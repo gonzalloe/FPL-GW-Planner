@@ -142,6 +142,13 @@ class PredictionEngine:
         fallback_priors = get_promoted_team_priors(self.bootstrap, self.teams, real_priors)
         #debug temp
         print("CHAMPIONSHIP FALLBACK:", fallback_priors)
+        print("\n=== FINAL TEAM PRIORS ===")
+        for tid, p in {**fallback_priors, **real_priors}.items():
+            print(
+                self.teams[tid]["name"],
+                "GF:", p["gf_per_game"],
+                "GA:", p["ga_per_game"]
+            )
         merged = dict(fallback_priors)  # promoted teams start here
         merged.update(real_priors)      # established teams overwrite with real data
         return merged

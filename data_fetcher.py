@@ -149,13 +149,6 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
     gf_adjustment = pl_avg_gf / champ_avg_goals if champ_avg_goals > 0 else 1.0
     ga_adjustment = pl_avg_ga / champ_avg_goals if champ_avg_goals > 0 else 1.0
 
-    # ADD Debug Temp
-    print("PL avg GF:", pl_avg_gf)
-    print("PL avg GA:", pl_avg_ga)
-    print("Champ avg:", champ_avg_goals)
-    print("GF adjustment:", gf_adjustment)
-    print("GA adjustment:", ga_adjustment)
-
     priors = {}
     for tid, t in teams.items():
         if tid in real_priors:
@@ -182,17 +175,9 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
         # Current-season PL results will later replace this
         # through build_team_stats() shrinkage.
         # --------------------------------------------------
-        prior_weight = min(0.65, a["played"] / 200)
+        prior_weight = min(0.40, a["played"] / 200)
         final_gf = (adjusted_gf * prior_weight +pl_avg_gf * (1 - prior_weight))
         final_ga = (adjusted_ga * prior_weight +pl_avg_ga * (1 - prior_weight))
-
-        # Debug temp
-        print(f"\n{t['name']}")
-        print(f"Raw Championship: GF={champ_gf:.3f}, GA={champ_ga:.3f}")
-        print(f"After PL adjustment: GF={adjusted_gf:.3f}, GA={adjusted_ga:.3f}")
-        print(f"Trust weight: {prior_weight:.3f}")
-        print(f"Final prior: GF={final_gf:.3f}, GA={final_ga:.3f}")
-
         priors[tid] = {
             "gf_per_game": round(final_gf, 3),
             "ga_per_game": round(final_ga, 3),
