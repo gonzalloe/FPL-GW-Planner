@@ -225,6 +225,11 @@ class PredictionEngine:
         # ── Starter quality (DGW-aware, injury-aware) ──
         profile = self.calculate_expected_minutes(p, num_fixtures, teammates_out, out_minutes)
         p["starter_quality"] = {**profile, "tier": self._derive_tier_label(profile)}
+        # debug temp
+        if p.get("web_name") in ("Dowman", "Foden"):  # temp debug filter
+            print(f"  [TIER-DEBUG] {p.get('web_name')} predict_player() SET: "
+                f"p_start={profile['p_start']} tier={p['starter_quality']['tier']} "
+                f"id(p)={id(p)} id(starter_quality)={id(p['starter_quality'])}")
 
         # ── Per-fixture xPts ──
         total_raw = 0.0
@@ -433,6 +438,11 @@ class PredictionEngine:
                 continue
 
             pred = self.predict_player(pid, target_gw)
+            # DEBUG TEMP
+            if pred.get("name") in ("Dowman", "Foden"):
+                print(f"  [TIER-DEBUG] {pred.get('name')} predict_all() COLLECTED: "
+                    f"p_start={pred.get('starter_quality',{}).get('p_start')} "
+                    f"tier={pred.get('starter_quality',{}).get('tier')}")
             # Include ALL players — even 0 xPts (youngsters, bench warmers)
             if not pred.get("error"):
                 results.append(pred)
