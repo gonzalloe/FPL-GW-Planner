@@ -50,8 +50,8 @@ POSITION_BONUS_PRIOR = {1: 0.15, 2: 0.20, 3: 0.25, 4: 0.20}   # bonus per start
 
 PRIOR_SHRINKAGE_MINUTES = 450   # ~5 full games: point where current-season data starts to dominate over the prior
 PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for players still under this many mins
-POSITION_START_RATE_PRIOR = {1: 0.55, 2: 0.70, 3: 0.65, 4: 0.65}
-POSITION_MINUTES_PRIOR = {1: 0.70, 2: 0.65, 3: 0.60, 4: 0.60}
+POSITION_START_RATE_PRIOR = {1: 0.90, 2: 0.70, 3: 0.65, 4: 0.65}
+POSITION_MINUTES_PRIOR = {1: 0.85, 2: 0.65, 3: 0.60, 4: 0.60}
 PLAYER_PRIOR_PHASEOUT_GW = 12
 
 # ══════════════════════════════════════════════════════════════
@@ -635,6 +635,13 @@ class PredictionEngine:
         }
 
 
+    def is_promoted_player(self, p: dict) -> bool:
+        team_id = p.get("team")
+        if not team_id:
+            return False
+        return team_id in self.promoted_team_ids
+
+
     def calculate_expected_minutes(self, p: dict, num_fixtures: int = 1, teammates_out: int = 0, out_minutes: int = 0) -> dict:
         """
         Continuous expected-minutes model. This is the ONLY source of playing-time
@@ -665,10 +672,12 @@ class PredictionEngine:
                 start_rate = season_start_rate
                 avg_mins = season_avg_mins
             else:
-                # Promoted teams only
                 played_games = max(self.current_gw - 1, 0)
-                # GW1 = 0%, GW12 = 100%
-                weight_current = min(played_games / PLAYER_PRIOR_PHASEOUT_GW,1.0)
+                if self.is_promoted_player(p):
+                    phaseout_gw = 12
+                else:
+                    phaseout_gw = 5
+                weight_current = min(played_games / phaseout_gw, 1.0)
                 weight_prior = 1.0 - weight_current
                 start_rate = (
                     season_start_rate * weight_current

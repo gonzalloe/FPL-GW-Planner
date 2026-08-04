@@ -146,8 +146,8 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
 
     # Championship -> Premier League scoring environment adjustment
     # GF and GA are treated separately.
-    gf_adjustment = pl_avg_gf / champ_avg_goals if champ_avg_goals > 0 else 1.0
-    ga_adjustment = pl_avg_ga / champ_avg_goals if champ_avg_goals > 0 else 1.0
+    gf_adjustment = 0.85
+    ga_adjustment = 1.15
 
     priors = {}
     for tid, t in teams.items():
@@ -167,7 +167,7 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
 
         # Regression toward PL average because promotion is a huge difficulty jump.
         PROMOTED_GF_TRUST = 0.20
-        PROMOTED_GA_TRUST = 0.30
+        PROMOTED_GA_TRUST = 0.35
         final_gf = adjusted_gf * PROMOTED_GF_TRUST + pl_avg_gf * (1 - PROMOTED_GF_TRUST)
         final_ga = adjusted_ga * PROMOTED_GA_TRUST + pl_avg_ga * (1 - PROMOTED_GA_TRUST)
         priors[tid] = {
