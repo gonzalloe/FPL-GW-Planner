@@ -166,9 +166,10 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
         adjusted_ga = champ_ga * ga_adjustment
 
         # Regression toward PL average because promotion is a huge difficulty jump.
-        PROMOTION_TRUST = 0.325
-        final_gf = adjusted_gf * PROMOTION_TRUST + pl_avg_gf * (1 - PROMOTION_TRUST)
-        final_ga = adjusted_ga * PROMOTION_TRUST + pl_avg_ga * (1 - PROMOTION_TRUST)
+        PROMOTED_GF_TRUST = 0.20
+        PROMOTED_GA_TRUST = 0.30
+        final_gf = adjusted_gf * PROMOTED_GF_TRUST + pl_avg_gf * (1 - PROMOTED_GF_TRUST)
+        final_ga = adjusted_ga * PROMOTED_GA_TRUST + pl_avg_ga * (1 - PROMOTED_GA_TRUST)
         priors[tid] = {
             "gf_per_game": round(final_gf, 3),
             "ga_per_game": round(final_ga, 3),

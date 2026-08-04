@@ -50,8 +50,8 @@ POSITION_BONUS_PRIOR = {1: 0.15, 2: 0.20, 3: 0.25, 4: 0.20}   # bonus per start
 
 PRIOR_SHRINKAGE_MINUTES = 450   # ~5 full games: point where current-season data starts to dominate over the prior
 PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for players still under this many mins
-POSITION_START_RATE_PRIOR = {1: 0.75, 2: 0.65, 3: 0.60, 4: 0.55}
-POSITION_MINUTES_PRIOR = {1: 0.70, 2: 0.65, 3: 0.60, 4: 0.55}
+POSITION_START_RATE_PRIOR = {1: 0.55, 2: 0.70, 3: 0.65, 4: 0.65}
+POSITION_MINUTES_PRIOR = {1: 0.70, 2: 0.65, 3: 0.60, 4: 0.60}
 PLAYER_PRIOR_PHASEOUT_GW = 12
 
 # ══════════════════════════════════════════════════════════════
@@ -147,10 +147,10 @@ class PredictionEngine:
                 "GF:", p["gf_per_game"],
                 "GA:", p["ga_per_game"]
             )
-        # Store promoted teams automatically
-        self.promoted_team_ids = set(fallback_priors.keys())
         merged = dict(fallback_priors)  # promoted teams start here
         merged.update(real_priors)      # established teams overwrite with real data
+        # Store promoted teams automatically
+        self.promoted_team_ids = set(fallback_priors.keys())
         return merged
 
 
@@ -623,9 +623,15 @@ class PredictionEngine:
             }
         # Position fallback
         pos = p.get("element_type", 3)
+        start_rate = POSITION_START_RATE_PRIOR.get(pos, 0.5)
+        avg_minutes = POSITION_MINUTES_PRIOR.get(pos, 60)
+        # Unknown GK in promoted/new team, reduce because we don't know who wins the shirt
+        if pos == 1:
+            start_rate *= 0.75
+            avg_minutes *= 0.75
         return {
-            "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
-            "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60)
+            "start_rate": start_rate,
+            "avg_minutes": avg_minutes
         }
 
 

@@ -6,7 +6,7 @@ All derived from the FPL fixtures data (319 finished matches).
 
 
 def build_team_stats(fixtures: list, teams: dict,
-                      previous_season_stats: dict | None = None) -> dict:
+                      previous_season_stats: dict | None = None, promoted_teams: set | None = None) -> dict:
     """
     Build comprehensive team stats from finished fixtures, blended with a
     previous-season prior for cold-start robustness.
@@ -22,11 +22,14 @@ def build_team_stats(fixtures: list, teams: dict,
         played large (late)  -> current-season dominates
     """
     LEAGUE_AVG_GOALS = 1.35   # last-resort fallback only if no prior available at all
-    K_MATCHES = 6             # shrinkage constant (~6 matches to mostly trust current data)
     K_LAST5 = 3               # last5 rates are noisier -> shrink faster
+    K_MATCHES = 4             # shrinkage constant (~4 matches to mostly trust current data)
+    K_MATCHES_PROMOTED = 6    # K value for promoted teams only
+    K_PROMOTED_MIN = 3
+    PROMOTED_K_DECAY = 0.5
 
     previous_season_stats = previous_season_stats or {}
-
+    promoted_teams = promoted_teams or set()
     stats = {}
     for tid in teams:
         stats[tid] = {
@@ -87,8 +90,11 @@ def build_team_stats(fixtures: list, teams: dict,
 
         current_gf = s["goals_for"] / played if played > 0 else prior_gf
         current_ga = s["goals_against"] / played if played > 0 else prior_ga
-
-        weight_current = played / (played + K_MATCHES)
+        if tid in promoted_teams:
+            k_matches = max(K_PROMOTED_MIN, K_PROMOTED_START - played * PROMOTED_K_DECAY)
+        else:
+            k_matches = K_MATCHES
+        weight_current = played / (played + k_matches)
         weight_prior = 1.0 - weight_current
 
         s["gf_per_game"] = round(weight_current * current_gf + weight_prior * prior_gf, 3)
