@@ -50,8 +50,8 @@ POSITION_BONUS_PRIOR = {1: 0.15, 2: 0.20, 3: 0.25, 4: 0.20}   # bonus per start
 
 PRIOR_SHRINKAGE_MINUTES = 450   # ~5 full games: point where current-season data starts to dominate over the prior
 PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for players still under this many mins
-POSITION_START_RATE_PRIOR = {1: 0.90, 2: 0.70, 3: 0.65, 4: 0.65}
-POSITION_MINUTES_PRIOR = {1: 0.85, 2: 0.65, 3: 0.60, 4: 0.60}
+POSITION_START_RATE_PRIOR = {1: 0.55, 2: 0.70, 3: 0.65, 4: 0.65}
+POSITION_MINUTES_PRIOR = {1: 0.70, 2: 0.65, 3: 0.60, 4: 0.60}
 PLAYER_PRIOR_PHASEOUT_GW = 12
 
 # ══════════════════════════════════════════════════════════════
@@ -621,7 +621,16 @@ class PredictionEngine:
                 "start_rate": champ.get("start_rate", 0.5),
                 "avg_minutes": champ.get("avg_minutes", 60)
             }
-        # Position fallback
+        # Second source: previous season minutes from FPL data
+        previous_minutes = int(p.get("minutes", 0))
+        previous_starts = int(p.get("starts", 0))
+        if previous_minutes > 0:
+            games = max(p.get("history_games", 46), 1)
+            return {
+                "start_rate": min(previous_starts / games, 1.0),
+                "avg_minutes": previous_minutes / games
+            }
+        # Last fallback: Position prior
         pos = p.get("element_type", 3)
         start_rate = POSITION_START_RATE_PRIOR.get(pos, 0.5)
         avg_minutes = POSITION_MINUTES_PRIOR.get(pos, 60)
@@ -658,7 +667,7 @@ class PredictionEngine:
         # Recency blend (fixes stale season-average bug: a player benched the
         # last 8 GWs no longer reads as reliable just because of an August hot streak)
         recent_games = p.get("_recent_games", 0)
-        if recent_games >= 2:
+        if recent_games >= 4:
             recent_start_rate = p.get("_recent_start_rate", season_start_rate)
             recent_avg_mins = p.get("_recent_avg_mins", season_avg_mins)
             w_recent = min(recent_games / 5.0, 1.0) * 0.70
@@ -672,12 +681,11 @@ class PredictionEngine:
                 start_rate = season_start_rate
                 avg_mins = season_avg_mins
             else:
-                played_games = max(self.current_gw - 1, 0)
                 if self.is_promoted_player(p):
-                    phaseout_gw = 12
+                    shrinkage_minutes = PRIOR_SHRINKAGE_MINUTES
                 else:
-                    phaseout_gw = 5
-                weight_current = min(played_games / phaseout_gw, 1.0)
+                    shrinkage_minutes = 270
+                weight_current = min(total_minutes / shrinkage_minutes,1.0)
                 weight_prior = 1.0 - weight_current
                 start_rate = (
                     season_start_rate * weight_current
