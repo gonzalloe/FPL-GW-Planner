@@ -52,7 +52,7 @@ PRIOR_SHRINKAGE_MINUTES = 450   # ~5 full games: point where current-season data
 PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for players still under this many mins
 POSITION_START_RATE_PRIOR = {1: 0.75, 2: 0.65, 3: 0.60, 4: 0.55}
 POSITION_MINUTES_PRIOR = {1: 0.70, 2: 0.65, 3: 0.60, 4: 0.55}
-K_START_RATE = 3
+PLAYER_PRIOR_PHASEOUT_GW = 12
 
 # ══════════════════════════════════════════════════════════════
 #  Poisson helpers
@@ -120,9 +120,11 @@ class PredictionEngine:
         self.next_gw = get_next_gameweek(self.bootstrap)
         self.dgw_teams = {}
         self.bgw_teams = set()
+        previous_priors = self._build_previous_season_priors()
         self.team_stats = build_team_stats(
-            self.fixtures, self.teams,
-            previous_season_stats=self._build_previous_season_priors()
+            self.fixtures,
+            self.teams,
+            previous_season_stats=previous_priors
         )
         self.fixture_xg_cache = {}
         self.fixture_cache_hits = 0
@@ -145,6 +147,8 @@ class PredictionEngine:
                 "GF:", p["gf_per_game"],
                 "GA:", p["ga_per_game"]
             )
+        # Store promoted teams automatically
+        self.promoted_team_ids = set(fallback_priors.keys())
         merged = dict(fallback_priors)  # promoted teams start here
         merged.update(real_priors)      # established teams overwrite with real data
         return merged
@@ -605,27 +609,19 @@ class PredictionEngine:
     # ══════════════════════════════════════════════════════════
     #  Starter Quality (DGW-aware)
     # ══════════════════════════════════════════════════════════
-    def get_player_role_prior(self, p: dict) -> dict:
-        """
-        Fallback playing-time prior.
-        Future:
-        Championship player data
-        Previous PL role data
-        Current:
-        Position-based fallback
-        """
+    def get_player_role_prior(self, p: dict):
+        team_id = p.get("team")
+        # Only promoted teams need fallback
+        if team_id not in self.promoted_team_ids:
+            return None
+        # Future: Championship player data
         champ = p.get("championship_role")
         if champ:
             return {
                 "start_rate": champ.get("start_rate", 0.5),
                 "avg_minutes": champ.get("avg_minutes", 60)
             }
-        previous = p.get("previous_pl_role")
-        if previous:
-            return {
-                "start_rate": previous.get("start_rate", 0.5),
-                "avg_minutes": previous.get("avg_minutes", 60)
-            }
+        # Position fallback
         pos = p.get("element_type", 3)
         return {
             "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
@@ -633,8 +629,7 @@ class PredictionEngine:
         }
 
 
-    def calculate_expected_minutes(self, p: dict, num_fixtures: int = 1,
-                                teammates_out: int = 0, out_minutes: int = 0) -> dict:
+    def calculate_expected_minutes(self, p: dict, num_fixtures: int = 1, teammates_out: int = 0, out_minutes: int = 0) -> dict:
         """
         Continuous expected-minutes model. This is the ONLY source of playing-time
         signal used in xPts math (_fixture_ev). Tier labels are derived from this
@@ -659,23 +654,24 @@ class PredictionEngine:
             avg_mins = w_recent * recent_avg_mins + (1 - w_recent) * season_avg_mins
         else:
             prior = self.get_player_role_prior(p)
-            # Current PL evidence
-            played_games = max(self.current_gw - 1, 0)
-            weight_current = (
-                played_games /
-                (played_games + K_START_RATE)
-            )
-            weight_prior = 1 - weight_current
-            start_rate = (
-                season_start_rate * weight_current
-                +
-                prior["start_rate"] * weight_prior
-            )
-            avg_mins = (
-                season_avg_mins * weight_current
-                +
-                prior["avg_minutes"] * weight_prior
-            )
+            if prior is None:
+                # Existing PL teams, trust current season immediately
+                start_rate = season_start_rate
+                avg_mins = season_avg_mins
+            else:
+                # Promoted teams only
+                played_games = max(self.current_gw - 1, 0)
+                # GW1 = 0%, GW12 = 100%
+                weight_current = min(played_games / PLAYER_PRIOR_PHASEOUT_GW,1.0)
+                weight_prior = 1.0 - weight_current
+                start_rate = (
+                    season_start_rate * weight_current
+                    + prior["start_rate"] * weight_prior
+                )
+                avg_mins = (
+                    season_avg_mins * weight_current
+                    + prior["avg_minutes"] * weight_prior
+                )
         mins_volatility = self._calc_minutes_volatility(p)
         availability = float(p.get("chance_of_playing_this_round") or 100) / 100.0
 
