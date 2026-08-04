@@ -50,8 +50,9 @@ POSITION_BONUS_PRIOR = {1: 0.15, 2: 0.20, 3: 0.25, 4: 0.20}   # bonus per start
 
 PRIOR_SHRINKAGE_MINUTES = 450   # ~5 full games: point where current-season data starts to dominate over the prior
 PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for players still under this many mins
-POSITION_START_RATE_PRIOR = {1: 0.75, 2: 0.65, 3: 0.55, 4: 0.55}
-K_START_RATE = 2
+POSITION_START_RATE_PRIOR = {1: 0.75, 2: 0.65, 3: 0.60, 4: 0.55}
+POSITION_MINUTES_PRIOR = {1: 0.70, 2: 0.65, 3: 0.60, 4: 0.55}
+K_START_RATE = 3
 
 # ══════════════════════════════════════════════════════════════
 #  Poisson helpers
@@ -604,6 +605,33 @@ class PredictionEngine:
     # ══════════════════════════════════════════════════════════
     #  Starter Quality (DGW-aware)
     # ══════════════════════════════════════════════════════════
+    def get_player_role_prior(self, p: dict) -> dict:
+        """
+        Fallback playing-time prior.
+        Future:
+        Championship player data
+        Previous PL role data
+        Current:
+        Position-based fallback
+        """
+        champ = p.get("championship_role")
+        if champ:
+            return {
+                "start_rate": champ.get("start_rate", 0.5),
+                "avg_minutes": champ.get("avg_minutes", 60)
+            }
+        previous = p.get("previous_pl_role")
+        if previous:
+            return {
+                "start_rate": previous.get("start_rate", 0.5),
+                "avg_minutes": previous.get("avg_minutes", 60)
+            }
+        pos = p.get("element_type", 3)
+        return {
+            "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
+            "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60)
+        }
+
 
     def calculate_expected_minutes(self, p: dict, num_fixtures: int = 1,
                                 teammates_out: int = 0, out_minutes: int = 0) -> dict:
@@ -635,7 +663,7 @@ class PredictionEngine:
             played_games = max(self.current_gw - 1, 0)
             weight_current = (
                 played_games /
-                (played_games + K_PLAYER)
+                (played_games + K_START_RATE)
             )
             weight_prior = 1 - weight_current
             start_rate = (
@@ -711,33 +739,6 @@ class PredictionEngine:
         if p_start >= 0.20 or xmins >= 8:
             return "fringe"
         return "bench_warmer"
-
-    def get_player_role_prior(self, p: dict) -> dict:
-        """
-        Fallback playing-time prior.
-        Future:
-        Championship player data
-        Previous PL role data
-        Current:
-        Position-based fallback
-        """
-        champ = p.get("championship_role")
-        if champ:
-            return {
-                "start_rate": champ.get("start_rate", 0.5),
-                "avg_minutes": champ.get("avg_minutes", 60)
-            }
-        previous = p.get("previous_pl_role")
-        if previous:
-            return {
-                "start_rate": previous.get("start_rate", 0.5),
-                "avg_minutes": previous.get("avg_minutes", 60)
-            }
-        pos = p.get("element_type", 3)
-        return {
-            "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
-            "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60)
-        }
 
 
     def _calc_minutes_volatility(self, p: dict) -> float:
