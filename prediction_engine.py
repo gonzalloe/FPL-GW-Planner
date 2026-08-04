@@ -50,7 +50,8 @@ POSITION_BONUS_PRIOR = {1: 0.15, 2: 0.20, 3: 0.25, 4: 0.20}   # bonus per start
 
 PRIOR_SHRINKAGE_MINUTES = 450   # ~5 full games: point where current-season data starts to dominate over the prior
 PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for players still under this many mins
-
+POSITION_START_RATE_PRIOR = {1: 0.75, 2: 0.65, 3: 0.55, 4: 0.55}
+K_START_RATE = 2
 
 # ══════════════════════════════════════════════════════════════
 #  Poisson helpers
@@ -617,8 +618,6 @@ class PredictionEngine:
         gws_played = max(self.current_gw - 1, 1)
         season_avg_mins = total_minutes / gws_played
         season_start_rate = min(starts / gws_played,1.0)
-        POSITION_START_RATE_PRIOR = {1: 0.75, 2: 0.65, 3: 0.55, 4: 0.55}
-        K_START_RATE = 2
 
         # Recency blend (fixes stale season-average bug: a player benched the
         # last 8 GWs no longer reads as reliable just because of an August hot streak)
