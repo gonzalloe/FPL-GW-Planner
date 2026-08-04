@@ -136,7 +136,6 @@ class PredictionEngine:
         real_priors = get_previous_season_team_stats(self.bootstrap, self.teams)
         fallback_priors = get_promoted_team_priors(self.bootstrap, self.teams, real_priors)
         #debug temp
-        print("CHAMPIONSHIP FALLBACK:", fallback_priors)
         print("\n=== FINAL TEAM PRIORS ===")
         for tid, p in {**fallback_priors, **real_priors}.items():
             print(
@@ -615,10 +614,11 @@ class PredictionEngine:
         """
         total_minutes = int(p.get("minutes", 0))
         starts = int(p.get("starts", 0))
-        gws_played = max(p.get("history_games", 38),self.current_gw - 1,1)
-
+        gws_played = max(self.current_gw - 1, 1)
         season_avg_mins = total_minutes / gws_played
         season_start_rate = min(starts / gws_played,1.0)
+        POSITION_START_RATE_PRIOR = {1: 0.75, 2: 0.65, 3: 0.55, 4: 0.55}
+        K_START_RATE = 2
 
         # Recency blend (fixes stale season-average bug: a player benched the
         # last 8 GWs no longer reads as reliable just because of an August hot streak)
@@ -631,9 +631,24 @@ class PredictionEngine:
             start_rate = min(max(start_rate, 0.0), 1.0)
             avg_mins = w_recent * recent_avg_mins + (1 - w_recent) * season_avg_mins
         else:
-            start_rate = season_start_rate
-            avg_mins = season_avg_mins
-
+            prior = self.get_player_role_prior(p)
+            # Current PL evidence
+            played_games = max(self.current_gw - 1, 0)
+            weight_current = (
+                played_games /
+                (played_games + K_PLAYER)
+            )
+            weight_prior = 1 - weight_current
+            start_rate = (
+                season_start_rate * weight_current
+                +
+                prior["start_rate"] * weight_prior
+            )
+            avg_mins = (
+                season_avg_mins * weight_current
+                +
+                prior["avg_minutes"] * weight_prior
+            )
         mins_volatility = self._calc_minutes_volatility(p)
         availability = float(p.get("chance_of_playing_this_round") or 100) / 100.0
 
@@ -697,6 +712,34 @@ class PredictionEngine:
         if p_start >= 0.20 or xmins >= 8:
             return "fringe"
         return "bench_warmer"
+
+    def get_player_role_prior(self, p: dict) -> dict:
+        """
+        Fallback playing-time prior.
+        Future:
+        Championship player data
+        Previous PL role data
+        Current:
+        Position-based fallback
+        """
+        champ = p.get("championship_role")
+        if champ:
+            return {
+                "start_rate": champ.get("start_rate", 0.5),
+                "avg_minutes": champ.get("avg_minutes", 60)
+            }
+        previous = p.get("previous_pl_role")
+        if previous:
+            return {
+                "start_rate": previous.get("start_rate", 0.5),
+                "avg_minutes": previous.get("avg_minutes", 60)
+            }
+        pos = p.get("element_type", 3)
+        return {
+            "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
+            "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60)
+        }
+
 
     def _calc_minutes_volatility(self, p: dict) -> float:
         """

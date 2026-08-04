@@ -165,21 +165,10 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
         adjusted_gf = champ_gf * gf_adjustment
         adjusted_ga = champ_ga * ga_adjustment
 
-        # --------------------------------------------------
-        # Regression toward PL average because promotion is
-        # a huge difficulty jump.
-        #
-        # 46 Championship games gives:
-        # 46/200 = 23% trust in Championship performance
-        #
-        # Current-season PL results will later replace this
-        # through build_team_stats() shrinkage.
-        # --------------------------------------------------
-        prior_weight = min(0.25, a["played"] / 200)
-        PROMOTION_GF_BASE = 1.35
-        PROMOTION_GA_BASE = 1.45
-        final_gf = (adjusted_gf * prior_weight + PROMOTION_GF_BASE * (1 - prior_weight))
-        final_ga = (adjusted_ga * prior_weight + PROMOTION_GA_BASE * (1 - prior_weight))
+        # Regression toward PL average because promotion is a huge difficulty jump.
+        PROMOTION_TRUST = 0.325
+        final_gf = adjusted_gf * PROMOTION_TRUST + pl_avg_gf * (1 - PROMOTION_TRUST)
+        final_ga = adjusted_ga * PROMOTION_TRUST + pl_avg_ga * (1 - PROMOTION_TRUST)
         priors[tid] = {
             "gf_per_game": round(final_gf, 3),
             "ga_per_game": round(final_ga, 3),
