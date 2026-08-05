@@ -183,8 +183,24 @@ class PredictionEngine:
             if mins_played == 0:
                 try:
                     rates = get_last_season_rates(pid)
+                    # debug print
+                    if p.get("web_name") in ["Haaland", "Foden", "Cherki", "Rice"]:
+                        print(
+                            "[SEASON RATE DEBUG]",
+                            p.get("web_name"),
+                            rates
+                        )
                     if rates:
                         p["previous_minutes"] = int(rates.get("minutes", 0))
+                        # debug temp
+                        if p.get("web_name") in ["Haaland", "Foden", "Cherki", "Rice"]:
+                            print(
+                                "[ATTACHED PRIOR]",
+                                p.get("web_name"),
+                                p.get("previous_minutes"),
+                                p.get("previous_starts"),
+                                p.get("previous_games")
+                            )
                         # temporary approximation because API currently does not return starts
                         if p["previous_minutes"] > 0:
                             p["previous_starts"] = round(p["previous_minutes"] / 75)
