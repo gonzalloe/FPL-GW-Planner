@@ -541,6 +541,13 @@ class PredictionEngine:
 
         # ── 1. Appearance points ──
         appearance_pts = p_plays_60 * 2.0 + (p_plays - p_plays_60) * 1.0
+        if p.get("web_name") in debug_players:
+            print(
+                "[APPEARANCE EV]",
+                p.get("web_name"),
+                "appearance=", round(appearance_pts,2),
+                "p60=", round(p_plays_60,3)
+            )
         other_ev = 0.0
 
         # ── Cold-start blend weight (shared by goals + assists) ──
@@ -744,7 +751,7 @@ class PredictionEngine:
 
         # Rotation risk: ambiguous start rate (mid-range) is the actual risk signal,
         # not "low tier" — a 5%-start benchwarmer isn't a rotation risk, they're just not playing.
-        rotation_risk = max(0.0, min(1.0 - abs(start_rate - 0.5) * 2.0, 1.0))
+        rotation_risk = max(0.0, min(1.0 - abs(p_start - 0.5) * 2.0, 1.0))
         rotation_risk = max(rotation_risk, mins_volatility * 0.5)
 
         # Injury boost applied directly to probabilities, not via tier-jump lookup
@@ -816,7 +823,7 @@ class PredictionEngine:
             return "nailed"
         # Usually starts, but not completely secure
         if p_start >= 0.70:
-            if risk < 0.65:
+            if risk < 0.70:
                 return "regular"
             return "rotation"
         # Genuine rotation player
