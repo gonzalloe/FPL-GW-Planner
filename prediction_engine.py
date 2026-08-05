@@ -183,6 +183,15 @@ class PredictionEngine:
             if mins_played == 0:
                 try:
                     rates = get_last_season_rates(pid)
+                    if rates:
+                        p["previous_minutes"] = int(rates.get("minutes", 0))
+                        # temporary approximation because API currently does not return starts
+                        if p["previous_minutes"] > 0:
+                            p["previous_starts"] = round(p["previous_minutes"] / 75)
+                            p["previous_games"] = 38
+                        else:
+                            p["previous_starts"] = 0
+                            p["previous_games"] = 38
                 except Exception:
                     rates = {}
                 if rates:
@@ -649,16 +658,18 @@ class PredictionEngine:
                 "start_rate": min(previous_starts / previous_games, 1.0),
                 "avg_minutes": previous_minutes / previous_games,
             }
-            print(
-                "[PRIOR DEBUG]",
-                p.get("web_name"),
-                "prev mins",
-                previous_minutes,
-                "prev starts",
-                previous_starts,
-                "result",
-                result
-            )
+            # debug temp
+            if p.get("web_name") in ["Haaland", "Foden", "Cherki", "Reijnders", "Osula"]:
+                print(
+                    "[PRIOR DEBUG]",
+                    p.get("web_name"),
+                    "prev mins",
+                    previous_minutes,
+                    "prev starts",
+                    previous_starts,
+                    "result",
+                    result
+                )
             return result
         # No history
         pos = p.get("element_type", 3)
@@ -666,12 +677,14 @@ class PredictionEngine:
             "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
             "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60)
         }
-        print(
-            "[PRIOR DEBUG]",
-            p.get("web_name"),
-            "NO HISTORY",
-            result
-        )
+        # debug temp
+        if p.get("web_name") in ["Haaland", "Foden", "Cherki", "Reijnders", "Osula"]:
+            print(
+                "[PRIOR DEBUG]",
+                p.get("web_name"),
+                "NO HISTORY",
+                result
+            )
         return result
 
 
