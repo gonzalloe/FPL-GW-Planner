@@ -23,9 +23,9 @@ def build_team_stats(fixtures: list, teams: dict,
     """
     LEAGUE_AVG_GOALS = 1.35   # last-resort fallback only if no prior available at all
     K_LAST5 = 3               # last5 rates are noisier -> shrink faster
-    K_MATCHES = 4             # shrinkage constant (~4 matches to mostly trust current data)
-    K_MATCHES_PROMOTED = 6    # K value for promoted teams only
-    K_PROMOTED_MIN = 3
+    K_MATCHES = 6             # shrinkage constant (~4 matches to mostly trust current data)
+    K_MATCHES_PROMOTED = 4    # K value for promoted teams only
+    K_PROMOTED_MIN = 2
     PROMOTED_K_DECAY = 0.5
 
     previous_season_stats = previous_season_stats or {}

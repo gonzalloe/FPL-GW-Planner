@@ -734,7 +734,13 @@ class PredictionEngine:
 
         p_start = min(start_rate * availability, 1.0)
         mins_ratio = min(avg_mins / 90.0, 1.0)
-        p_plays_60 = min(mins_ratio * availability * (1.0 - mins_volatility * 0.3), 1.0)
+        # Probability of playing 60+ minutes must depend on starting probability
+        # Starters: high chance of 60+
+        # Bench players: only chance comes from sub appearances
+        p_plays_60 = (p_start * mins_ratio + (1 - p_start) * 0.05)
+        p_plays_60 *= availability
+        p_plays_60 *= (1.0 - mins_volatility * 0.3)
+        p_plays_60 = min(max(p_plays_60, 0.0), 1.0)
 
         # Rotation risk: ambiguous start rate (mid-range) is the actual risk signal,
         # not "low tier" — a 5%-start benchwarmer isn't a rotation risk, they're just not playing.
@@ -750,7 +756,10 @@ class PredictionEngine:
             p_start = min(p_start + boost, 1.0)
             p_plays_60 = min(p_plays_60 + boost * 0.8, 1.0)
 
-        xmins = p_plays_60 * 90.0 + max(p_start - p_plays_60, 0.0) * 45.0
+        # Expected minutes: starter minutes + substitute minutes
+        xmins = (p_start * avg_mins + (1 - p_start) * 15)
+        xmins *= availability
+        xmins = min(xmins, 90)
 
         # DGW: expected effective matches, scaled continuously by p_start (no tier lookup)
         if num_fixtures >= 2:
