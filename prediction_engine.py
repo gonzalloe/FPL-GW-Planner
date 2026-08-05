@@ -634,39 +634,45 @@ class PredictionEngine:
         if team_id in self.promoted_team_ids:
             champ = p.get("championship_role")
             if champ:
-                return {
+                result = {
                     "start_rate": champ.get("start_rate", 0.5),
                     "avg_minutes": champ.get("avg_minutes", 60),
                 }
+                print("[PRIOR DEBUG]", p.get("web_name"), "championship", result)
+                return result
         # Previous FPL season (works for ALL players)
         previous_minutes = int(p.get("previous_minutes", 0))
         previous_starts = int(p.get("previous_starts", 0))
         previous_games = max(int(p.get("previous_games", 38)), 1)
         if previous_minutes > 0:
-            return {
+            result = {
                 "start_rate": min(previous_starts / previous_games, 1.0),
                 "avg_minutes": previous_minutes / previous_games,
             }
+            print(
+                "[PRIOR DEBUG]",
+                p.get("web_name"),
+                "prev mins",
+                previous_minutes,
+                "prev starts",
+                previous_starts,
+                "result",
+                result
+            )
+            return result
         # No history
         pos = p.get("element_type", 3)
-        return {
+        result =  {
             "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
             "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60)
         }
-        # debug temp
         print(
             "[PRIOR DEBUG]",
             p.get("web_name"),
-            "prev mins",
-            p.get("previous_minutes"),
-            "prev starts",
-            p.get("previous_starts"),
-            "prior",
-            {
-                "start_rate": prior["start_rate"],
-                "avg_minutes": prior["avg_minutes"]
-            } if prior else None
+            "NO HISTORY",
+            result
         )
+        return result
 
 
     def is_promoted_player(self, p: dict) -> bool:
