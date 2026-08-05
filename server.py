@@ -283,12 +283,6 @@ def _run_predictions(gw=None):
     }
     OUTPUT_DIR.mkdir(exist_ok=True)
     filename = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
-    # debug temp
-    for pred in predictions:
-        if pred.get("name") in ("Dowman", "Foden"):
-            print(f"  [TIER-DEBUG] {pred.get('name')} PRE-WRITE: "
-                f"p_start={pred.get('starter_quality',{}).get('p_start')} "
-                f"tier={pred.get('starter_quality',{}).get('tier')}")
     # Atomic write for current GW cache
     tmp = filename.with_suffix(".tmp")
     tmp.write_text(
@@ -1042,12 +1036,6 @@ def api_predictions():
         data["user_plan"] = user.get("plan", "premium")  # 'premium' or 'admin'
 
     data["status"] = cache_status
-    #debug temp
-    for pred in data.get("predictions", []):
-        if pred.get("name") in ("Dowman", "Foden"):
-            print(f"  [TIER-DEBUG] {pred.get('name')} API RESPONSE: "
-                f"p_start={pred.get('starter_quality',{}).get('p_start')} "
-                f"tier={pred.get('starter_quality',{}).get('tier')}")
     return jsonify(data)
 
 @app.route("/api/run")
