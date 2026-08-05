@@ -164,7 +164,7 @@ class PredictionEngine:
         Populate p['_prior_xg_per90'] / p['_prior_xa_per90'] / p['_prior_bonus_per_start']
         for every player, per the fallback hierarchy:
             current-season data (applied later, per-fixture, via shrinkage)
-            -> previous PL season data (fetched here, only for players with 0 mins)
+            -> previous PL season data (fetched here once per player)
             -> position-average fallback (never zero for attackers)
         Called once per predict_all() run - not per fixture/per prediction -
         so no API calls happen inside the hot prediction loop.
@@ -176,13 +176,17 @@ class PredictionEngine:
             prior_xg = POSITION_XG_PRIOR.get(pos, 0.15)
             prior_xa = POSITION_XA_PRIOR.get(pos, 0.10)
             prior_bonus = POSITION_BONUS_PRIOR.get(pos, 0.20)
-            # Only hit the network for players with zero current-season minutes.
             # Once a player has any minutes, shrinkage already down-weights the
             # prior proportionally, so a network fetch is no longer needed -
             # this avoids one API call per player on every prediction run.
-            if mins_played == 0:
+            if not p.get("_prior_loaded"):
                 try:
+                    if p.get("web_name") in ["Haaland", "Foden", "Cherki", "Rice"]:
+                        print("[PRIOR FETCH]", p.get("web_name"), "pid=", pid)
                     rates = get_last_season_rates(pid)
+                    p["previous_minutes"] = 0
+                    p["previous_starts"] = 0
+                    p["previous_games"] = 0
                     if rates:
                         p["previous_minutes"] = int(rates.get("minutes", 0))
                         # temporary approximation because API currently does not return starts
@@ -201,12 +205,14 @@ class PredictionEngine:
                                 p.get("previous_starts"),
                                 p.get("previous_games")
                             )
-                except Exception:
+                except Exception as e:
                     rates = {}
-                if rates:
-                    prior_xg = rates.get("xg_per90") or prior_xg
-                    prior_xa = rates.get("xa_per90") or prior_xa
-                    prior_bonus = rates.get("bonus_per_start") or prior_bonus
+                    print("prior fetch error", pid, e)
+                p["_prior_loaded"] = True
+            if rates:
+                prior_xg = rates.get("xg_per90") or prior_xg
+                prior_xa = rates.get("xa_per90") or prior_xa
+                prior_bonus = rates.get("bonus_per_start") or prior_bonus
             p["_prior_xg_per90"] = prior_xg
             p["_prior_xa_per90"] = prior_xa
             p["_prior_bonus_per_start"] = prior_bonus
