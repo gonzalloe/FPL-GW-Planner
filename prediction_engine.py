@@ -653,6 +653,20 @@ class PredictionEngine:
             "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
             "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60)
         }
+        # debug temp
+        print(
+            "[PRIOR DEBUG]",
+            p.get("web_name"),
+            "prev mins",
+            p.get("previous_minutes"),
+            "prev starts",
+            p.get("previous_starts"),
+            "prior",
+            {
+                "start_rate": prior["start_rate"],
+                "avg_minutes": prior["avg_minutes"]
+            } if prior else None
+        )
 
 
     def is_promoted_player(self, p: dict) -> bool:
