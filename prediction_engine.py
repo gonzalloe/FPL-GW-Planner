@@ -648,7 +648,11 @@ class PredictionEngine:
                 "avg_minutes": previous_minutes / previous_games,
             }
         # No history
-        return None
+        pos = p.get("element_type", 3)
+        return {
+            "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
+            "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60)
+        }
 
 
     def is_promoted_player(self, p: dict) -> bool:
@@ -694,8 +698,8 @@ class PredictionEngine:
                     phaseout_gw = PROMOTED_ROLE_PHASEOUT_GW
                 else:
                     phaseout_gw = ESTABLISHED_ROLE_PHASEOUT_GW
-                # current_gw starts from 1
-                weight_current = min(self.current_gw / phaseout_gw,1.0)
+                # current_gw starts from 0
+                weight_current = min((self.current_gw - 1) / phaseout_gw,1.0)
                 weight_prior = 1.0 - weight_current
                 start_rate = (season_start_rate * weight_current + prior["start_rate"] * weight_prior)
                 avg_mins = (season_avg_mins * weight_current + prior["avg_minutes"] * weight_prior)
@@ -988,18 +992,19 @@ class PredictionEngine:
     def _calc_minutes_consistency(self, p: dict) -> float:
         total_minutes = int(p.get("minutes", 0))
         gw_played = max(self.current_gw - 1, 1)
-        max_possible = gw_played * 90
-        if max_possible == 0:
+        # Early season: no current-season evidence yet. Previous role model should handle trust
+        if gw_played <= 5:
             return 0.0
+        max_possible = gw_played * 90
         ratio = total_minutes / max_possible
         if ratio > 0.85:
-            return 0.15
+            return 0.10
         elif ratio > 0.65:
             return 0.05
         elif ratio > 0.40:
-            return -0.08
+            return -0.05
         else:
-            return -0.25
+            return -0.15
 
     def _calc_team_strength(self, p: dict, is_home: bool) -> float:
         if is_home:
