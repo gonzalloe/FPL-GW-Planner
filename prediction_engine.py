@@ -181,8 +181,6 @@ class PredictionEngine:
             # this avoids one API call per player on every prediction run.
             if not p.get("_prior_loaded"):
                 try:
-                    if p.get("web_name") in ["Haaland", "Foden", "Cherki", "Rice"]:
-                        print("[PRIOR FETCH]", p.get("web_name"), "pid=", pid)
                     rates = get_last_season_rates(pid)
                     p["previous_minutes"] = 0
                     p["previous_starts"] = 0
@@ -191,23 +189,13 @@ class PredictionEngine:
                         p["previous_minutes"] = int(rates.get("minutes", 0))
                         # temporary approximation because API currently does not return starts
                         if p["previous_minutes"] > 0:
-                            p["previous_starts"] = round(p["previous_minutes"] / 75)
+                            p["previous_starts"] = round(p["previous_minutes"]  / 90)
                             p["previous_games"] = 38
                         else:
                             p["previous_starts"] = 0
                             p["previous_games"] = 38
-                        # debug temp
-                        if p.get("web_name") in ["Haaland", "Foden", "Cherki", "Rice"]:
-                            print(
-                                "[ATTACHED PRIOR]",
-                                p.get("web_name"),
-                                p.get("previous_minutes"),
-                                p.get("previous_starts"),
-                                p.get("previous_games")
-                            )
                 except Exception as e:
                     rates = {}
-                    print("prior fetch error", pid, e)
                 p["_prior_loaded"] = True
             if rates:
                 prior_xg = rates.get("xg_per90") or prior_xg
@@ -639,6 +627,7 @@ class PredictionEngine:
 
         return {"appearance": appearance_pts, "other": max(other_ev, 0.0)}
 
+
     # ══════════════════════════════════════════════════════════
     #  Starter Quality (DGW-aware)
     # ══════════════════════════════════════════════════════════
@@ -652,45 +641,23 @@ class PredictionEngine:
                     "start_rate": champ.get("start_rate", 0.5),
                     "avg_minutes": champ.get("avg_minutes", 60),
                 }
-                print("[PRIOR DEBUG]", p.get("web_name"), "championship", result)
                 return result
         # Previous FPL season (works for ALL players)
         previous_minutes = int(p.get("previous_minutes", 0))
         previous_starts = int(p.get("previous_starts", 0))
         previous_games = max(int(p.get("previous_games", 38)), 1)
         if previous_minutes > 0:
-            result = {
+            return {
                 "start_rate": min(previous_starts / previous_games, 1.0),
                 "avg_minutes": previous_minutes / previous_games,
             }
-            # debug temp
-            if p.get("web_name") in ["Haaland", "Foden", "Cherki", "Reijnders", "Osula"]:
-                print(
-                    "[PRIOR DEBUG]",
-                    p.get("web_name"),
-                    "prev mins",
-                    previous_minutes,
-                    "prev starts",
-                    previous_starts,
-                    "result",
-                    result
-                )
-            return result
         # No history
         pos = p.get("element_type", 3)
         result =  {
             "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
             "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60)
         }
-        # debug temp
-        if p.get("web_name") in ["Haaland", "Foden", "Cherki", "Reijnders", "Osula"]:
-            print(
-                "[PRIOR DEBUG]",
-                p.get("web_name"),
-                "NO HISTORY",
-                result
-            )
-        return result
+
 
 
     def is_promoted_player(self, p: dict) -> bool:
