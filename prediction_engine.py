@@ -698,8 +698,8 @@ class PredictionEngine:
                     phaseout_gw = PROMOTED_ROLE_PHASEOUT_GW
                 else:
                     phaseout_gw = ESTABLISHED_ROLE_PHASEOUT_GW
-                # current_gw starts from 0
-                weight_current = min((self.current_gw - 1) / phaseout_gw,1.0)
+                # current_gw starts from 1
+                weight_current = min(self.current_gw / phaseout_gw,1.0)
                 weight_prior = 1.0 - weight_current
                 start_rate = (season_start_rate * weight_current + prior["start_rate"] * weight_prior)
                 avg_mins = (season_avg_mins * weight_current + prior["avg_minutes"] * weight_prior)
