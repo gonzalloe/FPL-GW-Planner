@@ -687,9 +687,14 @@ class PredictionEngine:
         else:
             prior = self.get_player_role_prior(p)
             if prior is None:
-                # Existing PL teams, trust current season immediately
-                start_rate = season_start_rate
-                avg_mins = season_avg_mins
+                # Established teams still need early-season uncertainty protection
+                played_games = max(self.current_gw - 1, 0)
+                EARLY_SEASON_PHASEOUT = 6
+                current_weight = min(played_games / EARLY_SEASON_PHASEOUT,1.0)
+                default_start_rate = POSITION_START_RATE_PRIOR.get(p.get("element_type", 3),0.65)
+                default_minutes = POSITION_MINUTES_PRIOR.get(p.get("element_type", 3),60)
+                start_rate = (season_start_rate * current_weight+ default_start_rate * (1-current_weight))
+                avg_mins = (season_avg_mins * current_weight+ default_minutes * (1-current_weight))
             else:
                 if self.is_promoted_player(p):
                     shrinkage_minutes = PRIOR_SHRINKAGE_MINUTES
@@ -697,14 +702,8 @@ class PredictionEngine:
                     shrinkage_minutes = 270
                 weight_current = min(total_minutes / shrinkage_minutes,1.0)
                 weight_prior = 1.0 - weight_current
-                start_rate = (
-                    season_start_rate * weight_current
-                    + prior["start_rate"] * weight_prior
-                )
-                avg_mins = (
-                    season_avg_mins * weight_current
-                    + prior["avg_minutes"] * weight_prior
-                )
+                start_rate = (season_start_rate * weight_current+ prior["start_rate"] * weight_prior)
+                avg_mins = (season_avg_mins * weight_current+ prior["avg_minutes"] * weight_prior)
         mins_volatility = self._calc_minutes_volatility(p)
         availability = float(p.get("chance_of_playing_this_round") or 100) / 100.0
 
