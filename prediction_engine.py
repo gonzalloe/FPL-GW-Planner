@@ -47,8 +47,13 @@ from team_analysis import (
 POSITION_XG_PRIOR = {1: 0.0, 2: 0.05, 3: 0.20, 4: 0.35}      # GKP, DEF, MID, FWD
 POSITION_XA_PRIOR = {1: 0.0, 2: 0.05, 3: 0.15, 4: 0.10}
 POSITION_BONUS_PRIOR = {1: 0.15, 2: 0.20, 3: 0.25, 4: 0.20}   # bonus per start
+# Minutes / role
+PROMOTED_PLAYER_SHRINKAGE = 360
+ESTABLISHED_PLAYER_SHRINKAGE = 540
+# Attacking ability (xG/xA/bonus)
+PROMOTED_ATTACK_SHRINKAGE = 450
+ESTABLISHED_ATTACK_SHRINKAGE = 720
 
-PRIOR_SHRINKAGE_MINUTES = 450   # ~5 full games: point where current-season data starts to dominate over the prior
 PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for players still under this many mins
 POSITION_START_RATE_PRIOR = {1: 0.55, 2: 0.70, 3: 0.65, 4: 0.65}
 POSITION_MINUTES_PRIOR = {1: 0.70, 2: 0.65, 3: 0.60, 4: 0.60}
@@ -515,7 +520,11 @@ class PredictionEngine:
         other_ev = 0.0
 
         # ── Cold-start blend weight (shared by goals + assists) ──
-        w_current = mins_played / (mins_played + PRIOR_SHRINKAGE_MINUTES)
+        if self.is_promoted_player(p):
+            shrinkage = PROMOTED_ATTACK_SHRINKAGE
+        else:
+            shrinkage = ESTABLISHED_ATTACK_SHRINKAGE
+        w_current = mins_played / (mins_played + shrinkage)
 
         # ── 2. Goals (Poisson) ──
         xg_season = float(p.get("expected_goals", 0))
@@ -621,37 +630,25 @@ class PredictionEngine:
     # ══════════════════════════════════════════════════════════
     def get_player_role_prior(self, p: dict):
         team_id = p.get("team")
-        # Only promoted teams need fallback
-        if team_id not in self.promoted_team_ids:
-            return None
-        # Future: Championship player data
-        champ = p.get("championship_role")
-        if champ:
-            return {
-                "start_rate": champ.get("start_rate", 0.5),
-                "avg_minutes": champ.get("avg_minutes", 60)
-            }
-        # Second source: previous season minutes from FPL data
-        previous_minutes = int(p.get("minutes", 0))
-        previous_starts = int(p.get("starts", 0))
+        # Promoted team: Championship role if available
+        if team_id in self.promoted_team_ids:
+            champ = p.get("championship_role")
+            if champ:
+                return {
+                    "start_rate": champ.get("start_rate", 0.5),
+                    "avg_minutes": champ.get("avg_minutes", 60),
+                }
+        # Previous FPL season (works for ALL players)
+        previous_minutes = int(p.get("previous_minutes", 0))
+        previous_starts = int(p.get("previous_starts", 0))
+        previous_games = max(int(p.get("previous_games", 38)), 1)
         if previous_minutes > 0:
-            games = max(p.get("history_games", 46), 1)
             return {
-                "start_rate": min(previous_starts / games, 1.0),
-                "avg_minutes": previous_minutes / games
+                "start_rate": min(previous_starts / previous_games, 1.0),
+                "avg_minutes": previous_minutes / previous_games,
             }
-        # Last fallback: Position prior
-        pos = p.get("element_type", 3)
-        start_rate = POSITION_START_RATE_PRIOR.get(pos, 0.5)
-        avg_minutes = POSITION_MINUTES_PRIOR.get(pos, 60)
-        # Unknown GK in promoted/new team, reduce because we don't know who wins the shirt
-        if pos == 1:
-            start_rate *= 0.75
-            avg_minutes *= 0.75
-        return {
-            "start_rate": start_rate,
-            "avg_minutes": avg_minutes
-        }
+        # No history
+        return None
 
 
     def is_promoted_player(self, p: dict) -> bool:
@@ -686,24 +683,27 @@ class PredictionEngine:
             avg_mins = w_recent * recent_avg_mins + (1 - w_recent) * season_avg_mins
         else:
             prior = self.get_player_role_prior(p)
+            # Brand new player
             if prior is None:
-                # Established teams still need early-season uncertainty protection
-                played_games = max(self.current_gw - 1, 0)
-                EARLY_SEASON_PHASEOUT = 6
-                current_weight = min(played_games / EARLY_SEASON_PHASEOUT,1.0)
-                default_start_rate = POSITION_START_RATE_PRIOR.get(p.get("element_type", 3),0.65)
-                default_minutes = POSITION_MINUTES_PRIOR.get(p.get("element_type", 3),60)
-                start_rate = (season_start_rate * current_weight+ default_start_rate * (1-current_weight))
-                avg_mins = (season_avg_mins * current_weight+ default_minutes * (1-current_weight))
+                start_rate = season_start_rate
+                avg_mins = season_avg_mins
             else:
+                # Promoted players trust current season more slowly
                 if self.is_promoted_player(p):
-                    shrinkage_minutes = PRIOR_SHRINKAGE_MINUTES
+                    shrinkage_minutes = PROMOTED_PLAYER_SHRINKAGE
+                # Established PL players
                 else:
-                    shrinkage_minutes = 270
-                weight_current = min(total_minutes / shrinkage_minutes,1.0)
+                    shrinkage_minutes = ESTABLISHED_PLAYER_SHRINKAGE
+                weight_current = min(total_minutes / shrinkage_minutes, 1.0)
                 weight_prior = 1.0 - weight_current
-                start_rate = (season_start_rate * weight_current+ prior["start_rate"] * weight_prior)
-                avg_mins = (season_avg_mins * weight_current+ prior["avg_minutes"] * weight_prior)
+                start_rate = (
+                    season_start_rate * weight_current
+                    + prior["start_rate"] * weight_prior
+                )
+                avg_mins = (
+                    season_avg_mins * weight_current
+                    + prior["avg_minutes"] * weight_prior
+                )
         mins_volatility = self._calc_minutes_volatility(p)
         availability = float(p.get("chance_of_playing_this_round") or 100) / 100.0
 
@@ -897,7 +897,11 @@ class PredictionEngine:
         current_bonus_rate = bonus_season / starts
 
         prior_bonus_rate = p.get("_prior_bonus_per_start", POSITION_BONUS_PRIOR.get(pos, 0.20))
-        w_current = mins_played / (mins_played + PRIOR_SHRINKAGE_MINUTES)
+        if self.is_promoted_player(p):
+            shrinkage = PROMOTED_ATTACK_SHRINKAGE
+        else:
+            shrinkage = ESTABLISHED_ATTACK_SHRINKAGE
+        w_current = mins_played / (mins_played + shrinkage)
         historical_rate = w_current * current_bonus_rate + (1 - w_current) * prior_bonus_rate
 
         gi_boost = (eff_xg * 12.0 + eff_xa * 9.0) / 30.0
