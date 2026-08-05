@@ -47,9 +47,9 @@ from team_analysis import (
 POSITION_XG_PRIOR = {1: 0.0, 2: 0.05, 3: 0.20, 4: 0.35}      # GKP, DEF, MID, FWD
 POSITION_XA_PRIOR = {1: 0.0, 2: 0.05, 3: 0.15, 4: 0.10}
 POSITION_BONUS_PRIOR = {1: 0.15, 2: 0.20, 3: 0.25, 4: 0.20}   # bonus per start
-# Minutes / role
-PROMOTED_PLAYER_SHRINKAGE = 360
-ESTABLISHED_PLAYER_SHRINKAGE = 540
+# Role
+PROMOTED_ROLE_PHASEOUT_GW = 6
+ESTABLISHED_ROLE_PHASEOUT_GW = 10
 # Attacking ability (xG/xA/bonus)
 PROMOTED_ATTACK_SHRINKAGE = 450
 ESTABLISHED_ATTACK_SHRINKAGE = 720
@@ -669,12 +669,13 @@ class PredictionEngine:
         starts = int(p.get("starts", 0))
         gws_played = max(self.current_gw - 1, 1)
         season_avg_mins = total_minutes / gws_played
-        season_start_rate = min(starts / gws_played,1.0)
+        season_start_rate = starts / max(total_minutes / 90.0, 1.0)
+        season_start_rate = min(season_start_rate, 1.0)
 
         # Recency blend (fixes stale season-average bug: a player benched the
         # last 8 GWs no longer reads as reliable just because of an August hot streak)
         recent_games = p.get("_recent_games", 0)
-        if recent_games >= 4:
+        if recent_games >= 4 and total_minutes >= 270:
             recent_start_rate = p.get("_recent_start_rate", season_start_rate)
             recent_avg_mins = p.get("_recent_avg_mins", season_avg_mins)
             w_recent = min(recent_games / 5.0, 1.0) * 0.70
@@ -683,27 +684,21 @@ class PredictionEngine:
             avg_mins = w_recent * recent_avg_mins + (1 - w_recent) * season_avg_mins
         else:
             prior = self.get_player_role_prior(p)
-            # Brand new player
+            # No previous role data: New signing / academy player
             if prior is None:
                 start_rate = season_start_rate
                 avg_mins = season_avg_mins
             else:
-                # Promoted players trust current season more slowly
+                # GW-based trust progression. Same timeline for all players of same category
                 if self.is_promoted_player(p):
-                    shrinkage_minutes = PROMOTED_PLAYER_SHRINKAGE
-                # Established PL players
+                    phaseout_gw = PROMOTED_ROLE_PHASEOUT_GW
                 else:
-                    shrinkage_minutes = ESTABLISHED_PLAYER_SHRINKAGE
-                weight_current = min(total_minutes / shrinkage_minutes, 1.0)
+                    phaseout_gw = ESTABLISHED_ROLE_PHASEOUT_GW
+                # current_gw starts from 1
+                weight_current = min(self.current_gw / phaseout_gw,1.0)
                 weight_prior = 1.0 - weight_current
-                start_rate = (
-                    season_start_rate * weight_current
-                    + prior["start_rate"] * weight_prior
-                )
-                avg_mins = (
-                    season_avg_mins * weight_current
-                    + prior["avg_minutes"] * weight_prior
-                )
+                start_rate = (season_start_rate * weight_current + prior["start_rate"] * weight_prior)
+                avg_mins = (season_avg_mins * weight_current + prior["avg_minutes"] * weight_prior)
         mins_volatility = self._calc_minutes_volatility(p)
         availability = float(p.get("chance_of_playing_this_round") or 100) / 100.0
 
