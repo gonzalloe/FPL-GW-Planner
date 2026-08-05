@@ -241,16 +241,6 @@ class PredictionEngine:
 
         # ── Starter quality (DGW-aware, injury-aware) ──
         profile = self.calculate_expected_minutes(p, num_fixtures, teammates_out, out_minutes)
-        # debug temp
-        if p.get("web_name") in ("Haaland", "Cherki", "Savinho", "Calafiori", "White", "Šeško"):
-            print(
-                "[PROFILE]",
-                p["web_name"],
-                "tier=", self._derive_tier_label(profile),
-                "p_start=", round(profile["p_start"], 3),
-                "xmins=", round(profile["xmins"], 1),
-                "p60=", round(profile["p_plays_60"], 3),
-            )
         p["starter_quality"] = {**profile, "tier": self._derive_tier_label(profile)}
 
         # ── Per-fixture xPts ──
@@ -527,6 +517,28 @@ class PredictionEngine:
             p_plays_60 = min(p_plays_60, 1.0)
         mins_fraction = xmins / 90.0
 
+        # debuug temp
+        debug_players = {
+            "Haaland",
+            "Gabriel",
+            "Calafiori",
+            "Cherki",
+            "Savinho",
+            "Osula",
+            "Phillips",
+            "Ajayi",
+            "Davis",
+            "Diop"
+        }
+        if p.get("web_name") in debug_players:
+            print(
+                "[PLAYTIME INPUT]",
+                p.get("web_name"),
+                "xmins=", xmins,
+                "p60=", p_plays_60,
+                "pplays=", p_plays
+            )
+
         # ── 1. Appearance points ──
         appearance_pts = p_plays_60 * 2.0 + (p_plays - p_plays_60) * 1.0
         other_ev = 0.0
@@ -634,18 +646,6 @@ class PredictionEngine:
             dc_fixture_mod = 1.0 + (fdr - 3) * 0.06
             expected_dc = base_dc_rate * mins_fraction * dc_fixture_mod
             other_ev += (expected_dc / 3.0) * 1.0 * 0.35
-
-        # debug temp
-        if p.get("web_name") in ("Haaland", "Cherki", "Savinho", "Calafiori", "White", "Šeško"):
-            print(
-                "[EV]",
-                p["web_name"],
-                f"appearance={appearance_pts:.2f}",
-                f"other={other_ev:.2f}",
-                f"xmins={xmins:.1f}",
-                f"xg={effective_xg:.3f}",
-                f"xa={effective_xa:.3f}",
-            )
         return {"appearance": appearance_pts, "other": max(other_ev, 0.0)}
 
 
@@ -769,6 +769,28 @@ class PredictionEngine:
             dgw_both_prob = None
             dgw_effective = 1.0
 
+        # debug temp
+        debug_players = {
+            "Haaland",
+            "Gabriel",
+            "Calafiori",
+            "Cherki",
+            "Savinho",
+            "Osula",
+            "Phillips",
+            "Ajayi",
+            "Davis",
+            "Diop"
+        }
+        if p.get("web_name") in debug_players:
+            print(
+                "[MINUTES CHECK]",
+                p.get("web_name"),
+                "p_start=", round(p_start,3),
+                "p60=", round(p_plays_60,3),
+                "xmins=", round(xmins,1)
+            )
+
         return {
             "p_start": round(p_start, 3),
             "p_plays_60": round(p_plays_60, 3),
@@ -785,16 +807,6 @@ class PredictionEngine:
         p_start = profile["p_start"]
         risk = profile["rotation_risk"]
         xmins = profile["xmins"]
-
-        # debug temp
-        if profile.get("name") in ("Haaland", "Cherki", "Savinho", "Calafiori", "White", "Šeško"):
-            print(
-                "[PROFILE]",
-                profile.get("name"),
-                "p_start=", round(p_start, 3),
-                "xmins=", round(xmins, 1),
-                "risk=", round(risk, 3),
-            )
 
         # First-choice starter
         if p_start >= 0.85 and risk < 0.35:
@@ -1206,18 +1218,18 @@ class PredictionEngine:
                          starter: dict, availability: dict,
                          teammates_out: int = 0) -> float:
         score = 0.50
-        tier = starter["tier"]
-        tier_bonus = {"nailed": 0.25, "regular": 0.15, "rotation": 0.0,
-                      "fringe": -0.15, "bench_warmer": -0.30}
-        score += tier_bonus.get(tier, 0)
+        # Use continuous minutes probability, not display tier
+        p_start = starter.get("p_start", 0.5)
+        p60 = starter.get("p_plays_60", 0.5)
+        score += (p_start - 0.5) * 0.30
+        score += (p60 - 0.5) * 0.20
 
-        starts = int(p.get("starts", 0))
-        if starts > 20:
-            score += 0.10
-        elif starts > 10:
+        # Historical sample size confidence only
+        starts = int(p.get("starts",0))
+        if starts < 3:
+            score -= 0.10
+        elif starts > 20:
             score += 0.05
-        elif starts < 3:
-            score -= 0.15
 
         # Minutes volatility reduces confidence
         vol = starter.get("mins_volatility", 0.5)
