@@ -756,20 +756,14 @@ class PredictionEngine:
             p_start = min(p_start + boost, 1.0)
             p_plays_60 = min(p_plays_60 + boost * 0.8, 1.0)
 
-        # Expected minutes: starter minutes + substitute minutes
-        xmins = (p_start * avg_mins + (1 - p_start) * 15)
+        # Expected minutes: starters use expected start minutes
+        # non-starters only get small sub appearance expectation
+        starter_minutes = min(avg_mins, 90)
+        xmins = (p_start * starter_minutes + (1 - p_start) * (p_plays_60 * 60 + (1 - p_plays_60) * 15))
         xmins *= availability
         xmins = min(xmins, 90)
 
-        # DGW: expected effective matches, scaled continuously by p_start (no tier lookup)
-        if num_fixtures >= 2:
-            dgw_both_prob = p_start * (0.9 - rotation_risk * 0.5)
-            dgw_effective = 1.0 + dgw_both_prob
-        else:
-            dgw_both_prob = None
-            dgw_effective = 1.0
-
-        # debug temp
+        # DEBUG xmins calculation
         debug_players = {
             "Haaland",
             "Gabriel",
@@ -784,13 +778,22 @@ class PredictionEngine:
         }
         if p.get("web_name") in debug_players:
             print(
-                "[MINUTES CHECK]",
+                "[XMIN CALC]",
                 p.get("web_name"),
+                "start_rate=", round(start_rate,3),
+                "avg_mins=", round(avg_mins,1),
                 "p_start=", round(p_start,3),
-                "p60=", round(p_plays_60,3),
+                "availability=", round(availability,2),
                 "xmins=", round(xmins,1)
             )
 
+        # DGW: expected effective matches, scaled continuously by p_start (no tier lookup)
+        if num_fixtures >= 2:
+            dgw_both_prob = p_start * (0.9 - rotation_risk * 0.5)
+            dgw_effective = 1.0 + dgw_both_prob
+        else:
+            dgw_both_prob = None
+            dgw_effective = 1.0
         return {
             "p_start": round(p_start, 3),
             "p_plays_60": round(p_plays_60, 3),
