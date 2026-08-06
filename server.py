@@ -670,7 +670,9 @@ def build_fpl_context():
         return context
 
     except Exception as e:
-        return f"FPL data temporarily unavailable: {str(e)}"
+        import traceback
+        traceback.print_exc()
+        return f"FPL data temporarily unavailable: {e}"
 
 def ask_dify(user_message, conversation_id=None):
     if not DIFY_API_KEY:
