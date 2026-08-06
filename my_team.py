@@ -44,8 +44,8 @@ def fetch_my_team(team_id: int) -> dict:
             "gameweek_rank": entry.get("summary_event_rank", 0),
             "current_event": entry.get("current_event", 0),
             "total_transfers": entry.get("last_deadline_total_transfers", 0),
-            "bank": entry.get("last_deadline_bank", 0) / 10,  # Convert to millions
-            "team_value": entry.get("last_deadline_value", 0) / 10,
+            "bank": (entry.get("last_deadline_bank") or 0) / 10,
+            "team_value": (entry.get("last_deadline_value") or 0) / 10,
             "started_event": entry.get("started_event", 1),
             "favourite_team": entry.get("favourite_team"),
         }
@@ -112,8 +112,8 @@ def fetch_my_team(team_id: int) -> dict:
                 "total_points": eh.get("total_points", 0),
                 "rank": eh.get("rank", 0),
                 "overall_rank": eh.get("overall_rank", 0),
-                "bank": eh.get("bank", 0) / 10,
-                "value": eh.get("value", 0) / 10,
+                "bank": (eh.get("bank") or 0) / 10,
+                "value": (eh.get("value") or 0) / 10,
                 "event_transfers": eh.get("event_transfers", 0),
                 "event_transfers_cost": eh.get("event_transfers_cost", 0),
                 "points_on_bench": eh.get("points_on_bench", 0),
