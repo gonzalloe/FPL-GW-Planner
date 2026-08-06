@@ -216,14 +216,15 @@ class SquadOptimizer:
         }
         print("\n=== WATCH PLAYERS ===")
         for p in players:
-            if p.get("web_name") in watch:
+            name = p.get("name", p.get("web_name", "UNKNOWN"))
+            if name in watch:
                 print(
-                    f"{p['web_name']:12}"
+                    f"{name:12}"
                     f" selected={p in selected}"
-                    f" xPts={p['predicted_points']:.2f}"
-                    f" price={p['price']:.1f}"
+                    f" xPts={p.get('predicted_points',0):.2f}"
+                    f" price={p.get('price',0):.1f}"
                     f" conf={p.get('confidence',0):.2f}"
-                    f" tier={p.get("starter_quality", {}).get("tier", "")}"
+                    f" tier={p.get('starter_quality',{}).get('tier','')}"
                 )
         return selected
 
