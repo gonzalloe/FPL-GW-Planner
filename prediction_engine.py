@@ -524,7 +524,7 @@ class PredictionEngine:
             "Calafiori",
             "Cherki",
             "Savinho",
-            "Osula",
+            "Dowman",
             "Phillips",
             "Ajayi",
             "Davis",
@@ -653,6 +653,20 @@ class PredictionEngine:
             dc_fixture_mod = 1.0 + (fdr - 3) * 0.06
             expected_dc = base_dc_rate * mins_fraction * dc_fixture_mod
             other_ev += (expected_dc / 3.0) * 1.0 * 0.35
+
+        # debug temp
+        if p.get("web_name") in debug_players:
+            print(
+                "[EV BREAKDOWN]",
+                p.get("web_name"),
+                "appearance=", round(appearance_pts,2),
+                "other=", round(other_ev,2),
+                "total=", round(appearance_pts + other_ev,2),
+                "xG=", round(effective_xg,3),
+                "xA=", round(effective_xa,3),
+                "goalEV=", round(poisson_ev_goals(effective_xg, goal_pts),2)
+            )
+        
         return {"appearance": appearance_pts, "other": max(other_ev, 0.0)}
 
 
