@@ -453,10 +453,6 @@ _PREDICTIONS_LOCK = threading.Lock()
 def _cached_predictions():
     # debug temp
     print("[CACHE DEBUG] Local files =", [f.name for f in OUTPUT_DIR.glob("*")])
-    print("[CACHE DEBUG] Prediction running =",_prediction_status["running"])
-    print("[CACHE DEBUG] Last started =",_prediction_status["started_at"])
-    print("[CACHE DEBUG] Last finished =",_prediction_status["finished_at"])
-
     """Load newest GW prediction cache. Falls back to latest_predictions.json if refresh cache is unavailable."""
     files = list(OUTPUT_DIR.glob("*_predictions.json"))
     def gw_number(path):
@@ -592,7 +588,7 @@ def before_request():
 def build_fpl_context():
     """Build rich live FPL context to send to Dify"""
     try:
-        _, predictions = _cached_predictions()
+        _, predictions, _ = _cached_predictions()
         if not predictions:
             return "FPL data is currently loading, please try again shortly."
 
@@ -671,6 +667,7 @@ def build_fpl_context():
 
     except Exception as e:
         import traceback
+        print("=== AI CHAT EXCEPTION ===")
         traceback.print_exc()
         return f"FPL data temporarily unavailable: {e}"
 

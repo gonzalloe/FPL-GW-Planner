@@ -205,28 +205,7 @@ class SquadOptimizer:
             return []
 
         # debug temp
-        selected = [players[i] for i in range(n) if x[i].value() == 1]
-        watch = {
-            "Dowman",
-            "B.Fernandes",
-            "Saka",
-            "Cherki",
-            "Foden",
-            "Semenyo",
-        }
-        print("\n=== WATCH PLAYERS ===")
-        for p in players:
-            name = p.get("name", p.get("web_name", "UNKNOWN"))
-            if name in watch:
-                print(
-                    f"{name:12}"
-                    f" selected={p in selected}"
-                    f" xPts={p.get('predicted_points',0):.2f}"
-                    f" price={p.get('price',0):.1f}"
-                    f" conf={p.get('confidence',0):.2f}"
-                    f" tier={p.get('starter_quality',{}).get('tier','')}"
-                )
-        return selected
+        return [players[i] for i in range(n) if x[i].value() == 1]
 
     def _select_best_xi(self, squad: list, chip: str | None = None) -> tuple[list, list]:
         """
