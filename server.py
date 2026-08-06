@@ -289,6 +289,13 @@ def _run_predictions(gw=None):
         json.dumps(output, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8"
     )
+    try:
+        from app_storage import set_setting
+        set_setting("latest_predictions", output)
+        print("[CACHE] Predictions saved to Supabase")
+    except Exception as e:
+        print("[CACHE] Supabase save failed:", e)
+
     os.replace(tmp, filename)
     # Update stale fallback cache only after successful prediction
     latest = OUTPUT_DIR / "latest_predictions.json"
@@ -468,6 +475,15 @@ def _cached_predictions():
         # fallback cache
         p = OUTPUT_DIR / "latest_predictions.json"
         if not p.exists():
+            # fallback Supabase cache
+            try:
+                from app_storage import get_setting
+                data = get_setting("latest_predictions", None)
+                if data:
+                    print("[CACHE] Loaded predictions from Supabase")
+                    return (data.get("predictions", []), data,  "supabase")
+            except Exception as e:
+                print("[CACHE] Supabase fallback failed:", e)
             return [], {}, "preparing"
         status = "stale"
 
@@ -506,8 +522,6 @@ def _cached_predictions():
 
     print("[CACHE LOADED]",p.name,len(preds),"players","status:",status)
     return preds, data, status
-
-
 # ── Middleware ──
 
 # Endpoints safe to cache privately in the browser for a short time.
@@ -1145,7 +1159,7 @@ def api_my_team():
         if team_data.get("error"):
             print(f"  [MY-TEAM] fetch failed for id={team_id}: {team_data.get('error')}") 
             return jsonify(team_data), 400
-        preds, _ = _cached_predictions()
+        preds, _, _ = _cached_predictions()
         if not preds:
             return jsonify({"error": "Predictions not ready yet. Please wait for data refresh."}), 503
         player_map = {p["player_id"]: p for p in preds if "player_id" in p}
@@ -1186,7 +1200,7 @@ def api_transfers():
     try:
         from my_team import fetch_my_team, enrich_my_team, generate_transfer_suggestions
         team_data = fetch_my_team(int(team_id))
-        preds, _ = _cached_predictions()
+        preds, _, _ = _cached_predictions()
         if not preds: return jsonify({"error": "Predictions not ready"}), 503
         player_map = {p["player_id"]: p for p in preds if "player_id" in p}
         enriched = enrich_my_team(team_data, player_map, preds)
@@ -1209,7 +1223,7 @@ def api_files():
 @limiter.limit("10 per minute")
 def api_chip_analysis():
     try:
-        preds, cached = _cached_predictions()
+        preds, cached, _ = _cached_predictions()
         if not cached:
             return jsonify({"error": "Predictions not ready"}), 503
         from squad_optimizer import SquadOptimizer, ChipAdvisor
@@ -1338,7 +1352,7 @@ def api_fixture_rankings():
 @app.route("/api/search-players")
 def api_search_players():
     try:
-        preds, _ = _cached_predictions()
+        preds, _, _ = _cached_predictions()
         if not preds: return jsonify({"players": []})
         q = (request.args.get("q", "") or "").lower().strip()
         pos = request.args.get("pos")
@@ -1367,7 +1381,7 @@ def api_squad_predictions():
             return jsonify({"error": "Need ?gw=X&ids=1,2,3"}), 400
         player_ids = [int(x) for x in ids_str.split(",") if x.strip()]
         # Use cached if same GW, otherwise run fresh
-        preds, cached = _cached_predictions()
+        preds, cached, _ = _cached_predictions()
         if cached and cached.get("gameweek") == gw:
             pred_map = {p["player_id"]: p for p in preds}
         else:
@@ -1395,7 +1409,7 @@ def api_simulate_transfer():
         out_id, in_id, target_gw = data.get("out_id"), data.get("in_id"), data.get("gw")
         if not squad_ids or not out_id or not in_id:
             return jsonify({"error": "Missing squad_ids, out_id, or in_id"}), 400
-        preds, _ = _cached_predictions()
+        preds, _, _ = _cached_predictions()
         if preds:
             pred_map = {p["player_id"]: p for p in preds}
         else:

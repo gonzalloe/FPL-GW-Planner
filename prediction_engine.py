@@ -525,37 +525,8 @@ class PredictionEngine:
             p_plays_60 = min(p_plays_60, 1.0)
         mins_fraction = xmins / 90.0
 
-        # debuug temp
-        debug_players = {
-            "Haaland",
-            "Gabriel",
-            "Calafiori",
-            "Cherki",
-            "B.Fernandes",
-            "Dowman",
-            "Alleyne",
-            "Ajayi",
-            "Davis",
-            "Diop"
-        }
-        if p.get("web_name") in debug_players:
-            print(
-                "[PLAYTIME INPUT]",
-                p.get("web_name"),
-                "xmins=", xmins,
-                "p60=", p_plays_60,
-                "pplays=", p_plays
-            )
-
         # ── 1. Appearance points ──
         appearance_pts = p_plays_60 * 2.0 + (p_plays - p_plays_60) * 1.0
-        if p.get("web_name") in debug_players:
-            print(
-                "[APPEARANCE EV]",
-                p.get("web_name"),
-                "appearance=", round(appearance_pts,2),
-                "p60=", round(p_plays_60,3)
-            )
         other_ev = 0.0
 
         # ── Cold-start blend weight (shared by goals + assists) ──
@@ -661,20 +632,6 @@ class PredictionEngine:
             dc_fixture_mod = 1.0 + (fdr - 3) * 0.06
             expected_dc = base_dc_rate * mins_fraction * dc_fixture_mod
             other_ev += (expected_dc / 3.0) * 1.0 * 0.35
-
-        # debug temp
-        if p.get("web_name") in debug_players:
-            print(
-                "[EV BREAKDOWN]",
-                p.get("web_name"),
-                "appearance=", round(appearance_pts,2),
-                "other=", round(other_ev,2),
-                "total=", round(appearance_pts + other_ev,2),
-                "xG=", round(effective_xg,3),
-                "xA=", round(effective_xa,3),
-                "goalEV=", round(poisson_ev_goals(effective_xg, goal_pts),2)
-            )
-        
         return {"appearance": appearance_pts, "other": max(other_ev, 0.0)}
 
 
@@ -728,10 +685,21 @@ class PredictionEngine:
         starts = int(p.get("starts", 0))
         gws_played = max(self.current_gw - 1, 1)
         raw_avg_mins = total_minutes / gws_played
-        # Cap early-season averages
-        # Prevent GW1/GW2 small samples becoming 90-minute locks
+        # Confidence in observed minutes increases with sample size
         season_minutes_weight = min(total_minutes / 900.0, 1.0)
-        season_avg_mins = (raw_avg_mins * season_minutes_weight + 55 * (1 - season_minutes_weight))
+        # Position-based prior expected minutes
+        position_id = int(p.get("position_id", 0))
+        if position_id == 1:          # Goalkeeper
+            prior_avg_mins = 90.0
+        elif position_id == 2:        # Defender
+            prior_avg_mins = 80.0
+        elif position_id == 3:        # Midfielder
+            prior_avg_mins = 70.0
+        elif position_id == 4:        # Forward
+            prior_avg_mins = 65.0
+        else:
+            prior_avg_mins = 70.0
+        season_avg_mins = (raw_avg_mins * season_minutes_weight + prior_avg_mins * (1.0 - season_minutes_weight))
         raw_start_rate = starts / max(total_minutes / 90.0, 1.0)
         raw_start_rate = min(raw_start_rate, 1.0)
         # Sample-size confidence
@@ -804,30 +772,6 @@ class PredictionEngine:
         xmins = (p_start * starter_minutes + p_sub * sub_minutes)
         xmins *= availability
         xmins = min(xmins, 90)
-
-        # DEBUG xmins calculation
-        debug_players = {
-            "Haaland",
-            "Gabriel",
-            "Calafiori",
-            "Cherki",
-            "Savinho",
-            "Osula",
-            "Alleyne",
-            "Ajayi",
-            "Davis",
-            "Diop"
-        }
-        if p.get("web_name") in debug_players:
-            print(
-                "[XMIN CALC]",
-                p.get("web_name"),
-                "start_rate=", round(start_rate,3),
-                "avg_mins=", round(avg_mins,1),
-                "p_start=", round(p_start,3),
-                "availability=", round(availability,2),
-                "xmins=", round(xmins,1)
-            )
 
         # DGW: expected effective matches, scaled continuously by p_start (no tier lookup)
         if num_fixtures >= 2:
