@@ -758,7 +758,8 @@ class PredictionEngine:
         # Probability of playing 60+ minutes must depend on starting probability
         # Starters: high chance of 60+
         # Bench players: only chance comes from sub appearances
-        p_plays_60 = (p_start * mins_ratio + (1 - p_start) * 0.05)
+        p_sub_appearance = 0.35
+        p_plays_60 = (p_start * mins_ratio +(1 - p_start) * p_sub_appearance * 0.05)
         p_plays_60 *= availability
         p_plays_60 *= (1.0 - mins_volatility * 0.3)
         p_plays_60 = min(max(p_plays_60, 0.0), 1.0)
@@ -777,10 +778,12 @@ class PredictionEngine:
             p_start = min(p_start + boost, 1.0)
             p_plays_60 = min(p_plays_60 + boost * 0.8, 1.0)
 
-        # Expected minutes: starters use expected start minutes
-        # non-starters only get small sub appearance expectation
+        # Probability of any appearance as sub
+        p_sub = (1 - p_start) * 0.35
+        # Expected minutes
         starter_minutes = min(avg_mins, 90)
-        xmins = (p_start * starter_minutes + (1 - p_start) * (p_plays_60 * 60 + (1 - p_plays_60) * 15))
+        sub_minutes = 20  # average late sub appearance
+        xmins = (p_start * starter_minutes + p_sub * sub_minutes)
         xmins *= availability
         xmins = min(xmins, 90)
 
