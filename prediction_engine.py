@@ -822,15 +822,20 @@ class PredictionEngine:
         if p_start >= 0.85 and risk < 0.35:
             return "nailed"
         # Usually starts, but not completely secure
-        if p_start >= 0.70:
-            if risk < 0.70:
+        if p_start >= 0.75:
+            if risk < 0.50:
                 return "regular"
             return "rotation"
-        # Genuine rotation player
-        if p_start >= 0.40:
+        # Regular starters with meaningful risk
+        if p_start >= 0.55:
+            if risk < 0.50:
+                return "regular"
             return "rotation"
-        # Occasional starter / squad depth
-        if p_start >= 0.20 or xmins >= 8:
+        # True rotation pool
+        if p_start >= 0.35:
+            return "rotation"
+        # Fringe/sub players
+        if p_start >= 0.15 or xmins >= 15:
             return "fringe"
         return "bench_warmer"
 
@@ -1231,8 +1236,13 @@ class PredictionEngine:
         # Use continuous minutes probability, not display tier
         p_start = starter.get("p_start", 0.5)
         p60 = starter.get("p_plays_60", 0.5)
+        risk = starter.get("rotation_risk", 0.5)
+        xmins = starter.get("xmins", 45)
         score += (p_start - 0.5) * 0.30
         score += (p60 - 0.5) * 0.20
+        # High rotation risk reduces confidence
+        score += (0.5 - risk) * 0.15
+        score += ((xmins / 90.0) - 0.5) * 0.10
 
         # Historical sample size confidence only
         starts = int(p.get("starts",0))
@@ -1243,16 +1253,13 @@ class PredictionEngine:
 
         # Minutes volatility reduces confidence
         vol = starter.get("mins_volatility", 0.5)
-        if vol > 0.6:
-            score -= 0.10
-        elif vol < 0.25:
-            score += 0.05
+        score += (0.30 - vol) * 0.15
 
         # Teammate injury boost → more likely to play → higher confidence
         if teammates_out >= 2:
-            score += 0.15
+            score += 0.08
         elif teammates_out >= 1 and starter.get("injury_boost"):
-            score += 0.10
+            score += 0.05
 
         # Availability
         if availability["status"] == "available":
