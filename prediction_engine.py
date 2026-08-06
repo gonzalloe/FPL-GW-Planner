@@ -877,50 +877,43 @@ class PredictionEngine:
 
     def _calc_minutes_volatility(self, p: dict) -> float:
         """
-        Minutes volatility score (0-1). High = unreliable playing time.
-        Based on XGBoost model research: inconsistent minutes is a key risk signal.
-
-        We approximate from aggregate stats since we don't have per-GW data here.
+        Minutes volatility score (0-1).
+        High = unreliable playing time.
+        Uses Bayesian shrinkage:
+        - Small samples regress toward uncertainty (0.5)
+        - Large samples trust observed role stability
         """
         total_minutes = int(p.get("minutes", 0))
         starts = int(p.get("starts", 0))
-        gws_played = max(self.current_gw - 1, 3)
+        gws_played = max(self.current_gw - 1, 1)
+        # No data
+        if total_minutes == 0:
+            return 1.0
+        # Confidence increases with sample size
         sample_confidence = min(total_minutes / 900.0, 1.0)
-        observed_volatility = 0.0
-        if starts > 0:
-            start_rate = starts / max(gws_played, 1)
-            if 0.35 < start_rate < 0.65:
-                observed_volatility = 0.7
-            elif 0.65 <= start_rate < 0.80:
-                observed_volatility = 0.35
-            elif start_rate >= 0.80:
-                observed_volatility = 0.15
-            else:
-                observed_volatility = 0.6
-        else:
+        # Observed volatility from starting pattern
+        start_rate = starts / max(gws_played, 1)
+        if starts == 0:
             observed_volatility = 0.8
-        mins_volatility = (0.5 * (1 - sample_confidence) + observed_volatility * sample_confidence)
-        avg_mins = total_minutes / gws_played
-        appearances = starts + max(0, gws_played - starts)  # Rough sub count
-
-        # If player starts a lot but avg_mins is low → gets subbed off early → moderate
-        if starts > 0 and avg_mins > 0:
-            mins_per_start = total_minutes / starts
-            if mins_per_start < 70 and starts > 5:
-                return 0.4  # Gets subbed regularly
-        else:
-            return 0.8
-
-        # If start rate is far from 100% or 0% → rotation → high volatility
-        start_rate = starts / gws_played
-        if 0.35 < start_rate < 0.65:
-            return 0.7  # True rotation
+        elif 0.35 < start_rate < 0.65:
+            # True rotation zone
+            observed_volatility = 0.7
         elif 0.65 <= start_rate < 0.80:
-            return 0.35
+            observed_volatility = 0.35
         elif start_rate >= 0.80:
-            return 0.15  # Very consistent
+            # Reliable starter
+            observed_volatility = 0.15
         else:
-            return 0.6  # Mostly bench, sometimes plays
+            # Mostly bench
+            observed_volatility = 0.6
+        # Blend unknown players toward uncertainty
+        mins_volatility = (0.5 * (1 - sample_confidence) + observed_volatility * sample_confidence)
+        # Detect regular early substitutions
+        if starts > 5:
+            mins_per_start = total_minutes / starts
+            if mins_per_start < 70:
+                mins_volatility = max(mins_volatility, 0.4)
+        return round(min(max(mins_volatility, 0.0), 1.0), 3)
 
     # ══════════════════════════════════════════════════════════
     #  xG Delta Regression
