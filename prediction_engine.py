@@ -727,9 +727,19 @@ class PredictionEngine:
         total_minutes = int(p.get("minutes", 0))
         starts = int(p.get("starts", 0))
         gws_played = max(self.current_gw - 1, 1)
-        season_avg_mins = total_minutes / gws_played
-        season_start_rate = starts / max(total_minutes / 90.0, 1.0)
-        season_start_rate = min(season_start_rate, 1.0)
+        raw_avg_mins = total_minutes / gws_played
+        # Cap early-season averages
+        # Prevent GW1/GW2 small samples becoming 90-minute locks
+        season_minutes_weight = min(total_minutes / 900.0, 1.0)
+        season_avg_mins = (raw_avg_mins * season_minutes_weight + 55 * (1 - season_minutes_weight))
+        raw_start_rate = starts / max(total_minutes / 90.0, 1.0)
+        raw_start_rate = min(raw_start_rate, 1.0)
+        # Sample-size confidence
+        # 900+ mins = trust fully
+        # 450 mins = half trust
+        # 135 mins = mostly unknown
+        sample_weight = min(total_minutes / 900.0, 1.0)
+        season_start_rate = (raw_start_rate * sample_weight + 0.5 * (1 - sample_weight))
 
         # Recency blend (fixes stale season-average bug: a player benched the
         # last 8 GWs no longer reads as reliable just because of an August hot streak)
@@ -874,11 +884,22 @@ class PredictionEngine:
         """
         total_minutes = int(p.get("minutes", 0))
         starts = int(p.get("starts", 0))
-        gws_played = max(self.current_gw - 1, 1)
-
-        if gws_played < 3:
-            return 0.5  # Not enough data
-
+        gws_played = max(self.current_gw - 1, 3)
+        sample_confidence = min(total_minutes / 900.0, 1.0)
+        observed_volatility = 0.0
+        if starts > 0:
+            start_rate = starts / max(gws_played, 1)
+            if 0.35 < start_rate < 0.65:
+                observed_volatility = 0.7
+            elif 0.65 <= start_rate < 0.80:
+                observed_volatility = 0.35
+            elif start_rate >= 0.80:
+                observed_volatility = 0.15
+            else:
+                observed_volatility = 0.6
+        else:
+            observed_volatility = 0.8
+        mins_volatility = (0.5 * (1 - sample_confidence) + observed_volatility * sample_confidence)
         avg_mins = total_minutes / gws_played
         appearances = starts + max(0, gws_played - starts)  # Rough sub count
 
