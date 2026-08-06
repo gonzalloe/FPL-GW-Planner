@@ -89,24 +89,26 @@ def upload_prediction_cache(data):
     if not supabase:
         print("[CACHE] Supabase disabled")
         return
-    try:
-        import json
-        content = json.dumps(
-            data,
-            ensure_ascii=False,
-            default=str
-        ).encode("utf-8")
-        supabase.storage.from_(CACHE_BUCKET).upload(
-            CACHE_FILE,
-            content,
-            {
-                "content-type": "application/json",
-                "upsert": "true"
-            }
-        )
-        print("[CACHE] Uploaded to Supabase")
-    except Exception as e:
-        print("[CACHE] Upload failed:", e)
+    import time
+    content = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
+    for attempt in range(3):
+        try:
+            supabase.storage.from_(CACHE_BUCKET).upload(
+                CACHE_FILE,
+                content,
+                {
+                    "content-type": "application/json",
+                    "upsert": "true"
+                }
+            )
+            print("[CACHE] Uploaded to Supabase")
+            return
+        except Exception as e:
+            print(
+                f"[CACHE] Upload failed attempt {attempt+1}: {e}"
+            )
+            time.sleep(2)
+    print("[CACHE] Upload permanently failed")
 
 def download_prediction_cache():
     if not supabase:
@@ -315,8 +317,24 @@ def _run_predictions(gw=None):
         encoding="utf-8"
     )
     os.replace(latest_tmp, latest)
-    upload_prediction_cache(output)
-    invalidate_cache()  # Clear all cached responses when predictions change
+    # Keep only latest 3 GW files
+    try:
+        old_files = sorted(
+            OUTPUT_DIR.glob("gw*_predictions.json"),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True
+        )
+        for old in old_files[3:]:
+            old.unlink()
+            print("[CACHE CLEAN] Removed", old.name)
+    except Exception as e:
+        print("[CACHE CLEAN] Failed:", e)
+
+    try:
+        upload_prediction_cache(output)
+    except Exception as e:
+        print(f"[CACHE] Supabase upload failed: {e}")
+    invalidate_cache()
     return output
 
 def _refresh_data():
@@ -484,10 +502,9 @@ _PREDICTIONS_MEMO = {"key": None, "preds": [], "data": {}}
 _PREDICTIONS_LOCK = threading.Lock()
 
 def _cached_predictions():
-    # debug temp
+    # Load newest GW prediction cache. Falls back to latest_predictions.json if refresh cache is unavailable.
     print("[CACHE DEBUG] Local files =", [f.name for f in OUTPUT_DIR.glob("*")])
-    """Load newest GW prediction cache. Falls back to latest_predictions.json if refresh cache is unavailable."""
-    files = list(OUTPUT_DIR.glob("*_predictions.json"))
+    files = list(OUTPUT_DIR.glob("gw*_predictions.json"))
     def gw_number(path):
         import re
         m = re.search(r"gw(\d+)_predictions", path.name)
@@ -506,8 +523,20 @@ def _cached_predictions():
                 from app_storage import download_prediction_cache
                 data = download_prediction_cache()
                 if data:
+                    cached_gw = data.get("gameweek")
+                    status = "supabase"
+                    try:
+                        from data_fetcher import get_current_gameweek
+                        current_gw = get_current_gameweek()
+                        if cached_gw != current_gw:
+                            status = "stale"
+                            print(
+                                f"[CACHE] Supabase old GW {cached_gw}, current GW {current_gw}"
+                            )
+                    except Exception as e:
+                        print("[CACHE] GW check failed:", e)
                     print("[CACHE] Loaded predictions from Supabase Storage")
-                    return (data.get("predictions", []), data, "supabase")
+                    return (data.get("predictions", []), data, status)
             except Exception as e:
                 print("[CACHE] Supabase fallback failed:", e)
             return [], {}, "preparing"
@@ -520,11 +549,11 @@ def _cached_predictions():
     key = (str(p), mtime)
 
     with _PREDICTIONS_LOCK:
-        if _PREDICTIONS_MEMO.get("key") == key:
+        if _PREDICTIONS_MEMO.get("key") == key and _PREDICTIONS_MEMO.get("status") == status:
             return (
                 _PREDICTIONS_MEMO["preds"],
                 _PREDICTIONS_MEMO["data"],
-                status
+                _PREDICTIONS_MEMO.get("status", status)
             )
     try:
         data = json.loads(
@@ -541,11 +570,22 @@ def _cached_predictions():
         )
     preds = data.get("predictions", [])
 
+    cached_gw = data.get("gameweek")
+    try:
+        from data_fetcher import get_current_gameweek
+        current_gw = get_current_gameweek()
+
+        if cached_gw != current_gw:
+            status = "stale"
+            print(f"[CACHE] Old GW cache {cached_gw}, current GW {current_gw}")
+    except Exception as e:
+        print("[CACHE] GW check failed:", e)
+
     with _PREDICTIONS_LOCK:
         _PREDICTIONS_MEMO["key"] = key
         _PREDICTIONS_MEMO["preds"] = preds
         _PREDICTIONS_MEMO["data"] = data
-
+        _PREDICTIONS_MEMO["status"] = status
     print("[CACHE LOADED]",p.name,len(preds),"players","status:",status)
     return preds, data, status
 # ── Middleware ──
