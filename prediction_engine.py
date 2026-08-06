@@ -263,10 +263,14 @@ class PredictionEngine:
                 )
             fix_xg_data = self.fixture_xg_cache[cache_key]
             xmins = profile["xmins"]
+            # Rotation risk reduces expected minutes BEFORE EV calculation
+            rotation_risk = profile.get("rotation_risk", 0)
+            rotation_multiplier = 1.0 - (rotation_risk * 0.25)
+            xmins *= rotation_multiplier
             # Reduce minutes expectation for second DGW fixture
             if num_fixtures >= 2 and fix_idx > 0:
                 xmins *= 0.85
-            fix_ev = self._fixture_ev(p, fix_info, fix_xg_data, xmins, profile["p_plays_60"])
+            fix_ev = self._fixture_ev(p, fix_info, fix_xg_data, xmins, profile["p_plays_60"] * rotation_multiplier)
 
             # Contextual factor modifiers
             factors = self._calc_all_factors(p, fix_info, fix_xg_data)
@@ -529,7 +533,7 @@ class PredictionEngine:
             "Cherki",
             "B.Fernandes",
             "Dowman",
-            "Phillips",
+            "Alleyne",
             "Ajayi",
             "Davis",
             "Diop"
@@ -799,7 +803,7 @@ class PredictionEngine:
             "Cherki",
             "Savinho",
             "Osula",
-            "Phillips",
+            "Alleyne",
             "Ajayi",
             "Davis",
             "Diop"
