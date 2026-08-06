@@ -54,8 +54,9 @@ PORT = int(os.environ.get("PORT", 8888))
 BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 SETTINGS_FILE = BASE_DIR / "user_settings.json"
-REFRESH_INTERVAL = 2 * 3600
+REFRESH_INTERVAL = 3 * 3600
 _last_refresh = 0
+_last_known_gw = None
 _refresh_lock = threading.Lock()
 _refresh_thread_started = False
 _prediction_status = {"running": False, "started_at": None, "finished_at": None, "last_error": None,}
@@ -105,7 +106,23 @@ def upload_prediction_cache(data):
         )
         print("[CACHE] Uploaded to Supabase")
     except Exception as e:
-        print("[CACHE] Upload failed:", e)    
+        print("[CACHE] Upload failed:", e)
+
+def download_prediction_cache():
+    if not supabase:
+        print("[CACHE] Supabase disabled")
+        return None
+    try:
+        import json
+        content = supabase.storage.from_(CACHE_BUCKET).download(
+            CACHE_FILE
+        )
+        return json.loads(
+            content.decode("utf-8")
+        )
+    except Exception as e:
+        print("[CACHE] Download failed:", e)
+        return None
 
 def restore_prediction_cache():
     if not supabase:
@@ -289,13 +306,6 @@ def _run_predictions(gw=None):
         json.dumps(output, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8"
     )
-    try:
-        from app_storage import set_setting
-        set_setting("latest_predictions", output)
-        print("[CACHE] Predictions saved to Supabase")
-    except Exception as e:
-        print("[CACHE] Supabase save failed:", e)
-
     os.replace(tmp, filename)
     # Update stale fallback cache only after successful prediction
     latest = OUTPUT_DIR / "latest_predictions.json"
@@ -348,7 +358,7 @@ def _refresh_data():
 
 
 def _auto_refresh_loop():
-    global _last_refresh
+    global _last_refresh, _last_known_gw
     # PERF: if there are NO predictions on disk (cold Render container), kick
     # off the first generation IMMEDIATELY so users don't stare at the
     # "server just started up, 1-2 minutes" card for 90s of idle sleep.
@@ -372,10 +382,26 @@ def _auto_refresh_loop():
     else:
         print("  [AUTO-REFRESH] Existing predictions found - delaying refresh.")
         time.sleep(20)
+        
+    from data_fetcher import get_current_gameweek
+    try:
+        _last_known_gw = get_current_gameweek()
+        print("[AUTO-REFRESH] Starting GW:", _last_known_gw)
+    except Exception:
+        pass
 
     while True:
         try:
-            if time.time() - _last_refresh >= REFRESH_INTERVAL:
+            try:
+                current_gw = get_current_gameweek()
+            except Exception as e:
+                print("[AUTO-REFRESH] GW check failed:", e)
+                current_gw = _last_known_gw
+            if current_gw != _last_known_gw:
+                print(f"[AUTO-REFRESH] GW changed {_last_known_gw}->{current_gw}")
+                _last_known_gw = current_gw
+                _refresh_data()
+            elif time.time() - _last_refresh >= REFRESH_INTERVAL:
                 _refresh_data()
             time.sleep(60)
         except Exception as e:
@@ -477,11 +503,11 @@ def _cached_predictions():
         if not p.exists():
             # fallback Supabase cache
             try:
-                from app_storage import get_setting
-                data = get_setting("latest_predictions", None)
+                from app_storage import download_prediction_cache
+                data = download_prediction_cache()
                 if data:
-                    print("[CACHE] Loaded predictions from Supabase")
-                    return (data.get("predictions", []), data,  "supabase")
+                    print("[CACHE] Loaded predictions from Supabase Storage")
+                    return (data.get("predictions", []), data, "supabase")
             except Exception as e:
                 print("[CACHE] Supabase fallback failed:", e)
             return [], {}, "preparing"
