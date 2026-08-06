@@ -171,7 +171,7 @@ class SquadOptimizer:
         """
         from pulp import LpProblem, LpMaximize, LpVariable, lpSum, LpBinary, PULP_CBC_CMD, LpStatus
 
-        players = self.predictions
+        players = self._get_eligible_players()
         n = len(players)
         if n < 15:
             return []
@@ -216,14 +216,14 @@ class SquadOptimizer:
         }
         print("\n=== WATCH PLAYERS ===")
         for p in players:
-            if p["web_name"] in watch:
+            if p.get("web_name") in watch:
                 print(
                     f"{p['web_name']:12}"
                     f" selected={p in selected}"
                     f" xPts={p['predicted_points']:.2f}"
                     f" price={p['price']:.1f}"
                     f" conf={p.get('confidence',0):.2f}"
-                    f" tier={p.get('starter_tier','')}"
+                    f" tier={p.get("starter_quality", {}).get("tier", "")}"
                 )
         return selected
 
