@@ -215,7 +215,6 @@ class PredictionEngine:
     # ──────────────────────────────────────────────────────────
     #  Public API
     # ──────────────────────────────────────────────────────────
-
     def predict_player(self, player_id: int, target_gw: int | None = None) -> dict:
         """Predict xPts for a player.  DGW-aware: sums per-fixture EV."""
         if target_gw is None:
@@ -275,6 +274,11 @@ class PredictionEngine:
                                for k in PREDICTION_WEIGHTS)
             # Modifiers are bounded to avoid runaway inflation
             weighted_mod = max(-0.35, min(weighted_mod, 0.45))
+
+            # Rotation risk penalty
+            rotation_risk = profile.get("rotation_risk", 0)
+            # only reduce attacking/bonus upside from uncertain starts
+            fix_ev["other"] *= (1.0 - rotation_risk * 0.05)
             fix_xp = fix_ev["appearance"] + fix_ev["other"] * (1.0 + weighted_mod)
             fix_xp = max(0.0, fix_xp)
 
@@ -523,7 +527,7 @@ class PredictionEngine:
             "Gabriel",
             "Calafiori",
             "Cherki",
-            "Savinho",
+            "B.Fernandes",
             "Dowman",
             "Phillips",
             "Ajayi",
