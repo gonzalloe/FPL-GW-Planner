@@ -16,6 +16,7 @@ import os
 import time
 import threading
 import hashlib
+import re
 import os
 import requests
 import traceback
@@ -708,28 +709,33 @@ def extract_mentioned_players(question, players):
     """
     if not question:
         return []
-    question_lower = question.lower()
+    words = set(re.findall(r"[a-z]+",question.lower()))
     matched = []
     for p in players:
-        name = p.get("name", "")
-        if not name:
-            continue
-        name_lower = name.lower()
-        # full name match
-        if name_lower in question_lower:
+        name = p.get("name","").lower()
+        parts=name.split()
+        if any(
+            part in words
+            for part in parts
+            if len(part)>=4
+        ):
             matched.append(p)
-            continue
-        # surname match
-        parts = name_lower.split()
-        if len(parts) > 1:
-            surname = parts[-1]
-            # avoid very short names
-            if len(surname) >= 4 and surname in question_lower:
-                matched.append(p)
+
     return matched[:10]
 
 def build_fpl_context(user_message=""):
     """Build rich live FPL context to send to Dify"""
+    squad_mode = any(
+        x in user_message.lower()
+        for x in [
+            "build squad",
+            "create squad",
+            "100m squad",
+            "wildcard team",
+            "free hit team",
+            "make a team"
+        ]
+    )
     try:
         _, predictions, _ = _cached_predictions()
         if not predictions:
@@ -749,8 +755,10 @@ def build_fpl_context(user_message=""):
         context = f"=== LIVE FPL DATA | GW{current_gw} | Updated:{last_updated} ===\n\n"
 
         # Top 120 compact — one line each
+        TOP_PLAYERS = 120
         context += "PLAYERS (name|team|pos|£price|xPts|own%):\n"
-        for p in all_players_sorted[:120]:
+        limit = 80 if squad_mode else TOP_PLAYERS
+        for p in all_players_sorted[:limit]:
             context += (
                 f"{p.get('name','?')}|"
                 f"{p.get('team','?')}|"
@@ -764,7 +772,7 @@ def build_fpl_context(user_message=""):
         mentioned_players = extract_mentioned_players(user_message,all_players_sorted)
         extra_players = [
             p for p in mentioned_players
-            if p not in all_players_sorted[:120]
+            if p not in all_players_sorted[:TOP_PLAYERS]
         ]
         if extra_players:
             context += "\nREQUESTED PLAYERS:\n"
@@ -780,7 +788,7 @@ def build_fpl_context(user_message=""):
         
         # Remaining players — ultra compact, no ownership to save tokens
         remaining = [
-            p for p in all_players_sorted[120:]
+            p for p in all_players_sorted[TOP_PLAYERS:]
             if p not in extra_players
         ]
         if remaining:
@@ -789,30 +797,42 @@ def build_fpl_context(user_message=""):
                 context += (
                     f"{p.get('name','?')}|"
                     f"{p.get('team','?')}|"
-                    f"{p.get('position','?')}"
-                    f"£{p.get('price','?')}m|"
-                    f"{p.get('predicted_points','?')}xPts|"
-                    f"{p.get('selected_by_percent','?')}%\n"
+                    f"{p.get('position','?')}\n"
                 )
 
         # Captain
-        top_picks = predictions.get('top_picks', [])
-        if top_picks:
-            c = top_picks[0]
-            context += f"\nCAPTAIN PICK: {c.get('name')}|{c.get('team')}|£{c.get('price')}m|{c.get('predicted_points')}xPts\n"
+        if not squad_mode:
+            top_picks = predictions.get('top_picks', [])
+            if top_picks:
+                c = top_picks[0]
+                context += (
+                    f"\nCAPTAIN PICK: "
+                    f"{c.get('name')}|{c.get('team')}|"
+                    f"£{c.get('price')}m|"
+                    f"{c.get('predicted_points')}xPts\n"
+                )
 
         # Chips
-        chip_analysis = predictions.get('chip_analysis', {})
-        if chip_analysis:
-            context += "\nCHIPS:\n"
-            for chip_name, chip_data in chip_analysis.items():
-                if isinstance(chip_data, dict):
-                    context += f"  {chip_name}: score={chip_data.get('score','?')} | {chip_data.get('recommendation', chip_data.get('advice',''))}\n"
+        if not squad_mode:
+            chip_analysis = predictions.get('chip_analysis', {})
+            if chip_analysis:
+                context += "\nCHIPS:\n"
+                for chip_name, chip_data in chip_analysis.items():
+                    if isinstance(chip_data, dict):
+                        context += (
+                            f"  {chip_name}: "
+                            f"score={chip_data.get('score','?')} | "
+                            f"{chip_data.get('recommendation', chip_data.get('advice',''))}\n"
+                        )
 
         # GW info
-        gw_info = predictions.get('gw_info', {})
-        if gw_info:
-            context += f"\nDGW:{gw_info.get('is_dgw',False)} | BGW:{gw_info.get('is_bgw',False)}\n"
+        if not squad_mode:
+            gw_info = predictions.get('gw_info', {})
+            if gw_info:
+                context += (
+                    f"\nDGW:{gw_info.get('is_dgw',False)} | "
+                    f"BGW:{gw_info.get('is_bgw',False)}\n"
+                )
 
         # Differentials
         differentials = predictions.get('differentials', [])[:10]
