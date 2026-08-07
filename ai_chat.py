@@ -404,7 +404,7 @@ class FPLChatEngine:
         """Compare two players with full reasoning."""
         players = entities.get("players", [])
         if len(players) < 2:
-            return self._fallback("I couldn't identify two players to compare. Try: **'Compare Salah vs Haaland'** or **'Why pick Palmer over Saka?'**")
+            return self._fallback("I couldn't identify two players to compare. Try: **'Compare B.Fernandes vs Haaland'** or **'Why pick Palmer over Saka?'**")
 
         p1, p2 = players[0], players[1]
         return self._build_comparison(p1, p2, original)
@@ -1465,5 +1465,5 @@ class FPLChatEngine:
         return {
             "answer": msg,
             "data": {"type": "error"},
-            "suggestions": ["Who should I captain?", "Compare Salah vs Haaland", "Best DGW players?", "Show optimal squad"]
+            "suggestions": ["Who should I captain?", "Compare B.Fernandes vs Haaland", "Best DGW players?", "Show optimal squad"]
         }
