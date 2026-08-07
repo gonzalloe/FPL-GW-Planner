@@ -701,7 +701,34 @@ def before_request():
     try: _auto_setup_accounts()
     except: pass
 
-def build_fpl_context():
+def extract_mentioned_players(question, players):
+    """
+    Find players mentioned in user question.
+    Used to inject lower-ranked players into Dify context.
+    """
+    if not question:
+        return []
+    question_lower = question.lower()
+    matched = []
+    for p in players:
+        name = p.get("name", "")
+        if not name:
+            continue
+        name_lower = name.lower()
+        # full name match
+        if name_lower in question_lower:
+            matched.append(p)
+            continue
+        # surname match
+        parts = name_lower.split()
+        if len(parts) > 1:
+            surname = parts[-1]
+            # avoid very short names
+            if len(surname) >= 4 and surname in question_lower:
+                matched.append(p)
+    return matched[:10]
+
+def build_fpl_context(user_message=""):
     """Build rich live FPL context to send to Dify"""
     try:
         _, predictions, _ = _cached_predictions()
@@ -721,9 +748,9 @@ def build_fpl_context():
 
         context = f"=== LIVE FPL DATA | GW{current_gw} | Updated:{last_updated} ===\n\n"
 
-        # Top 100 compact — one line each
+        # Top 120 compact — one line each
         context += "PLAYERS (name|team|pos|£price|xPts|own%):\n"
-        for p in all_players_sorted[:100]:
+        for p in all_players_sorted[:120]:
             context += (
                 f"{p.get('name','?')}|"
                 f"{p.get('team','?')}|"
@@ -732,18 +759,40 @@ def build_fpl_context():
                 f"{p.get('predicted_points','?')}xPts|"
                 f"{p.get('selected_by_percent','?')}%\n"
             )
-        
-        # Remaining players — ultra compact, no ownership to save tokens
-        remaining = all_players_sorted[100:]
-        if remaining:
-            context += "\nREMAINING PLAYERS (name|team|pos|£price|xPts):\n"
-            for p in remaining:
+
+        # Players mentioned by user but outside top list
+        mentioned_players = extract_mentioned_players(user_message,all_players_sorted)
+        extra_players = [
+            p for p in mentioned_players
+            if p not in all_players_sorted[:TOP_LIMIT]
+        ]
+        if extra_players:
+            context += "\nREQUESTED PLAYERS:\n"
+            for p in extra_players:
                 context += (
                     f"{p.get('name','?')}|"
                     f"{p.get('team','?')}|"
                     f"{p.get('position','?')}|"
                     f"£{p.get('price','?')}m|"
-                    f"{p.get('predicted_points','?')}xPts\n"
+                    f"{p.get('predicted_points','?')}xPts|"
+                    f"{p.get('selected_by_percent','?')}%\n"
+                )
+        
+        # Remaining players — ultra compact, no ownership to save tokens
+        remaining = [
+            p for p in all_players_sorted[TOP_LIMIT:]
+            if p not in extra_players
+        ]
+        if remaining:
+            context += "\nPLAYER INDEX (name|team|pos):\n"
+            for p in remaining:
+                context += (
+                    f"{p.get('name','?')}|"
+                    f"{p.get('team','?')}|"
+                    f"{p.get('position','?')}"
+                    f"£{p.get('price','?')}m|"
+                    f"{p.get('predicted_points','?')}xPts|"
+                    f"{p.get('selected_by_percent','?')}%\n"
                 )
 
         # Captain
@@ -795,9 +844,10 @@ def ask_dify(user_message, conversation_id=None):
             "suggestions": ["Who should I captain?"]
         }
 
-    fpl_context = build_fpl_context()
+    fpl_context = build_fpl_context(user_message)
     # debug temp
-    print("[DIFY DEBUG] fpl_context length:", len(fpl_context))
+    print("[DIFY DEBUG] fpl_context chars:", len(fpl_context))
+    print("[DIFY DEBUG] context approx tokens:", len(fpl_context) / 4)
     print("[DIFY DEBUG] first 500 chars:")
     print(fpl_context[:500])
     print("[DIFY DEBUG] user question:", user_message)
