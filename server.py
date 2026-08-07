@@ -764,7 +764,7 @@ def build_fpl_context(user_message=""):
         mentioned_players = extract_mentioned_players(user_message,all_players_sorted)
         extra_players = [
             p for p in mentioned_players
-            if p not in all_players_sorted[:TOP_LIMIT]
+            if p not in all_players_sorted[:120]
         ]
         if extra_players:
             context += "\nREQUESTED PLAYERS:\n"
@@ -780,7 +780,7 @@ def build_fpl_context(user_message=""):
         
         # Remaining players — ultra compact, no ownership to save tokens
         remaining = [
-            p for p in all_players_sorted[TOP_LIMIT:]
+            p for p in all_players_sorted[120:]
             if p not in extra_players
         ]
         if remaining:
