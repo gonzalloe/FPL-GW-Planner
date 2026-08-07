@@ -892,13 +892,23 @@ def ask_dify(user_message, conversation_id=None):
             f"{DIFY_API_URL}/chat-messages",
             headers=headers,
             json=payload,
-            timeout=60
+            timeout=30
         )
+        # Conversation expired/deleted in Dify
+        if response.status_code == 404 and conversation_id:
+            print("[DIFY] Old conversation expired. Starting new one.")
+            payload.pop("conversation_id", None)
+            response = requests.post(
+                f"{DIFY_API_URL}/chat-messages",
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
         response.raise_for_status()
         data = response.json()
-
         #debug temp
         print("[DIFY DEBUG] answer length:", len(data.get("answer","")))
+        print("[DIFY DEBUG] conversation_id:", conversation_id)
         print("[DIFY DEBUG] ending:")
         print(data.get("answer","")[-300:])
         print(json.dumps(data, indent=2))
