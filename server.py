@@ -796,6 +796,11 @@ def ask_dify(user_message, conversation_id=None):
         }
 
     fpl_context = build_fpl_context()
+    # debug temp
+    print("[DIFY DEBUG] fpl_context length:", len(fpl_context))
+    print("[DIFY DEBUG] first 500 chars:")
+    print(fpl_context[:500])
+    print("[DIFY DEBUG] user question:", user_message)
 
     headers = {
         "Authorization": f"Bearer {DIFY_API_KEY}",
@@ -806,7 +811,7 @@ def ask_dify(user_message, conversation_id=None):
         "inputs": {"fpl_data": fpl_context},
         "query": user_message,
         "response_mode": "blocking",
-        "user": "fpl-user"
+        "user": f"fpl-user-{int(time.time())}"
     }
 
     if conversation_id:
@@ -817,17 +822,21 @@ def ask_dify(user_message, conversation_id=None):
             f"{DIFY_API_URL}/chat-messages",
             headers=headers,
             json=payload,
-            timeout=30
+            timeout=60
         )
         response.raise_for_status()
         data = response.json()
 
+        #debug temp
+        print("[DIFY DEBUG] answer length:", len(data.get("answer","")))
+        print("[DIFY DEBUG] ending:")
+        print(data.get("answer","")[-300:])
+    
         return {
             "answer": data.get("answer", "No response from AI."),
             "conversation_id": data.get("conversation_id"),
             "suggestions": ["Who should I captain?", "Best transfer this GW?", "Should I use my chip?"]
         }
-
     except requests.exceptions.Timeout:
         return {"answer": "AI response timed out. Please try again.", "conversation_id": conversation_id, "suggestions": []}
     except requests.exceptions.RequestException as e:
