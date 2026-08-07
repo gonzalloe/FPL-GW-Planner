@@ -757,8 +757,8 @@ def build_fpl_context(user_message=""):
         # Top 120 compact — one line each
         TOP_PLAYERS = 120
         context += "PLAYERS (name|team|pos|£price|xPts|own%):\n"
-        limit = 80 if squad_mode else TOP_PLAYERS
-        for p in all_players_sorted[:limit]:
+        #limit = 80 if squad_mode else TOP_PLAYERS
+        for p in all_players_sorted[:TOP_PLAYERS]:
             context += (
                 f"{p.get('name','?')}|"
                 f"{p.get('team','?')}|"
