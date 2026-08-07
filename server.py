@@ -20,8 +20,9 @@ import os
 import requests
 import traceback
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
+from data_fetcher import fetch_bootstrap
 from supabase import create_client
 
 
@@ -54,7 +55,12 @@ PORT = int(os.environ.get("PORT", 8888))
 BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 SETTINGS_FILE = BASE_DIR / "user_settings.json"
-REFRESH_INTERVAL = 6 * 3600
+NORMAL_REFRESH_INTERVAL = 6 * 3600
+DEADLINE_REFRESH_INTERVAL = 2 * 3600
+FINAL_DEADLINE_REFRESH = 1 * 3600 
+DEADLINE_WINDOW = 36 * 3600
+FINAL_DEADLINE_WINDOW = 2 * 3600
+_current_refresh_interval = NORMAL_REFRESH_INTERVAL
 _last_refresh = 0
 _last_known_gw = None
 _refresh_lock = threading.Lock()
@@ -400,18 +406,44 @@ def _auto_refresh_loop():
     else:
         print("  [AUTO-REFRESH] Existing predictions found - delaying refresh.")
         time.sleep(20)
-        
-    from data_fetcher import get_current_gameweek
     try:
+        from data_fetcher import get_current_gameweek, fetch_bootstrap
         _last_known_gw = get_current_gameweek()
         print("[AUTO-REFRESH] Starting GW:", _last_known_gw)
     except Exception:
         pass
-
     while True:
+        global _current_refresh_interval
         try:
+            refresh_interval = NORMAL_REFRESH_INTERVAL
             try:
-                current_gw = get_current_gameweek()
+                bootstrap = fetch_bootstrap()
+                current_gw = get_current_gameweek(bootstrap)
+                current_event = next(
+                    (
+                        e for e in bootstrap["events"]
+                        if e["id"] == current_gw
+                    ),
+                    None
+                )
+                if current_event and current_event.get("deadline_time"):
+                    deadline = datetime.fromisoformat(
+                        current_event["deadline_time"].replace("Z", "+00:00")
+                    )
+                    seconds_to_deadline = (
+                        deadline - datetime.now(timezone.utc)
+                    ).total_seconds()
+                    if 0 < seconds_to_deadline <= FINAL_DEADLINE_WINDOW:
+                        refresh_interval = FINAL_DEADLINE_REFRESH
+                        print("[AUTO-REFRESH] Final deadline window - using 1h refresh")
+                    elif 0 < seconds_to_deadline <= DEADLINE_WINDOW:
+                        refresh_interval = DEADLINE_REFRESH_INTERVAL
+                        print("[AUTO-REFRESH] Deadline approaching - using 2h refresh")
+            except Exception as e:
+                print("[AUTO-REFRESH] Deadline check failed:", e)
+            _current_refresh_interval = refresh_interval
+            try:
+                current_gw = get_current_gameweek(bootstrap)
             except Exception as e:
                 print("[AUTO-REFRESH] GW check failed:", e)
                 current_gw = _last_known_gw
@@ -419,7 +451,11 @@ def _auto_refresh_loop():
                 print(f"[AUTO-REFRESH] GW changed {_last_known_gw}->{current_gw}")
                 _last_known_gw = current_gw
                 _refresh_data()
-            elif time.time() - _last_refresh >= REFRESH_INTERVAL:
+            elif time.time() - _last_refresh >= refresh_interval:
+                print(
+                    f"[AUTO-REFRESH] Interval reached "
+                    f"({refresh_interval/3600:.0f}h)"
+                )
                 _refresh_data()
             time.sleep(60)
         except Exception as e:
@@ -1165,13 +1201,11 @@ def api_refresh_status():
     return jsonify({
         "last_refresh": datetime.fromtimestamp(_last_refresh).isoformat() if _last_refresh else None,
         "seconds_ago": int(time.time() - _last_refresh) if _last_refresh else None,
-        "interval_hours": REFRESH_INTERVAL / 3600,
-        "next_refresh_in": max(0, REFRESH_INTERVAL - (time.time() - _last_refresh)) if _last_refresh else 0,
+        "interval_hours": _current_refresh_interval / 3600,"next_refresh_in": max(0,_current_refresh_interval - (time.time() - _last_refresh))
     })
 
 
 # ── Settings ──
-
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():
     if request.method == "GET":
@@ -1754,11 +1788,10 @@ def api_admin_model_analysis():
     """Admin: Get model performance analysis and weight suggestions."""
     user = _get_auth_user()
     if not user or user.get("plan") != "admin": return jsonify({"error": "Admin access required"}), 403
-    from model_optimizer import suggest_weight_adjustments, find_available_prediction_gws
-    from data_fetcher import get_current_gameweek
-    
     # Auto-generate last-completed GW predictions if missing
     try:
+        from model_optimizer import suggest_weight_adjustments, find_available_prediction_gws
+        from data_fetcher import get_current_gameweek
         current_gw = get_current_gameweek()
         last_completed = current_gw - 1
         available = find_available_prediction_gws()
@@ -1767,7 +1800,6 @@ def api_admin_model_analysis():
             _run_predictions(gw=last_completed)
     except Exception as e:
         print(f"  [ADMIN] Could not auto-generate predictions: {e}")
-    
     return jsonify(suggest_weight_adjustments())
 
 @app.route("/api/admin/apply-weights", methods=["POST"])
