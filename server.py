@@ -831,6 +831,7 @@ def ask_dify(user_message, conversation_id=None):
         print("[DIFY DEBUG] answer length:", len(data.get("answer","")))
         print("[DIFY DEBUG] ending:")
         print(data.get("answer","")[-300:])
+        print(json.dumps(data, indent=2))
     
         return {
             "answer": data.get("answer", "No response from AI."),
