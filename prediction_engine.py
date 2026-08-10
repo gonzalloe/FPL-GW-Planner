@@ -171,63 +171,8 @@ class PredictionEngine:
         Called once per predict_all() run - not per fixture/per prediction -
         so no API calls happen inside the hot prediction loop.
         """
-        for pid, p in self.players.items():
-            pos = p.get("position_id", 3)
-            
-            # Position fallback priors
-            prior_xg = POSITION_XG_PRIOR.get(pos, 0.15)
-            prior_xa = POSITION_XA_PRIOR.get(pos, 0.10)
-            prior_bonus = POSITION_BONUS_PRIOR.get(pos, 0.20)
-            # Once a player has any minutes, shrinkage already down-weights the
-            # prior proportionally, so a network fetch is no longer needed -
-            # this avoids one API call per player on every prediction run.
-            rates = {}
-            if not p.get("_prior_loaded"):
-                try:
-                    rates = get_last_season_rates(pid)
-                    p["previous_minutes"] = 0
-                    p["previous_starts"] = 0
-                    p["previous_games"] = 38
-                    if rates:
-                        previous_minutes = int(rates.get("minutes", 0) or 0) 
-                        previous_starts = int(rates.get("starts", 0) or 0) 
-                        p["previous_minutes"] = previous_minutes 
-                        p["previous_starts"] = previous_starts
-                        if previous_starts > 0:
-                            p["previous_games"] = int(rates.get("games", 0) or 0)
-                        else:
-                            p["previous_games"] = 0
-                except Exception: 
-                    rates = {}
-                    p["previous_minutes"] = 0 
-                    p["previous_starts"] = 0 
-                    p["previous_games"] = 0 
-                p["_prior_loaded"] = True
-            else:
-                if p.get("previous_minutes", 0): 
-                    rates = { 
-                        "xg_per90": p.get("_prior_xg_per90", prior_xg), 
-                        "xa_per90": p.get("_prior_xa_per90", prior_xa), 
-                        "bonus_per_start": p.get( "_prior_bonus_per_start", prior_bonus ), 
-                    }
-            if rates: 
-                prior_xg = rates.get("xg_per90") or prior_xg 
-                prior_xa = rates.get("xa_per90") or prior_xa 
-                prior_bonus = rates.get("bonus_per_start") or prior_bonus
-            p["_prior_xg_per90"] = prior_xg 
-            p["_prior_xa_per90"] = prior_xa 
-            p["_prior_bonus_per_start"] = prior_bonus
-
-            # Recent form / role data 
-            try: 
-                recent = get_recent_gw_stats(pid, window=5) 
-            except Exception: 
-                recent = {} 
-            p["_recent_start_rate"] = recent.get("recent_start_rate") 
-            p["_recent_avg_mins"] = recent.get("recent_avg_mins") 
-            p["_recent_games"] = recent.get("recent_games", 0)
-
-            DEBUG_PLAYERS = {
+        # debug print
+        DEBUG_PLAYERS = {
                 "Kinsky",
                 "Muharemović",
                 "Verbruggen",
@@ -238,7 +183,70 @@ class PredictionEngine:
                 "Rogers",
                 "Calafiori",
                 "O'Shea",
-            }
+        }
+        for pid, p in self.players.items():
+            pos = p.get("position_id", 3)
+            
+            # Position fallback priors
+            prior_xg = POSITION_XG_PRIOR.get(pos, 0.15)
+            prior_xa = POSITION_XA_PRIOR.get(pos, 0.10)
+            prior_bonus = POSITION_BONUS_PRIOR.get(pos, 0.20)
+            # Load previous-season data once
+            if not p.get("_prior_loaded", False):
+                rates = {}
+                try: 
+                    rates = get_last_season_rates(pid) 
+                except Exception:
+                    rates = {}     
+                if rates:
+                    p["previous_minutes"] = int(rates.get("minutes", 0) or 0) 
+                    p["previous_starts"] = int(rates.get("starts", 0) or 0) 
+                    # get_last_season_rates currently does not return games. Use 38 only as a fallback for role-rate calculation.
+                    p["previous_games"] = int(rates.get("games", 38) or 38) 
+                    p["_previous_season_name"] = rates.get("season_name", "")
+                    if p.get("web_name") in DEBUG_PLAYERS:
+                        print(
+                            "========== PRIOR SEASON ==========",
+                            {
+                                "name": p.get("web_name"),
+                                "season": rates.get("season_name"),
+                                "minutes": rates.get("minutes"),
+                                "starts": rates.get("starts"),
+                                "xg_per90": rates.get("xg_per90"),
+                                "xa_per90": rates.get("xa_per90"),
+                                "bonus_per_start": rates.get("bonus_per_start"),
+                            }
+                        )
+                else: 
+                    p["previous_minutes"] = 0 
+                    p["previous_starts"] = 0 
+                    p["previous_games"] = 38 
+                    p["_previous_season_name"] = ""
+            
+                # Store attacking priors too 
+                if rates: 
+                    prior_xg = rates.get("xg_per90") or prior_xg 
+                    prior_xa = rates.get("xa_per90") or prior_xa 
+                    prior_bonus = rates.get("bonus_per_start") or prior_bonus 
+                p["_prior_xg_per90"] = prior_xg 
+                p["_prior_xa_per90"] = prior_xa 
+                p["_prior_bonus_per_start"] = prior_bonus 
+                p["_prior_loaded"] = True
+
+            else: 
+                # Reuse already-loaded values 
+                p["_prior_xg_per90"] = p.get("_prior_xg_per90", prior_xg) 
+                p["_prior_xa_per90"] = p.get("_prior_xa_per90", prior_xa) 
+                p["_prior_bonus_per_start"] = p.get( "_prior_bonus_per_start", prior_bonus )
+
+            # Recent form / role data
+            try: 
+                recent = get_recent_gw_stats(pid, window=5) 
+            except Exception: 
+                recent = {} 
+            p["_recent_start_rate"] = recent.get("recent_start_rate") 
+            p["_recent_avg_mins"] = recent.get("recent_avg_mins") 
+            p["_recent_games"] = recent.get("recent_games", 0)
 
             if p.get("web_name") in DEBUG_PLAYERS:
                 print("\n========== PRIOR DEBUG ==========")
@@ -246,20 +254,19 @@ class PredictionEngine:
                     "name": p.get("web_name"),
                     "team": p.get("team"),
                     "position_id": p.get("position_id"),
-                    "minutes": p.get("minutes"),
-                    "starts": p.get("starts"),
-                    "previous_minutes": p.get("previous_minutes"),
-                    "previous_starts": p.get("previous_starts"),
-                    "previous_games": p.get("previous_games"),
-                    "chance_next": p.get("chance_of_playing_next_round"),
-                    "status": p.get("status"),
+                    "current_minutes": p.get("minutes", 0),
+                    "current_starts": p.get("starts", 0),
+                    "previous_minutes": p.get("previous_minutes", 0),
+                    "previous_starts": p.get("previous_starts", 0),
+                    "previous_games": p.get("previous_games", 0),
+                    "previous_season": p.get("_previous_season_name"),
+                    "prior_xg": p.get("_prior_xg_per90"),
+                    "prior_xa": p.get("_prior_xa_per90"),
+                    "prior_bonus": p.get("_prior_bonus_per_start"),
                     "championship_role": p.get("championship_role"),
-                    "_prior_xg_per90": p.get("_prior_xg_per90"),
-                    "_prior_xa_per90": p.get("_prior_xa_per90"),
-                    "_prior_bonus_per_start": p.get("_prior_bonus_per_start"),
-                    "_recent_start_rate": p.get("_recent_start_rate"),
-                    "_recent_avg_mins": p.get("_recent_avg_mins"),
-                    "_recent_games": p.get("_recent_games"),
+                    "recent_start_rate": p.get("_recent_start_rate"),
+                    "recent_avg_mins": p.get("_recent_avg_mins"),
+                    "recent_games": p.get("_recent_games"),
                 })
 
     # ──────────────────────────────────────────────────────────
@@ -688,6 +695,7 @@ class PredictionEngine:
     # ══════════════════════════════════════════════════════════
     #  Starter Quality (DGW-aware)
     # ══════════════════════════════════════════════════════════
+    
     def get_player_role_prior(self, p: dict):
         team_id = p.get("team")
         # Promoted team: Championship role if available
@@ -698,19 +706,21 @@ class PredictionEngine:
                     "start_rate": champ.get("start_rate", 0.5),
                     "avg_minutes": champ.get("avg_minutes", 60),
                 }
-                
-        # Previous FPL season (works for ALL players)
-        previous_minutes = int(p.get("previous_minutes", 0) or 0) 
+        # Previous FPL season
+        previous_minutes = int(p.get("previous_minutes", 0) or 0)
         previous_starts = int(p.get("previous_starts", 0) or 0)
-
-        if previous_minutes > 0 and previous_starts > 0: 
-            # If starts were estimated from minutes / 75, use the same 
-            # estimate for the number of meaningful appearances. 
-            previous_games = max( int(p.get("previous_games", 0) or 0), previous_starts, 1 ) 
-            return { "start_rate": min( previous_starts / previous_games, 1.0 ), "avg_minutes": previous_minutes / previous_games, }
-        # No previous history: position-based prior. 
-        pos = p.get("element_type", 3) 
-        return { "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5), "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60), }
+        previous_games = max(int(p.get("previous_games", 38) or 38), 1)
+        if previous_minutes > 0:
+            return {
+                "start_rate": min(previous_starts / previous_games, 1.0),
+                "avg_minutes": min(previous_minutes / previous_games, 90.0),
+            }
+        # No history
+        pos = p.get("element_type", 3)
+        return {
+            "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
+            "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60),
+        }
 
 
     def is_promoted_player(self, p: dict) -> bool:
