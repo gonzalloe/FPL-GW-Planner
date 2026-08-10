@@ -865,6 +865,10 @@ class PredictionEngine:
             print("\n========== MINUTES MODEL DEBUG ==========")
             print({
                 "name": p.get("web_name"),
+                "current_gw": self.current_gw,
+                "gws_played": gws_played,
+                "current_minutes": total_minutes,
+                "starts": starts,
                 "season_avg_mins": round(season_avg_mins, 2),
                 "season_start_rate": round(season_start_rate, 3),
                 "recent_start_rate": p.get("_recent_start_rate"),
