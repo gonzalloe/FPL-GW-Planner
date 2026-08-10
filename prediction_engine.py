@@ -227,6 +227,41 @@ class PredictionEngine:
             p["_recent_avg_mins"] = recent.get("recent_avg_mins") 
             p["_recent_games"] = recent.get("recent_games", 0)
 
+            DEBUG_PLAYERS = {
+                "Kinsky",
+                "Muharemović",
+                "Verbruggen",
+                "Palmer",
+                "Groß",
+                "Gvardiol",
+                "Maguire",
+                "Rogers",
+                "Calafiori",
+                "O'Shea",
+            }
+
+            if p.get("web_name") in DEBUG_PLAYERS:
+                print("\n========== PRIOR DEBUG ==========")
+                print({
+                    "name": p.get("web_name"),
+                    "team": p.get("team"),
+                    "position_id": p.get("position_id"),
+                    "minutes": p.get("minutes"),
+                    "starts": p.get("starts"),
+                    "previous_minutes": p.get("previous_minutes"),
+                    "previous_starts": p.get("previous_starts"),
+                    "previous_games": p.get("previous_games"),
+                    "chance_next": p.get("chance_of_playing_next_round"),
+                    "status": p.get("status"),
+                    "championship_role": p.get("championship_role"),
+                    "_prior_xg_per90": p.get("_prior_xg_per90"),
+                    "_prior_xa_per90": p.get("_prior_xa_per90"),
+                    "_prior_bonus_per_start": p.get("_prior_bonus_per_start"),
+                    "_recent_start_rate": p.get("_recent_start_rate"),
+                    "_recent_avg_mins": p.get("_recent_avg_mins"),
+                    "_recent_games": p.get("_recent_games"),
+                })
+
     # ──────────────────────────────────────────────────────────
     #  Public API
     # ──────────────────────────────────────────────────────────
@@ -799,6 +834,39 @@ class PredictionEngine:
         else:
             dgw_both_prob = None
             dgw_effective = 1.0
+
+        DEBUG_PLAYERS = {
+            "Kinsky",
+            "Muharemović",
+            "Verbruggen",
+            "Palmer",
+            "Groß",
+            "Gvardiol",
+            "Maguire",
+            "Rogers",
+            "Calafiori",
+            "O'Shea"
+        }
+
+        if p.get("web_name") in DEBUG_PLAYERS:
+            print("\n========== MINUTES MODEL DEBUG ==========")
+            print({
+                "name": p.get("web_name"),
+                "season_avg_mins": round(season_avg_mins, 2),
+                "season_start_rate": round(season_start_rate, 3),
+                "recent_start_rate": p.get("_recent_start_rate"),
+                "recent_avg_mins": p.get("_recent_avg_mins"),
+                "start_rate": round(start_rate, 3),
+                "avg_mins": round(avg_mins, 2),
+                "availability": round(availability, 3),
+                "p_start": round(p_start, 3),
+                "p_plays_60": round(p_plays_60, 3),
+                "rotation_risk": round(rotation_risk, 3),
+                "xmins": round(xmins, 1),
+                "teammates_out": teammates_out,
+                "out_minutes": out_minutes,
+            })
+        
         return {
             "p_start": round(p_start, 3),
             "p_plays_60": round(p_plays_60, 3),
