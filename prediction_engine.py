@@ -173,46 +173,59 @@ class PredictionEngine:
         """
         for pid, p in self.players.items():
             pos = p.get("position_id", 3)
-            mins_played = int(p.get("minutes", 0))
-
+            
+            # Position fallback priors
             prior_xg = POSITION_XG_PRIOR.get(pos, 0.15)
             prior_xa = POSITION_XA_PRIOR.get(pos, 0.10)
             prior_bonus = POSITION_BONUS_PRIOR.get(pos, 0.20)
             # Once a player has any minutes, shrinkage already down-weights the
             # prior proportionally, so a network fetch is no longer needed -
             # this avoids one API call per player on every prediction run.
+            rates = {}
             if not p.get("_prior_loaded"):
                 try:
                     rates = get_last_season_rates(pid)
                     p["previous_minutes"] = 0
                     p["previous_starts"] = 0
-                    p["previous_games"] = 0
+                    p["previous_games"] = 38
                     if rates:
-                        p["previous_minutes"] = int(rates.get("minutes", 0))
-                        # temporary approximation because API currently does not return starts
-                        if p["previous_minutes"] > 0:
-                            p["previous_starts"] = round(p["previous_minutes"]  / 90)
-                            p["previous_games"] = 38
+                        previous_minutes = int(rates.get("minutes", 0) or 0) 
+                        previous_starts = int(rates.get("starts", 0) or 0) 
+                        p["previous_minutes"] = previous_minutes 
+                        p["previous_starts"] = previous_starts
+                        if previous_starts > 0:
+                            p["previous_games"] = int(rates.get("games", 0) or 0)
                         else:
-                            p["previous_starts"] = 0
-                            p["previous_games"] = 38
-                except Exception as e:
+                            p["previous_games"] = 0
+                except Exception: 
                     rates = {}
+                    p["previous_minutes"] = 0 
+                    p["previous_starts"] = 0 
+                    p["previous_games"] = 0 
                 p["_prior_loaded"] = True
-            if rates:
-                prior_xg = rates.get("xg_per90") or prior_xg
-                prior_xa = rates.get("xa_per90") or prior_xa
+            else:
+                if p.get("previous_minutes", 0): 
+                    rates = { 
+                        "xg_per90": p.get("_prior_xg_per90", prior_xg), 
+                        "xa_per90": p.get("_prior_xa_per90", prior_xa), 
+                        "bonus_per_start": p.get( "_prior_bonus_per_start", prior_bonus ), 
+                    }
+            if rates: 
+                prior_xg = rates.get("xg_per90") or prior_xg 
+                prior_xa = rates.get("xa_per90") or prior_xa 
                 prior_bonus = rates.get("bonus_per_start") or prior_bonus
-            p["_prior_xg_per90"] = prior_xg
-            p["_prior_xa_per90"] = prior_xa
+            p["_prior_xg_per90"] = prior_xg 
+            p["_prior_xa_per90"] = prior_xa 
             p["_prior_bonus_per_start"] = prior_bonus
-            try:
-                recent = get_recent_gw_stats(pid, window=5)
-            except Exception:
-                recent = {}
-            p["_recent_start_rate"] = recent.get("recent_start_rate")
-            p["_recent_avg_mins"] = recent.get("recent_avg_mins")
-            p["_recent_games"] = recent.get("recent_games", 0)   
+
+            # Recent form / role data 
+            try: 
+                recent = get_recent_gw_stats(pid, window=5) 
+            except Exception: 
+                recent = {} 
+            p["_recent_start_rate"] = recent.get("recent_start_rate") 
+            p["_recent_avg_mins"] = recent.get("recent_avg_mins") 
+            p["_recent_games"] = recent.get("recent_games", 0)
 
     # ──────────────────────────────────────────────────────────
     #  Public API
@@ -236,7 +249,7 @@ class PredictionEngine:
         # ── Teammate injury boost ──
         team_id = p.get("team", 0)
         pos_id = p.get("position_id", 0)
-        injury_ctx = getattr(self, '_team_injury_context', {}).get((team_id, pos_id), {})
+        injury_ctx = getattr(self, '_team_role_context', {}).get((team_id, pos_id), {})
         teammates_out = injury_ctx.get("out", 0)
         out_minutes = injury_ctx.get("out_minutes", 0)
 
@@ -404,7 +417,7 @@ class PredictionEngine:
 
         # ── Build team injury context ──
         # Count unavailable players per team+position to boost replacements
-        self._team_injury_context = {}  # {(team_id, pos_id): {"out": count, "out_names": [...]}}
+        self._team_role_context = {}  # {(team_id, pos_id): {"out": count, "out_names": [...]}}
         for pid, p in self.players.items():
             status = p.get("status", "a")
             chance = p.get("chance_of_playing_next_round")
@@ -414,11 +427,11 @@ class PredictionEngine:
                 team_id = p.get("team", 0)
                 pos_id = p.get("position_id", 0)
                 key = (team_id, pos_id)
-                if key not in self._team_injury_context:
-                    self._team_injury_context[key] = {"out": 0, "out_names": [], "out_minutes": 0}
-                self._team_injury_context[key]["out"] += 1
-                self._team_injury_context[key]["out_names"].append(p.get("web_name", "?"))
-                self._team_injury_context[key]["out_minutes"] += int(p.get("minutes", 0))
+                if key not in self._team_role_context:
+                    self._team_role_context[key] = {"out": 0, "out_names": [], "out_minutes": 0}
+                self._team_role_context[key]["out"] += 1
+                self._team_role_context[key]["out_names"].append(p.get("web_name", "?"))
+                self._team_role_context[key]["out_minutes"] += int(p.get("minutes", 0))
 
         # ── Build team-level injury penalty ──
         # Teams with many injured starters should have dampened form/xG/strength
@@ -433,7 +446,7 @@ class PredictionEngine:
             mins = int(p.get("minutes", 0))
             team_total_mins[tid] = team_total_mins.get(tid, 0) + mins
 
-        for (tid, pos_id), ctx in self._team_injury_context.items():
+        for (tid, pos_id), ctx in self._team_role_context.items():
             team_out_mins[tid] = team_out_mins.get(tid, 0) + ctx["out_minutes"]
             team_out_count[tid] = team_out_count.get(tid, 0) + ctx["out"]
 
@@ -646,27 +659,23 @@ class PredictionEngine:
         if team_id in self.promoted_team_ids:
             champ = p.get("championship_role")
             if champ:
-                result = {
+                return {
                     "start_rate": champ.get("start_rate", 0.5),
                     "avg_minutes": champ.get("avg_minutes", 60),
                 }
-                return result
+                
         # Previous FPL season (works for ALL players)
-        previous_minutes = int(p.get("previous_minutes", 0))
-        previous_starts = int(p.get("previous_starts", 0))
-        previous_games = max(int(p.get("previous_games", 38)), 1)
-        if previous_minutes > 0:
-            return {
-                "start_rate": min(previous_starts / previous_games, 1.0),
-                "avg_minutes": previous_minutes / previous_games,
-            }
-        # No history
-        pos = p.get("element_type", 3)
-        result =  {
-            "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
-            "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60)
-        }
+        previous_minutes = int(p.get("previous_minutes", 0) or 0) 
+        previous_starts = int(p.get("previous_starts", 0) or 0)
 
+        if previous_minutes > 0 and previous_starts > 0: 
+            # If starts were estimated from minutes / 75, use the same 
+            # estimate for the number of meaningful appearances. 
+            previous_games = max( int(p.get("previous_games", 0) or 0), previous_starts, 1 ) 
+            return { "start_rate": min( previous_starts / previous_games, 1.0 ), "avg_minutes": previous_minutes / previous_games, }
+        # No previous history: position-based prior. 
+        pos = p.get("element_type", 3) 
+        return { "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5), "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60), }
 
 
     def is_promoted_player(self, p: dict) -> bool:
@@ -708,8 +717,12 @@ class PredictionEngine:
         # 900+ mins = trust fully
         # 450 mins = half trust
         # 135 mins = mostly unknown
+        current_role_prior = p.get("_current_role_start_rate")
         sample_weight = min(total_minutes / 900.0, 1.0)
-        season_start_rate = (raw_start_rate * sample_weight + 0.5 * (1 - sample_weight))
+        if total_minutes == 0 and current_role_prior is not None:
+            season_start_rate = current_role_prior
+        else:
+            season_start_rate = (raw_start_rate * sample_weight + 0.5 * (1 - sample_weight))
 
         # Recency blend (fixes stale season-average bug: a player benched the
         # last 8 GWs no longer reads as reliable just because of an August hot streak)
@@ -739,7 +752,11 @@ class PredictionEngine:
                 start_rate = (season_start_rate * weight_current + prior["start_rate"] * weight_prior)
                 avg_mins = (season_avg_mins * weight_current + prior["avg_minutes"] * weight_prior)
         mins_volatility = self._calc_minutes_volatility(p)
-        availability = float(p.get("chance_of_playing_this_round") or 100) / 100.0
+        availability = float(
+            p.get("chance_of_playing_next_round")
+            if p.get("chance_of_playing_next_round") is not None
+            else 100
+        ) / 100.0
 
         p_start = min(start_rate * availability, 1.0)
         mins_ratio = min(avg_mins / 90.0, 1.0)

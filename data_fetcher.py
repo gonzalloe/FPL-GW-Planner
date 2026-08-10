@@ -202,6 +202,7 @@ def get_last_season_rates(player_id: int) -> dict:
         if starts <= 0:
             # Older FPL seasons don't always report `starts` - approximate
             starts = max(round(mins / 75), 1)
+        games = max(round(mins / 75.0), starts, 1)
         xg = float(season.get("expected_goals", 0) or 0)
         xa = float(season.get("expected_assists", 0) or 0)
         bonus = int(season.get("bonus", 0) or 0)
@@ -209,9 +210,11 @@ def get_last_season_rates(player_id: int) -> dict:
         return {
             "xg_per90": xg / per90 if per90 > 0 else 0.0,
             "xa_per90": xa / per90 if per90 > 0 else 0.0,
-            "bonus_per_start": bonus / starts if starts > 0 else 0.0,
+            "bonus_per_start": ( bonus / starts if starts > 0 else 0.0 ),
             "season_name": season.get("season_name", ""),
             "minutes": mins,
+            "starts": starts,
+            "games": games,
         }
     return {}
 
