@@ -179,9 +179,9 @@ class PredictionEngine:
                 "Meslier",
                 "Groß",
                 "Gvardiol",
-                "Maguire",
+                "Furlong",
                 "Rogers",
-                "Calafiori",
+                "Woolfenden",
                 "O'Shea",
         }
         for pid, p in self.players.items():
@@ -740,7 +740,10 @@ class PredictionEngine:
         total_minutes = int(p.get("minutes", 0))
         starts = int(p.get("starts", 0))
         gws_played = max(self.current_gw - 1, 1)
-        raw_avg_mins = total_minutes / gws_played
+        if self.current_gw <= 1:
+            raw_avg_mins = 0.0
+        else:
+            raw_avg_mins = min(total_minutes / gws_played, 90.0)
         # Confidence in observed minutes increases with sample size
         season_minutes_weight = min(total_minutes / 900.0, 1.0)
         # Position-based prior expected minutes
@@ -852,9 +855,9 @@ class PredictionEngine:
             "Meslier",
             "Groß",
             "Gvardiol",
-            "Maguire",
+            "Furlong",
             "Rogers",
-            "Calafiori",
+            "Woolfenden",
             "O'Shea"
         }
 
