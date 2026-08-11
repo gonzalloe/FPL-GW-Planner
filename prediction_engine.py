@@ -132,8 +132,8 @@ class PredictionEngine:
 
         # API-Football historical Championship data
         # One API call, then persistent cache.
-        self.championship_history = get_championship_player_history(self.bootstrap)
         previous_priors = self._build_previous_season_priors()
+        self.championship_history = get_championship_player_history(self.bootstrap, year_offset=-1)
         self._prepare_championship_roles()
         self.team_stats = build_team_stats(
             self.fixtures,

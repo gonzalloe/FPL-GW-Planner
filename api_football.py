@@ -175,24 +175,19 @@ def get_championship_league():
         "England Championship was not found in API-Football"
     )
 
-def get_fpl_season_dates(bootstrap):
+def get_fpl_season_dates(bootstrap, year_offset=0):
     """
     Determine the FPL season from bootstrap data.
-
-    For example:
-        2025/26 -> 2025-08-01 to 2026-05-31
-
-    We derive the season from FPL rather than manually changing
-    dates every year.
+    year_offset:
+        0  = current FPL season
+       -1  = previous FPL season
     """
 
     events = bootstrap.get("events", [])
-
     if not events:
         raise RuntimeError(
             "FPL bootstrap contains no events"
         )
-
     dates = []
 
     for event in events:
@@ -207,7 +202,7 @@ def get_fpl_season_dates(bootstrap):
         )
 
     first_date = min(dates)
-    first_year = int(first_date[:4])
+    first_year = int(first_date[:4]) + year_offset
 
     return {
         "season": f"{first_year}/{first_year + 1}",
@@ -215,7 +210,7 @@ def get_fpl_season_dates(bootstrap):
         "to_date": f"{first_year + 1}-05-31",
     }
 
-def get_championship_config(bootstrap):
+def get_championship_config(bootstrap, year_offset=0):
     """
     Automatically determine:
         - Championship league ID
@@ -225,7 +220,7 @@ def get_championship_config(bootstrap):
     """
 
     league = get_championship_league()
-    season_info = get_fpl_season_dates(bootstrap)
+    season_info = get_fpl_season_dates(bootstrap,  year_offset=year_offset)
     config = {
         "league_id": str(
             league["league_id"]
@@ -852,37 +847,25 @@ def get_historical_player_stats_bulk(
 def get_championship_player_history(
     bootstrap,
     force_refresh=False,
+    year_offset=-1,
 ):
     """
-    Fetch and cache the complete Championship player history
-    for the current FPL season.
-
-    Normally this requires only ONE get_events API call.
-
-    The resulting data is cached locally and reused.
+    Fetch and cache Championship history for the
+    requested season.
+    year_offset=-1 means the Championship season
+    immediately preceding the current FPL season.
     """
 
-    config = get_championship_config(bootstrap)
-
-    season_key = (
-        config["season"]
-        .replace("/", "_")
-    )
-
-    cache_key = (
-        f"championship_events_"
-        f"{season_key}"
-    )
-
+    config = get_championship_config(bootstrap, year_offset=year_offset)
+    season_key = (config["season"].replace("/", "_"))
+    cache_key = (f"championship_events_"f"{season_key}")
     if force_refresh:
         cache_file = (
             API_FOOTBALL_CACHE_DIR
             / f"{cache_key}.json"
         )
-
         if cache_file.exists():
             cache_file.unlink()
-
     events = apifootball_call(
         "get_events",
         cache_key=cache_key,
@@ -894,7 +877,6 @@ def get_championship_player_history(
             "withPlayerStats": 1,
         },
     )
-
     if not isinstance(events, list):
         print(
             "[API-FOOTBALL] ERROR: "
