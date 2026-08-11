@@ -4,6 +4,11 @@ import time
 from pathlib import Path
 import requests
 
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+
+SUPABASE_STORAGE_BUCKET = "api-football-cache"
+_supabase = None
 
 # ============================================================
 # API-FOOTBALL CONFIG
@@ -25,50 +30,177 @@ CHAMPIONSHIP_NAME = "Championship"
 # Be polite to the API.
 REQUEST_DELAY = 0.3
 
+# ============================================================
+# Supabase CONFIG
+# ============================================================
+
+def _get_supabase():
+    global _supabase
+    if _supabase is not None:
+        return _supabase
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("[API-FOOTBALL] Supabase Storage not configured")
+        return None
+    try:
+        from supabase import create_client
+
+        _supabase = create_client(
+            SUPABASE_URL,
+            SUPABASE_KEY,
+        )
+
+        return _supabase
+
+    except Exception as e:
+        print(
+            "[API-FOOTBALL] Supabase init failed:",
+            repr(e),
+        )
+        return None
+
+def _storage_cache_path(cache_key):
+    return f"{cache_key}.json"
+
+
+def _load_storage_cache(cache_key):
+    """
+    Load cached API-Football data from Supabase Storage.
+    Returns:
+        (data, updated_at)
+    or:
+        (None, None)
+    """
+
+    sb = _get_supabase()
+
+    if sb is None:
+        return None, None
+
+    path = _storage_cache_path(cache_key)
+
+    try:
+        data = sb.storage \
+            .from_(SUPABASE_STORAGE_BUCKET) \
+            .download(path)
+
+        if not data:
+            return None, None
+
+        parsed = json.loads(
+            data.decode("utf-8")
+            if isinstance(data, bytes)
+            else data
+        )
+
+        print(
+            f"[API-FOOTBALL] SUPABASE CACHE HIT: "
+            f"{cache_key}"
+        )
+
+        return parsed, None
+
+    except Exception as e:
+        print(
+            f"[API-FOOTBALL] Supabase cache miss: "
+            f"{cache_key} ({e})"
+        )
+
+        return None, None
+
+
+def _save_storage_cache(cache_key, data):
+    """
+    Save API-Football response to Supabase Storage.
+    """
+
+    sb = _get_supabase()
+
+    if sb is None:
+        return False
+
+    path = _storage_cache_path(cache_key)
+
+    try:
+        payload = json.dumps(
+            data,
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+        sb.storage \
+            .from_(SUPABASE_STORAGE_BUCKET) \
+            .upload(
+                path,
+                payload,
+                {
+                    "content-type": "application/json",
+                    "cache-control": "31536000",
+                    "upsert": "true",
+                },
+            )
+
+        print(
+            f"[API-FOOTBALL] SUPABASE CACHE SAVED: "
+            f"{path}"
+        )
+
+        return True
+
+    except Exception as e:
+        print(
+            f"[API-FOOTBALL] Supabase cache save failed: "
+            f"{repr(e)}"
+        )
+
+        return False
 
 # ============================================================
 # RAW API CALL
 # ============================================================
 
-def apifootball_call(action, cache_key=None, cache_ttl=None, **params):
+def apifootball_call(
+    action,
+    cache_key=None,
+    cache_ttl=None,
+    **params,
+):
     """
-    Make an API-Football call with persistent file caching.
+    Make an API-Football call with persistent
+    Supabase Storage caching.
 
-    Cached responses are reused until cache_ttl expires.
-    If the API fails but stale cache exists, stale cache is returned.
+    Cache-first:
+        Supabase Storage -> API-Football
+
+    If API-Football fails, the last cached response
+    is used when available.
     """
 
     if not APIFOOTBALL_KEY:
-        print("[API-FOOTBALL] ERROR: API_FOOTBALL_KEY is not set")
+        print(
+            "[API-FOOTBALL] ERROR: "
+            "API_FOOTBALL_KEY is not set"
+        )
         return None
 
     if cache_ttl is None:
         cache_ttl = API_FOOTBALL_CACHE_TTL
 
-    cache_file = None
+    # -------------------------------------------------
+    # SUPABASE CACHE
+    # -------------------------------------------------
+
+    cached_data = None
 
     if cache_key:
-        cache_file = (
-            API_FOOTBALL_CACHE_DIR
-            / f"{cache_key}.json"
+        cached_data, _ = _load_storage_cache(
+            cache_key
         )
 
-        if cache_file.exists():
-            age = time.time() - cache_file.stat().st_mtime
+        if cached_data is not None:
+            return cached_data
 
-            if age < cache_ttl:
-                print(
-                    f"[API-FOOTBALL] CACHE HIT: {cache_key}"
-                )
-
-                try:
-                    return json.loads(
-                        cache_file.read_text(
-                            encoding="utf-8"
-                        )
-                    )
-                except Exception:
-                    pass
+    # -------------------------------------------------
+    # API REQUEST
+    # -------------------------------------------------
 
     query = {
         "action": action,
@@ -77,8 +209,12 @@ def apifootball_call(action, cache_key=None, cache_ttl=None, **params):
     }
 
     print("\n" + "=" * 70)
-    print(f"[API-FOOTBALL] ACTION: {action}")
-    print(f"[API-FOOTBALL] PARAMS: {params}")
+    print(
+        f"[API-FOOTBALL] ACTION: {action}"
+    )
+    print(
+        f"[API-FOOTBALL] PARAMS: {params}"
+    )
     print("=" * 70)
 
     try:
@@ -108,43 +244,41 @@ def apifootball_call(action, cache_key=None, cache_ttl=None, **params):
                 type(data).__name__,
             )
 
-        if cache_file:
-            cache_file.write_text(
-                json.dumps(
-                    data,
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
+        # -------------------------------------------------
+        # SAVE TO SUPABASE
+        # -------------------------------------------------
 
-            print(
-                f"[API-FOOTBALL] CACHE SAVED: "
-                f"{cache_file.name}"
+        if cache_key:
+            _save_storage_cache(
+                cache_key,
+                data,
             )
 
         return data
 
     except Exception as e:
+
         print(
             "[API-FOOTBALL] ERROR:",
             repr(e),
         )
 
-        # IMPORTANT:
-        # If API is unavailable/rate limited, use stale cache.
-        if cache_file and cache_file.exists():
-            print(
-                f"[API-FOOTBALL] USING STALE CACHE: "
-                f"{cache_key}"
+        # -------------------------------------------------
+        # FALLBACK TO EXISTING CACHE
+        # -------------------------------------------------
+
+        if cache_key:
+            stale_data, _ = _load_storage_cache(
+                cache_key
             )
-            try:
-                return json.loads(
-                    cache_file.read_text(
-                        encoding="utf-8"
-                    )
+
+            if stale_data is not None:
+                print(
+                    "[API-FOOTBALL] "
+                    "USING STALE SUPABASE CACHE:",
+                    cache_key,
                 )
-            except Exception:
-                pass
+                return stale_data
         return None
 
 def get_championship_league():

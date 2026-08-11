@@ -230,9 +230,7 @@ class PredictionEngine:
                 return True
 
             # FPL web_name is usually surname/display name.
-            api_parts = api.split()
-
-            if fpl in api_parts:
+            if fpl in api:
                 return True
 
             # Also allow suffix match.
@@ -436,19 +434,6 @@ class PredictionEngine:
         Called once per predict_all() run - not per fixture/per prediction -
         so no API calls happen inside the hot prediction loop.
         """
-        # debug print
-        DEBUG_PLAYERS = {
-                "Kinsky",
-                "Muharemović",
-                "Verbruggen",
-                "Meslier",
-                "Groß",
-                "Gvardiol",
-                "Furlong",
-                "Rogers",
-                "Woolfenden",
-                "O'Shea",
-        }
         for pid, p in self.players.items():
             pos = p.get("position_id", 3)
             
@@ -499,27 +484,6 @@ class PredictionEngine:
             p["_recent_start_rate"] = recent.get("recent_start_rate") 
             p["_recent_avg_mins"] = recent.get("recent_avg_mins") 
             p["_recent_games"] = recent.get("recent_games", 0)
-
-            if p.get("web_name") in DEBUG_PLAYERS:
-                print("\n========== PRIOR DEBUG ==========")
-                print({
-                    "name": p.get("web_name"),
-                    "team": p.get("team"),
-                    "position_id": p.get("position_id"),
-                    "current_minutes": p.get("minutes", 0),
-                    "current_starts": p.get("starts", 0),
-                    "previous_minutes": p.get("previous_minutes", 0),
-                    "previous_starts": p.get("previous_starts", 0),
-                    "previous_games": p.get("previous_games", 0),
-                    "previous_season": p.get("_previous_season_name"),
-                    "prior_xg": p.get("_prior_xg_per90"),
-                    "prior_xa": p.get("_prior_xa_per90"),
-                    "prior_bonus": p.get("_prior_bonus_per_start"),
-                    "championship_role": p.get("championship_role"),
-                    "recent_start_rate": p.get("_recent_start_rate"),
-                    "recent_avg_mins": p.get("_recent_avg_mins"),
-                    "recent_games": p.get("_recent_games"),
-                })
 
     # ──────────────────────────────────────────────────────────
     #  Public API
