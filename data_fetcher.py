@@ -1,12 +1,13 @@
 """
 FPL Predictor - Data Fetcher
-Pulls all data from the official FPL API.
+All data from the official FPL API & APIFOOTBALL.
 """
 import json
 import time
 import requests
 import csv
 import io
+import os
 from pathlib import Path
 from config import FPL_ENDPOINTS
 
@@ -15,6 +16,99 @@ CACHE_DIR.mkdir(exist_ok=True)
 
 # Rate limiting: be polite to the API
 REQUEST_DELAY = 0.3  # seconds between requests
+
+# Get APIFOOTBALL KEY
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
+
+""""
+Testing for APIFOOTBALL Integration
+"""
+def test_api_football():
+    api_key = os.getenv("API_FOOTBALL_KEY")
+
+    url = "https://apiv3.apifootball.com/"
+    params = {
+        "action": "get_leagues",
+        "country_id": 44,
+        "APIkey": api_key,
+    }
+
+    response = requests.get(url, params=params, timeout=30)
+
+    print("STATUS:", response.status_code)
+    print("RESPONSE:", response.text[:5000])
+
+def get_championship_league_id():
+    api_key = os.getenv("API_FOOTBALL_KEY", "")
+
+    if not api_key:
+        return None
+
+    url = "https://apiv3.apifootball.com/"
+
+    params = {
+        "action": "get_leagues",
+        "country_id": 44,
+        "APIkey": api_key,
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        print(f"[API-FOOTBALL] get_leagues failed: {e}")
+        return None
+
+    for league in data:
+        if league.get("league_name", "").lower() == "championship":
+            return int(league["league_id"])
+
+    return None
+
+def get_championship_teams():
+    api_key = os.getenv("API_FOOTBALL_KEY", "")
+    league_id = get_championship_league_id()
+
+    if not api_key or not league_id:
+        return []
+
+    url = "https://apiv3.apifootball.com/"
+
+    params = {
+        "action": "get_teams",
+        "league_id": league_id,
+        "APIkey": api_key,
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"[API-FOOTBALL] get_teams failed: {e}")
+        return []
+
+def get_api_football_player(name):
+    api_key = os.getenv("API_FOOTBALL_KEY", "")
+
+    url = "https://apiv3.apifootball.com/"
+
+    params = {
+        "action": "get_players",
+        "player_name": name,
+        "APIkey": api_key,
+    }
+    results = get_api_football_player("Meslier")
+    print(results)
+
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"[API-FOOTBALL] get_players failed: {e}")
+        return []
 
 
 def _get(url: str, cache_key: str | None = None, cache_ttl: int = 300) -> dict | list:
@@ -202,7 +296,7 @@ def get_last_season_rates(player_id: int) -> dict:
         if starts <= 0:
             # Older FPL seasons don't always report `starts` - approximate
             starts = max(round(mins / 75), 1)
-        games = max(round(mins / 75.0), starts, 1)
+        games = 38
         xg = float(season.get("expected_goals", 0) or 0)
         xa = float(season.get("expected_assists", 0) or 0)
         bonus = int(season.get("bonus", 0) or 0)

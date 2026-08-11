@@ -698,30 +698,59 @@ class PredictionEngine:
     
     def get_player_role_prior(self, p: dict):
         team_id = p.get("team")
-        # Promoted team: Championship role if available
+
+        # 1. Promoted team → most recent meaningful Championship role
         if team_id in self.promoted_team_ids:
             champ = p.get("championship_role")
-            if champ:
+
+            if champ and int(champ.get("minutes", 0) or 0) >= 450:
                 return {
-                    "start_rate": champ.get("start_rate", 0.5),
-                    "avg_minutes": champ.get("avg_minutes", 60),
+                    "start_rate": min(
+                        float(champ.get("start_rate", 0.5) or 0.5),
+                        1.0,
+                    ),
+                    "avg_minutes": min(
+                        float(champ.get("avg_minutes", 60) or 60),
+                        90.0,
+                    ),
+                    "source": "championship",
+                    "season": champ.get("season", ""),
+                    "minutes": int(champ.get("minutes", 0) or 0),
+                    "starts": int(champ.get("starts", 0) or 0),
+                    "matches": int(champ.get("matches", 0) or 0),
                 }
-        # Previous FPL season
+
+        # 2. Most recent meaningful Premier League role
         previous_minutes = int(p.get("previous_minutes", 0) or 0)
         previous_starts = int(p.get("previous_starts", 0) or 0)
-        previous_games = max(int(p.get("previous_games", 38) or 38), 1)
-        if previous_minutes > 0:
+        previous_games = max(
+            int(p.get("previous_games", 38) or 38),
+            1,
+        )
+
+        if previous_minutes >= 450:
             return {
                 "start_rate": min(previous_starts / previous_games, 1.0),
                 "avg_minutes": min(previous_minutes / previous_games, 90.0),
+                "source": "premier_league",
+                "season": p.get("previous_season", ""),
+                "minutes": previous_minutes,
+                "starts": previous_starts,
+                "matches": previous_games,
             }
-        # No history
+
+        # 3. Position prior
         pos = p.get("element_type", 3)
+
         return {
             "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
             "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60),
+            "source": "position_prior",
+            "season": "",
+            "minutes": 0,
+            "starts": 0,
+            "matches": 0,
         }
-
 
     def is_promoted_player(self, p: dict) -> bool:
         team_id = p.get("team")
@@ -744,33 +773,51 @@ class PredictionEngine:
             raw_avg_mins = 0.0
         else:
             raw_avg_mins = min(total_minutes / gws_played, 90.0)
-        # Confidence in observed minutes increases with sample size
-        season_minutes_weight = min(total_minutes / 900.0, 1.0)
-        # Position-based prior expected minutes
-        position_id = int(p.get("position_id", 0))
-        if position_id == 1:          # Goalkeeper
-            prior_avg_mins = 90.0
-        elif position_id == 2:        # Defender
-            prior_avg_mins = 80.0
-        elif position_id == 3:        # Midfielder
-            prior_avg_mins = 70.0
-        elif position_id == 4:        # Forward
-            prior_avg_mins = 65.0
+
+        # CURRENT-SEASON EVIDENCE
+        if self.current_gw <= 1:
+            current_minutes = 0
+            current_starts = 0
         else:
-            prior_avg_mins = 70.0
-        season_avg_mins = (raw_avg_mins * season_minutes_weight + prior_avg_mins * (1.0 - season_minutes_weight))
-        raw_start_rate = starts / max(total_minutes / 90.0, 1.0)
-        raw_start_rate = min(raw_start_rate, 1.0)
-        # Sample-size confidence
-        # 900+ mins = trust fully
-        # 450 mins = half trust
-        # 135 mins = mostly unknown
-        current_role_prior = p.get("_current_role_start_rate")
-        sample_weight = min(total_minutes / 900.0, 1.0)
-        if total_minutes == 0 and current_role_prior is not None:
-            season_start_rate = current_role_prior
+            current_minutes = total_minutes
+            current_starts = starts
+        # PLAYER-SPECIFIC PRIOR
+        prior = self.get_player_role_prior(p)
+        prior_avg_mins = prior["avg_minutes"]
+        prior_start_rate = prior["start_rate"]
+
+        # MINUTES: PRIOR -> CURRENT SEASON
+        if current_minutes > 0:
+            raw_avg_mins = min(current_minutes / gws_played, 90.0)
+            # 0 mins   = 100% prior
+            # 450 mins = 50% prior / 50% current
+            # 900 mins = 100% current
+            current_weight = min(current_minutes / 900.0, 1.0)
+            prior_weight = 1.0 - current_weight
+            season_avg_mins = (prior_avg_mins * prior_weight + raw_avg_mins * current_weight)
         else:
-            season_start_rate = (raw_start_rate * sample_weight + 0.5 * (1 - sample_weight))
+            # GW1 / no current-season evidence:
+            # use the player's own prior role.
+            season_avg_mins = prior_avg_mins
+
+        # START RATE: PRIOR -> CURRENT SEASON
+        if current_minutes > 0:
+            raw_start_rate = (
+                current_starts / max(current_minutes / 90.0, 1.0)
+            )
+            raw_start_rate = min(max(raw_start_rate, 0.0), 1.0)
+
+            # Same confidence progression as minutes.
+            season_start_rate = (
+                prior_start_rate * prior_weight
+                + raw_start_rate * current_weight
+            )
+        else:
+            # GW1 / no current-season evidence:
+            # use the player's own prior role.
+            season_start_rate = prior_start_rate
+
+        season_start_rate = min(max(season_start_rate, 0.0), 1.0)
 
         # Recency blend (fixes stale season-average bug: a player benched the
         # last 8 GWs no longer reads as reliable just because of an August hot streak)
@@ -783,22 +830,8 @@ class PredictionEngine:
             start_rate = min(max(start_rate, 0.0), 1.0)
             avg_mins = w_recent * recent_avg_mins + (1 - w_recent) * season_avg_mins
         else:
-            prior = self.get_player_role_prior(p)
-            # No previous role data: New signing / academy player
-            if prior is None:
-                start_rate = season_start_rate
-                avg_mins = season_avg_mins
-            else:
-                # GW-based trust progression. Same timeline for all players of same category
-                if self.is_promoted_player(p):
-                    phaseout_gw = PROMOTED_ROLE_PHASEOUT_GW
-                else:
-                    phaseout_gw = ESTABLISHED_ROLE_PHASEOUT_GW
-                # current_gw starts from 1
-                weight_current = min(self.current_gw / phaseout_gw,1.0)
-                weight_prior = 1.0 - weight_current
-                start_rate = (season_start_rate * weight_current + prior["start_rate"] * weight_prior)
-                avg_mins = (season_avg_mins * weight_current + prior["avg_minutes"] * weight_prior)
+            start_rate = season_start_rate
+            avg_mins = season_avg_mins
         mins_volatility = self._calc_minutes_volatility(p)
         availability = float(
             p.get("chance_of_playing_next_round")
