@@ -162,6 +162,20 @@ class PredictionEngine:
 
         events = self.championship_history
 
+        # debug print
+        print("\n" + "=" * 70)
+        print("[CHAMPIONSHIP DEBUG] INSPECTING FIRST EVENT STRUCTURE")
+        print("=" * 70)
+        if events:
+            first_event = events[0]
+            if isinstance(first_event, dict):
+                print("[CHAMPIONSHIP DEBUG] Top-level event keys:")
+                for key in first_event.keys():
+                    print(f"  {key}")
+                print("\n[CHAMPIONSHIP DEBUG] First event:")
+                print(first_event)
+        print("=" * 70)
+
         if not isinstance(events, list):
             print("[CHAMPIONSHIP] No usable historical data.")
             return
