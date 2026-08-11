@@ -210,32 +210,32 @@ class PredictionEngine:
             return name
 
         def name_matches(fpl_name, api_name):
-            """
-            Match FPL web_name against API-Football player_name.
-
-            Examples:
-                O'Shea <-> Dara O'Shea
-                Furlong <-> Darnell Furlong
-                Rogers <-> Morgan Rogers
-            """
-
             fpl = normalize_name(fpl_name)
             api = normalize_name(api_name)
 
             if not fpl or not api:
                 return False
 
-            # Exact match.
+            # Exact full-name match
             if fpl == api:
                 return True
 
-            # FPL web_name is usually surname/display name.
-            if fpl in api:
-                return True
+            fpl_parts = fpl.split()
+            api_parts = api.split()
 
-            # Also allow suffix match.
-            if api.endswith(" " + fpl):
-                return True
+            # FPL web_name == API surname
+            if len(fpl_parts) == 1:
+                if fpl in api_parts:
+                    return True
+
+                if api.endswith(" " + fpl):
+                    return True
+
+            # Multi-word FPL display names:
+            # "Thomas-Asante" -> "Brandon Thomas-Asante"
+            if len(fpl_parts) >= 2:
+                if api.endswith(fpl):
+                    return True
 
             return False
 
@@ -272,6 +272,23 @@ class PredictionEngine:
             return found
 
         for event in events:
+            # debug print
+            print(
+                f"[CHAMPIONSHIP DEBUG] Extracted player records: "
+                f"{len(player_records)}"
+            )
+
+            if player_records:
+                print(
+                    "[CHAMPIONSHIP DEBUG] Sample records:"
+                )
+                for record in player_records[:10]:
+                    print(record)
+            else:
+                print(
+                    "[CHAMPIONSHIP DEBUG] WARNING: "
+                    "No player records extracted from events!"
+                )
             if not isinstance(event, dict):
                 continue
 
@@ -343,17 +360,38 @@ class PredictionEngine:
         # Match FPL players to API-Football names.
         # ------------------------------------------------------------
 
+        # debug print
+        print(
+            f"[CHAMPIONSHIP DEBUG] Historical players: "
+            f"{len(historical_by_name)}"
+        )
+
+        print(
+            "[CHAMPIONSHIP DEBUG] Sample API names:"
+        )
+
+        for name in list(historical_by_name.keys())[:20]:
+            print(f"  {name}")
+
         matched = 0
-
         for pid, p in promoted_players:
-
             fpl_name = p.get("web_name", "").strip()
-
+            # debug temp
+            if fpl_name in {
+                "O'Shea",
+                "Furlong",
+                "Woolfenden",
+                "Targett",
+                "Rushworth",
+            }:
+                print(
+                    f"[MATCH DEBUG] FPL={repr(fpl_name)} "
+                    f"normalized={repr(normalize_name(fpl_name))}"
+                )
+                
             if not fpl_name:
                 continue
-
             matched_record = None
-
             fpl_team_id = p.get("team")
             for (api_name, api_team_id), stats in historical_by_name.items():
                 # Prefer exact team + name matching.
