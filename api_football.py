@@ -59,31 +59,36 @@ def _get_supabase():
         return None
 
 def _storage_cache_path(cache_key):
-    return f"{cache_key}.json"
+    cache_key = str(cache_key).strip()
+
+    if not cache_key.endswith(".json"):
+        cache_key += ".json"
+
+    return cache_key
 
 
 def _load_storage_cache(cache_key):
     """
     Load cached API-Football data from Supabase Storage.
-    Returns:
-        (data, updated_at)
-    or:
-        (None, None)
     """
-
     sb = _get_supabase()
-
     if sb is None:
         return None, None
 
     path = _storage_cache_path(cache_key)
 
     try:
-        data = sb.storage \
-            .from_(SUPABASE_STORAGE_BUCKET) \
+        data = (
+            sb.storage
+            .from_(SUPABASE_STORAGE_BUCKET)
             .download(path)
+        )
 
         if not data:
+            print(
+                f"[API-FOOTBALL] SUPABASE CACHE EMPTY: "
+                f"{SUPABASE_STORAGE_BUCKET}/{path}"
+            )
             return None, None
 
         parsed = json.loads(
@@ -94,15 +99,16 @@ def _load_storage_cache(cache_key):
 
         print(
             f"[API-FOOTBALL] SUPABASE CACHE HIT: "
-            f"{cache_key}"
+            f"{SUPABASE_STORAGE_BUCKET}/{path}"
         )
 
         return parsed, None
 
     except Exception as e:
         print(
-            f"[API-FOOTBALL] Supabase cache miss: "
-            f"{cache_key} ({e})"
+            f"[API-FOOTBALL] SUPABASE CACHE MISS: "
+            f"{SUPABASE_STORAGE_BUCKET}/{path} | "
+            f"{repr(e)}"
         )
 
         return None, None
@@ -110,7 +116,8 @@ def _load_storage_cache(cache_key):
 
 def _save_storage_cache(cache_key, data):
     """
-    Save API-Football response to Supabase Storage.
+    Save API-Football response to Supabase Storage
+    and verify that the object can be downloaded.
     """
 
     sb = _get_supabase()
@@ -126,20 +133,41 @@ def _save_storage_cache(cache_key, data):
             ensure_ascii=False,
         ).encode("utf-8")
 
-        sb.storage \
-            .from_(SUPABASE_STORAGE_BUCKET) \
+        response = (
+            sb.storage
+            .from_(SUPABASE_STORAGE_BUCKET)
             .upload(
                 path,
                 payload,
-                {
+                file_options={
                     "content-type": "application/json",
-                    "cache-control": "31536000",
+                    "cache-control": "2592000",
                     "upsert": "true",
                 },
             )
+        )
 
         print(
             f"[API-FOOTBALL] SUPABASE CACHE SAVED: "
+            f"{SUPABASE_STORAGE_BUCKET}/{path}"
+        )
+
+        # Verify the object actually exists.
+        verify = (
+            sb.storage
+            .from_(SUPABASE_STORAGE_BUCKET)
+            .download(path)
+        )
+
+        if not verify:
+            print(
+                f"[API-FOOTBALL] CACHE VERIFY FAILED: "
+                f"{path}"
+            )
+            return False
+
+        print(
+            f"[API-FOOTBALL] SUPABASE CACHE VERIFIED: "
             f"{path}"
         )
 
@@ -150,7 +178,6 @@ def _save_storage_cache(cache_key, data):
             f"[API-FOOTBALL] Supabase cache save failed: "
             f"{repr(e)}"
         )
-
         return False
 
 # ============================================================
