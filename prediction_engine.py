@@ -34,6 +34,8 @@ from data_fetcher import (
     get_next_gameweek, get_current_gameweek,
     get_last_season_rates, get_previous_season_team_stats, get_recent_gw_stats
 )
+from api_football import get_historical_player_stats_bulk
+from api_football import get_championship_player_history
 from team_analysis import (
     build_team_stats, get_h2h, get_fixture_xg,
     calc_team_momentum, get_team_analysis_summary
@@ -50,6 +52,7 @@ POSITION_BONUS_PRIOR = {1: 0.15, 2: 0.20, 3: 0.25, 4: 0.20}   # bonus per start
 # Role
 PROMOTED_ROLE_PHASEOUT_GW = 6
 ESTABLISHED_ROLE_PHASEOUT_GW = 10
+
 # Attacking ability (xG/xA/bonus)
 PROMOTED_ATTACK_SHRINKAGE = 450
 ESTABLISHED_ATTACK_SHRINKAGE = 720
@@ -58,6 +61,11 @@ PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for player
 POSITION_START_RATE_PRIOR = {1: 0.55, 2: 0.70, 3: 0.65, 4: 0.65}
 POSITION_MINUTES_PRIOR = {1: 0.70, 2: 0.65, 3: 0.60, 4: 0.60}
 PLAYER_PRIOR_PHASEOUT_GW = 12
+
+# API-Football Championship historical data
+CHAMPIONSHIP_LEAGUE_ID = 153
+CHAMPIONSHIP_FROM_DATE = "2025-08-01"
+CHAMPIONSHIP_TO_DATE = "2026-05-31"
 
 # ══════════════════════════════════════════════════════════════
 #  Poisson helpers
@@ -121,19 +129,112 @@ class PredictionEngine:
         self.fixtures = fetch_fixtures()
         self.players = build_player_map(self.bootstrap)
         self.teams = build_team_map(self.bootstrap)
+
         self.current_gw = get_current_gameweek(self.bootstrap)
         self.next_gw = get_next_gameweek(self.bootstrap)
+
         self.dgw_teams = {}
         self.bgw_teams = set()
-        previous_priors = self._build_previous_season_priors()
+
+        # API-Football historical Championship data
+        # One API call, then persistent cache.
+        self.championship_history = (get_championship_player_history(self.bootstrap))
+        previous_priors = (self._build_previous_season_priors())
         self.team_stats = build_team_stats(
             self.fixtures,
             self.teams,
-            previous_season_stats=previous_priors
+            previous_season_stats=previous_priors,
         )
         self.fixture_xg_cache = {}
         self.fixture_cache_hits = 0
         self.fixture_cache_misses = 0
+
+    def _prepare_championship_roles(self):
+        """
+        Load historical Championship role data for players belonging to
+        newly promoted teams.
+        API-Football events are fetched once and indexed by player name.
+        """
+
+        if not getattr(self, "promoted_team_ids", None):
+            return
+        promoted_players = [
+            (pid, p)
+            for pid, p in self.players.items()
+            if p.get("team") in self.promoted_team_ids
+        ]
+
+        if not promoted_players:
+            return
+
+        print("\n=== API-FOOTBALL CHAMPIONSHIP ROLE PRIORS ===")
+        print(
+            f"Promoted teams: {len(self.promoted_team_ids)} | "
+            f"Players: {len(promoted_players)}"
+        )
+
+        try:
+            historical_players = get_historical_player_stats_bulk(
+                league_id=CHAMPIONSHIP_LEAGUE_ID,
+                from_date=CHAMPIONSHIP_FROM_DATE,
+                to_date=CHAMPIONSHIP_TO_DATE,
+            )
+        except Exception as exc:
+            print(
+                f"[WARN] Could not load Championship history: {exc}"
+            )
+            return
+
+        for pid, p in promoted_players:
+            player_name = p.get("web_name", "").strip()
+
+            if not player_name:
+                continue
+
+            records = historical_players.get(
+                player_name.lower(),
+                []
+            )
+
+            if not records:
+                continue
+
+            matches = len(records)
+
+            minutes = sum(
+                int(r.get("minutes", 0) or 0)
+                for r in records
+            )
+
+            if minutes < 450:
+                continue
+
+            starts = sum(
+                1
+                for r in records
+                if int(r.get("minutes", 0) or 0) >= 60
+            )
+
+            avg_minutes = minutes / matches
+            start_rate = starts / matches if matches else 0.0
+
+            p["championship_role"] = {
+                "start_rate": min(start_rate, 1.0),
+                "avg_minutes": min(avg_minutes, 90.0),
+                "minutes": minutes,
+                "starts": starts,
+                "matches": matches,
+                "season": "2025/2026",
+            }
+
+            print(
+                f"[CHAMPIONSHIP] {player_name}: "
+                f"{minutes} mins | "
+                f"{matches} apps | "
+                f"starts={starts} | "
+                f"start_rate={start_rate:.2f} | "
+                f"avg_mins={avg_minutes:.1f}"
+            )
 
     def _build_previous_season_priors(self) -> dict:
         """
@@ -733,7 +834,7 @@ class PredictionEngine:
                 "start_rate": min(previous_starts / previous_games, 1.0),
                 "avg_minutes": min(previous_minutes / previous_games, 90.0),
                 "source": "premier_league",
-                "season": p.get("previous_season", ""),
+                "season": p.get("_previous_season_name", ""),
                 "minutes": previous_minutes,
                 "starts": previous_starts,
                 "matches": previous_games,

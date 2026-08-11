@@ -7,7 +7,6 @@ import time
 import requests
 import csv
 import io
-import os
 from pathlib import Path
 from config import FPL_ENDPOINTS
 
@@ -16,99 +15,6 @@ CACHE_DIR.mkdir(exist_ok=True)
 
 # Rate limiting: be polite to the API
 REQUEST_DELAY = 0.3  # seconds between requests
-
-# Get APIFOOTBALL KEY
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "")
-
-""""
-Testing for APIFOOTBALL Integration
-"""
-def test_api_football():
-    api_key = os.getenv("API_FOOTBALL_KEY")
-
-    url = "https://apiv3.apifootball.com/"
-    params = {
-        "action": "get_leagues",
-        "country_id": 44,
-        "APIkey": api_key,
-    }
-
-    response = requests.get(url, params=params, timeout=30)
-
-    print("STATUS:", response.status_code)
-    print("RESPONSE:", response.text[:5000])
-
-def get_championship_league_id():
-    api_key = os.getenv("API_FOOTBALL_KEY", "")
-
-    if not api_key:
-        return None
-
-    url = "https://apiv3.apifootball.com/"
-
-    params = {
-        "action": "get_leagues",
-        "country_id": 44,
-        "APIkey": api_key,
-    }
-
-    try:
-        response = requests.get(url, params=params, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        print(f"[API-FOOTBALL] get_leagues failed: {e}")
-        return None
-
-    for league in data:
-        if league.get("league_name", "").lower() == "championship":
-            return int(league["league_id"])
-
-    return None
-
-def get_championship_teams():
-    api_key = os.getenv("API_FOOTBALL_KEY", "")
-    league_id = get_championship_league_id()
-
-    if not api_key or not league_id:
-        return []
-
-    url = "https://apiv3.apifootball.com/"
-
-    params = {
-        "action": "get_teams",
-        "league_id": league_id,
-        "APIkey": api_key,
-    }
-
-    try:
-        response = requests.get(url, params=params, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        print(f"[API-FOOTBALL] get_teams failed: {e}")
-        return []
-
-def get_api_football_player(name):
-    api_key = os.getenv("API_FOOTBALL_KEY", "")
-
-    url = "https://apiv3.apifootball.com/"
-
-    params = {
-        "action": "get_players",
-        "player_name": name,
-        "APIkey": api_key,
-    }
-    results = get_api_football_player("Meslier")
-    print(results)
-
-    try:
-        response = requests.get(url, params=params, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        print(f"[API-FOOTBALL] get_players failed: {e}")
-        return []
 
 
 def _get(url: str, cache_key: str | None = None, cache_ttl: int = 300) -> dict | list:
@@ -551,3 +457,4 @@ def get_bgw_teams(gw: int, fixtures: list | None = None, bootstrap: dict | None 
         playing.add(f["team_h"])
         playing.add(f["team_a"])
     return all_teams - playing
+
