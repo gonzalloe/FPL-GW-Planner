@@ -148,8 +148,13 @@ class PredictionEngine:
         """
         Build Championship role priors for players belonging to promoted teams.
         Uses the already-fetched/cached Championship event data from
-        self.championship_history. No additional API-Football calls are made here.
+        self.championship_history.
+        No additional API-Football calls are made here.
         """
+
+        # ============================================================
+        # BASIC VALIDATION
+        # ============================================================
 
         if not getattr(self, "promoted_team_ids", None):
             print("[CHAMPIONSHIP] No promoted teams detected.")
@@ -157,6 +162,7 @@ class PredictionEngine:
 
         events = self.championship_history
 
+        # debug print
         print("\n" + "=" * 70)
         print("[CHAMPIONSHIP DEBUG] INSPECTING FIRST EVENT STRUCTURE")
         print("=" * 70)
@@ -166,6 +172,8 @@ class PredictionEngine:
                 print("[CHAMPIONSHIP DEBUG] Top-level event keys:")
                 for key in first_event.keys():
                     print(f"  {key}")
+                print("\n[CHAMPIONSHIP DEBUG] First event:")
+                print(first_event)
         print("=" * 70)
 
         if not isinstance(events, list):
@@ -181,6 +189,7 @@ class PredictionEngine:
                 return None
 
         promoted_team_ids = set()
+
         for team_id in self.promoted_team_ids:
             try:
                 promoted_team_ids.add(int(team_id))
@@ -190,6 +199,10 @@ class PredictionEngine:
         if not promoted_team_ids:
             print("[CHAMPIONSHIP] No valid promoted team IDs.")
             return
+
+        # ------------------------------------------------------------
+        # FPL players belonging to promoted teams
+        # ------------------------------------------------------------
 
         promoted_players = [
             (pid, p)
@@ -205,117 +218,149 @@ class PredictionEngine:
         print("\n" + "=" * 70)
         print("API-FOOTBALL CHAMPIONSHIP ROLE PRIORS")
         print("=" * 70)
-        print(f"Promoted teams: {len(promoted_team_ids)}")
-        print(f"Promoted players: {len(promoted_players)}")
-        print(f"Historical events: {len(events)}")
+
+        print(
+            f"Promoted teams: {len(promoted_team_ids)}"
+        )
+
+        print(
+            f"Promoted players: {len(promoted_players)}"
+        )
+
+        print(
+            f"Historical events: {len(events)}"
+        )
 
         # ============================================================
         # HELPERS
         # ============================================================
 
         def normalize_name(name):
+            """
+            Normalize names enough to match FPL web_name against
+            API-Football full player names.
+            """
+
             if not name:
                 return ""
+
             name = str(name).strip().lower()
-            name = name.replace("’", "'").replace("`", "'")
+
+            # Normalize apostrophes.
+            name = (
+                name
+                .replace("’", "'")
+                .replace("`", "'")
+            )
+
+            # Remove periods.
             name = name.replace(".", "")
+
+            # Treat hyphens as spaces.
             name = name.replace("-", " ")
+
+            # Collapse whitespace.
             name = " ".join(name.split())
+
             return name
 
         def name_matches(fpl_name, api_name):
+            """
+            Match FPL web_name against API-Football full name.
+
+            Examples:
+                O'Shea -> Dara O'Shea
+                Furlong -> Darnell Furlong
+                Thomas-Asante -> Brandon Thomas-Asante
+                Rushworth -> Carl Rushworth
+            """
+
             fpl = normalize_name(fpl_name)
             api = normalize_name(api_name)
+
             if not fpl or not api:
                 return False
+
+            # Exact full-name match.
             if fpl == api:
                 return True
+
             fpl_parts = fpl.split()
             api_parts = api.split()
+
+            # Single-word FPL web_name:
+            # "O'Shea" -> "Dara O'Shea"
+            # "Furlong" -> "Darnell Furlong"
             if len(fpl_parts) == 1:
                 if fpl in api_parts:
                     return True
+
                 if api.endswith(" " + fpl):
                     return True
+
+            # Multi-word FPL display name.
+            # "Thomas Asante" -> "Brandon Thomas Asante"
             if len(fpl_parts) >= 2:
                 if api.endswith(fpl):
                     return True
+
             return False
 
         # ============================================================
-        # NEW: BUILD API-FOOTBALL TEAM ID -> FPL TEAM ID MAPPING
-        #
-        # API-Football's team IDs (match_hometeam_id/match_awayteam_id, e.g.
-        # 3432 for Birmingham) are a DIFFERENT namespace from FPL's own
-        # bootstrap team IDs (self.teams keys, e.g. 7, 11, 12). Comparing
-        # them directly (as the previous version did) can never match.
-        # Build the mapping from data already present in the cached events -
-        # no new API calls.
+        # PLAYER RECORD EXTRACTION
         # ============================================================
 
-        fpl_team_by_name = {}
-        for fpl_tid, t in self.teams.items():
-            for candidate in (t.get("name", ""), t.get("short_name", "")):
-                key = normalize_name(candidate)
-                if key:
-                    fpl_team_by_name[key] = fpl_tid
+        player_records = []
 
-        api_to_fpl_team = {}
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            for side in ("home", "away"):
-                api_tid = safe_int(event.get(f"match_{side}team_id"))
-                api_name = event.get(f"match_{side}team_name")
-                if api_tid is None or not api_name:
-                    continue
-                if api_tid in api_to_fpl_team:
-                    continue
-                norm = normalize_name(api_name)
-                fpl_tid = fpl_team_by_name.get(norm)
-                if fpl_tid is None:
-                    # try substring match as a fallback (e.g. "Nott'm Forest" vs "Nottingham Forest")
-                    for name_key, tid in fpl_team_by_name.items():
-                        if norm in name_key or name_key in norm:
-                            fpl_tid = tid
-                            break
-                if fpl_tid is not None:
-                    api_to_fpl_team[api_tid] = fpl_tid
+        def find_player_records(obj, inherited_team_id=None):
+            """
+            Recursively find API-Football player-stat records.
+            API-Football does not always put team_id directly on the
+            player object. In many event structures the player sits
+            underneath the home/away lineup, while the team ID exists
+            on the match object.
+            Therefore we propagate the current team ID down the tree.
+            """
 
-        print(f"[CHAMPIONSHIP DEBUG] API->FPL team ID mappings built: {len(api_to_fpl_team)}")
-        for api_tid, fpl_tid in list(api_to_fpl_team.items())[:10]:
-            print(f"  api_team_id={api_tid} -> fpl_team_id={fpl_tid}")
-
-        # ============================================================
-        # PLAYER RECORD EXTRACTION — home_team_id/away_team_id now
-        # correctly threaded through every recursion level instead of
-        # being recomputed (and reset to None) at each nested dict.
-        # ============================================================
-
-        def find_player_records(obj, inherited_team_id=None,
-                                inherited_home_id=None, inherited_away_id=None):
             found = []
             if isinstance(obj, dict):
+
+                # ----------------------------------------------------
+                # Detect team ID directly on this object.
+                # ----------------------------------------------------
+
                 current_team_id = inherited_team_id
 
-                direct_team_id = safe_int(
-                    obj.get("team_id") or obj.get("player_team_id") or obj.get("team_key")
+                direct_team_id = (
+                    obj.get("team_id")
+                    or obj.get("player_team_id")
+                    or obj.get("team_key")
                 )
+
+                direct_team_id = safe_int(direct_team_id)
+
                 if direct_team_id is not None:
                     current_team_id = direct_team_id
 
-                # Only override home/away IDs if THIS level actually provides
-                # them; otherwise keep inheriting from the parent (match/event
-                # level) since nested dicts like "lineup"/"player_stats" don't
-                # repeat match_hometeam_id/match_awayteam_id.
-                home_id_here = safe_int(
-                    obj.get("match_hometeam_id") or obj.get("match_home_team_id") or obj.get("home_team_id")
+                # ----------------------------------------------------
+                # Detect API-Football match home/away IDs.
+                # ----------------------------------------------------
+
+                home_team_id = safe_int(
+                    obj.get("match_hometeam_id")
+                    or obj.get("match_home_team_id")
+                    or obj.get("home_team_id")
                 )
-                away_id_here = safe_int(
-                    obj.get("match_awayteam_id") or obj.get("match_away_team_id") or obj.get("away_team_id")
+
+                away_team_id = safe_int(
+                    obj.get("match_awayteam_id")
+                    or obj.get("match_away_team_id")
+                    or obj.get("away_team_id")
                 )
-                home_team_id = home_id_here if home_id_here is not None else inherited_home_id
-                away_team_id = away_id_here if away_id_here is not None else inherited_away_id
+
+                # ----------------------------------------------------
+                # Is this a player record?
+                # ----------------------------------------------------
 
                 is_player_record = (
                     "player_key" in obj
@@ -330,183 +375,459 @@ class PredictionEngine:
                 )
 
                 if is_player_record:
-                    player_name = str(obj.get("player_name", "")).strip()
-                    minutes_raw = obj.get("player_minutes_played")
+
+                    player_name = str(
+                        obj.get("player_name", "")
+                    ).strip()
+
+                    minutes_raw = obj.get(
+                        "player_minutes_played"
+                    )
 
                     if player_name:
+
                         try:
-                            minutes = int(minutes_raw if minutes_raw not in (None, "") else 0)
+                            minutes = int(
+                                minutes_raw
+                                if minutes_raw not in (None, "")
+                                else 0
+                            )
                         except (TypeError, ValueError):
                             minutes = 0
 
+                        # Prefer a team ID directly on the player.
                         player_team_id = safe_int(
-                            obj.get("team_id") or obj.get("player_team_id") or obj.get("team_key")
+                            obj.get("team_id")
+                            or obj.get("player_team_id")
+                            or obj.get("team_key")
                         )
-                        if player_team_id is None:
-                            player_team_id = current_team_id  # now correctly propagated
 
-                        substitute_value = obj.get("player_substitute")
-                        player_in = obj.get("player_in")
+                        if player_team_id is None:
+                            player_team_id = current_team_id
+
+                        # ------------------------------------------------
+                        # Determine starter status when API-Football
+                        # exposes substitute/starting information.
+                        # ------------------------------------------------
+
+                        substitute_value = obj.get(
+                            "player_substitute"
+                        )
+
+                        player_in = obj.get(
+                            "player_in"
+                        )
+
+                        player_out = obj.get(
+                            "player_out"
+                        )
 
                         started = None
+
                         if substitute_value is not None:
-                            substitute_text = str(substitute_value).strip().lower()
-                            if substitute_text in {"yes", "1", "true"}:
+                            substitute_text = str(
+                                substitute_value
+                            ).strip().lower()
+
+                            if substitute_text in {
+                                "yes",
+                                "1",
+                                "true",
+                            }:
                                 started = False
-                            elif substitute_text in {"no", "0", "false"}:
+
+                            elif substitute_text in {
+                                "no",
+                                "0",
+                                "false",
+                            }:
                                 started = True
-                        if started is None and player_in not in (None, "", "0", 0):
+
+                        # Some API-Football structures use player_in
+                        # to indicate a substitute appearance.
+                        if started is None and player_in not in (
+                            None,
+                            "",
+                            "0",
+                            0,
+                        ):
                             started = False
 
                         found.append({
                             "player_name": player_name,
-                            "team_id": player_team_id,   # API-Football ID space
+                            "team_id": player_team_id,
                             "minutes": max(minutes, 0),
                             "started": started,
                         })
+
                         return found
 
+                # ----------------------------------------------------
+                # Recursion.
+                #
+                # If this object is a match-level object, children
+                # may contain "home" and "away" structures.
+                # Pass the correct team ID into those branches.
+                # ----------------------------------------------------
+
                 for key, value in obj.items():
+
                     child_team_id = current_team_id
+
                     key_lower = str(key).lower()
 
-                    if key_lower in {"home", "home_team", "hometeam", "home_players", "home_lineup", "home_lineups"}:
-                        child_team_id = home_team_id if home_team_id is not None else current_team_id
-                    elif key_lower in {"away", "away_team", "awayteam", "away_players", "away_lineup", "away_lineups"}:
-                        child_team_id = away_team_id if away_team_id is not None else current_team_id
+                    # Home lineup/team branch.
+                    if key_lower in {
+                        "home",
+                        "home_team",
+                        "hometeam",
+                        "home_players",
+                        "home_lineup",
+                        "home_lineups",
+                    }:
+                        child_team_id = (
+                            home_team_id
+                            if home_team_id is not None
+                            else current_team_id
+                        )
 
-                    found.extend(find_player_records(value, child_team_id, home_team_id, away_team_id))
+                    # Away lineup/team branch.
+                    elif key_lower in {
+                        "away",
+                        "away_team",
+                        "awayteam",
+                        "away_players",
+                        "away_lineup",
+                        "away_lineups",
+                    }:
+                        child_team_id = (
+                            away_team_id
+                            if away_team_id is not None
+                            else current_team_id
+                        )
+
+                    found.extend(
+                        find_player_records(
+                            value,
+                            child_team_id,
+                        )
+                    )
 
             elif isinstance(obj, list):
+
                 for item in obj:
-                    found.extend(find_player_records(item, inherited_team_id, inherited_home_id, inherited_away_id))
+                    found.extend(
+                        find_player_records(
+                            item,
+                            inherited_team_id,
+                        )
+                    )
 
             return found
 
-        player_records = []
+        # ============================================================
+        # EXTRACT ALL PLAYER RECORDS
+        # ============================================================
+
         for event in events:
+
             if not isinstance(event, dict):
                 continue
-            player_records.extend(find_player_records(event))
 
-        print(f"[CHAMPIONSHIP DEBUG] Extracted player records: {len(player_records)}")
+            records = find_player_records(event)
+
+            player_records.extend(records)
+
+        print(
+            f"[CHAMPIONSHIP DEBUG] Extracted player records: "
+            f"{len(player_records)}"
+        )
+
         if player_records:
-            print("[CHAMPIONSHIP DEBUG] Sample records:")
+
+            print(
+                "[CHAMPIONSHIP DEBUG] Sample records:"
+            )
+
             for record in player_records[:10]:
                 print(record)
 
-        records_with_team = sum(1 for r in player_records if r.get("team_id") is not None)
-        print(f"[CHAMPIONSHIP DEBUG] Records with team_id: {records_with_team}/{len(player_records)}")
+        # ============================================================
+        # TEAM-ID DIAGNOSTIC
+        # ============================================================
+
+        records_with_team = sum(
+            1
+            for r in player_records
+            if r.get("team_id") is not None
+        )
+
+        print(
+            "[CHAMPIONSHIP DEBUG] Records with team_id: "
+            f"{records_with_team}/{len(player_records)}"
+        )
+
         if player_records and records_with_team == 0:
-            print("[CHAMPIONSHIP WARNING] No team IDs could be derived from historical player records.")
+            print(
+                "[CHAMPIONSHIP WARNING] No team IDs could be "
+                "derived from historical player records."
+            )
 
         # ============================================================
-        # BUILD HISTORICAL ROLE STATS
-        # Key = (normalized player name, FPL team_id) — translate the
-        # API-Football team_id to FPL's namespace here, so downstream
-        # matching compares like-for-like.
+        # BUILD HISTORICAL ROLE STATISTICS
+        #
+        # Key = (normalized player name, team_id)
+        #
+        # This prevents the same player being incorrectly aggregated
+        # across multiple teams.
         # ============================================================
 
         historical_by_player = {}
 
         for record in player_records:
-            name = normalize_name(record.get("player_name"))
+
+            name = normalize_name(
+                record.get("player_name")
+            )
+
             if not name:
                 continue
 
-            api_team_id = safe_int(record.get("team_id"))
-            fpl_team_id = api_to_fpl_team.get(api_team_id) if api_team_id is not None else None
+            team_id = safe_int(
+                record.get("team_id")
+            )
 
-            key = (name, fpl_team_id)  # fpl_team_id may be None if unmapped
+            key = (
+                name,
+                team_id,
+            )
 
             if key not in historical_by_player:
+
                 historical_by_player[key] = {
                     "minutes": 0,
                     "matches": 0,
                     "starts": 0,
-                    "display_name": record.get("player_name", ""),
-                    "team_id": fpl_team_id,
+                    "display_name": record.get(
+                        "player_name",
+                        "",
+                    ),
+                    "team_id": team_id,
                 }
 
             stats = historical_by_player[key]
-            minutes = max(safe_int(record.get("minutes")) or 0, 0)
+
+            minutes = max(
+                safe_int(record.get("minutes")) or 0,
+                0,
+            )
+
             stats["minutes"] += minutes
             stats["matches"] += 1
 
+            # Prefer actual starter information.
             started = record.get("started")
+
             if started is True:
                 stats["starts"] += 1
+
+            # Fallback only when API-Football does not expose
+            # starter/substitute information.
             elif started is None and minutes >= 60:
                 stats["starts"] += 1
 
-        print(f"[CHAMPIONSHIP DEBUG] Historical player/team records: {len(historical_by_player)}")
-        print("[CHAMPIONSHIP DEBUG] Sample API names:")
+        print(
+            f"[CHAMPIONSHIP DEBUG] Historical player/team records: "
+            f"{len(historical_by_player)}"
+        )
+
+        print(
+            "[CHAMPIONSHIP DEBUG] Sample API names:"
+        )
+
         for key in list(historical_by_player.keys())[:20]:
-            api_name, mapped_team_id = key
-            print(f"  {api_name} | fpl_team_id={mapped_team_id}")
+
+            api_name, api_team_id = key
+
+            print(
+                f"  {api_name} | team_id={api_team_id}"
+            )
 
         # ============================================================
         # MATCH FPL PLAYERS
         # ============================================================
 
         matched = 0
+
+        # Track matched historical records so we can diagnose
+        # name-vs-team failures.
         name_matches_without_team = 0
         name_matches_with_wrong_team = 0
 
         for pid, p in promoted_players:
-            fpl_name = str(p.get("web_name", "")).strip()
+
+            fpl_name = str(
+                p.get("web_name", "")
+            ).strip()
+
             if not fpl_name:
                 continue
 
-            fpl_team_id = safe_int(p.get("team"))
+            fpl_team_id = safe_int(
+                p.get("team")
+            )
+
             if fpl_team_id is None:
                 continue
 
-            normalized_fpl_name = normalize_name(fpl_name)
+            normalized_fpl_name = normalize_name(
+                fpl_name
+            )
 
-            if fpl_name in {"O'Shea", "Furlong", "Woolfenden", "Targett", "Rushworth"}:
-                print(f"[MATCH DEBUG] FPL={repr(fpl_name)} normalized={repr(normalized_fpl_name)} team_id={fpl_team_id}")
+            # --------------------------------------------------------
+            # Debug selected players.
+            # --------------------------------------------------------
 
-            # FIRST PASS: exact team (now correctly in FPL's own ID space) + name
+            if fpl_name in {
+                "O'Shea",
+                "Furlong",
+                "Woolfenden",
+                "Targett",
+                "Rushworth",
+            }:
+
+                print(
+                    f"[MATCH DEBUG] "
+                    f"FPL={repr(fpl_name)} "
+                    f"normalized={repr(normalized_fpl_name)} "
+                    f"team_id={fpl_team_id}"
+                )
+
+            # --------------------------------------------------------
+            # FIRST PASS:
+            # Exact team + name.
+            # --------------------------------------------------------
+
             matched_record = None
-            for (api_name, mapped_team_id), stats in historical_by_player.items():
-                if mapped_team_id != fpl_team_id:
+
+            for (
+                api_name,
+                api_team_id,
+            ), stats in historical_by_player.items():
+
+                if api_team_id != fpl_team_id:
                     continue
-                if name_matches(fpl_name, api_name):
+
+                if name_matches(
+                    fpl_name,
+                    api_name,
+                ):
                     matched_record = stats
                     break
 
-            # SECOND PASS: name-only fallback, ONLY when the record's team
-            # couldn't be mapped at all (mapped_team_id is None) — deliberately
-            # conservative, per requirement 4.
+            # --------------------------------------------------------
+            # SECOND PASS:
+            # Name-only fallback ONLY when the historical record has
+            # no team ID.
+            #
+            # This is deliberately conservative.
+            # --------------------------------------------------------
+
             if matched_record is None:
-                for (api_name, mapped_team_id), stats in historical_by_player.items():
-                    if mapped_team_id is not None:
+
+                for (
+                    api_name,
+                    api_team_id,
+                ), stats in historical_by_player.items():
+
+                    if api_team_id is not None:
                         continue
-                    if name_matches(fpl_name, api_name):
+
+                    if name_matches(
+                        fpl_name,
+                        api_name,
+                    ):
                         matched_record = stats
                         name_matches_without_team += 1
                         break
 
+            # --------------------------------------------------------
+            # Diagnostic: name exists but belongs to another team.
+            # --------------------------------------------------------
+
             if matched_record is None:
+
                 name_found = False
-                for (api_name, mapped_team_id) in historical_by_player.keys():
-                    if name_matches(fpl_name, api_name):
+
+                for (
+                    api_name,
+                    api_team_id,
+                ) in historical_by_player.keys():
+
+                    if name_matches(
+                        fpl_name,
+                        api_name,
+                    ):
                         name_found = True
                         break
+
                 if name_found:
                     name_matches_with_wrong_team += 1
+
                 continue
 
-            minutes = int(matched_record.get("minutes", 0))
-            matches = int(matched_record.get("matches", 0))
-            starts = int(matched_record.get("starts", 0))
+            # ========================================================
+            # VALIDATE SAMPLE SIZE
+            # ========================================================
 
+            minutes = int(
+                matched_record.get(
+                    "minutes",
+                    0,
+                )
+            )
+
+            matches = int(
+                matched_record.get(
+                    "matches",
+                    0,
+                )
+            )
+
+            starts = int(
+                matched_record.get(
+                    "starts",
+                    0,
+                )
+            )
+
+            # Ignore tiny samples.
             if minutes < 450 or matches <= 0:
                 continue
 
-            avg_minutes = min(minutes / matches, 90.0)
-            start_rate = min(max(starts / matches if matches > 0 else 0.0, 0.0), 1.0)
+            # ========================================================
+            # ROLE PRIORS
+            # ========================================================
+
+            avg_minutes = min(
+                minutes / matches,
+                90.0,
+            )
+
+            start_rate = (
+                starts / matches
+                if matches > 0
+                else 0.0
+            )
+
+            start_rate = min(
+                max(start_rate, 0.0),
+                1.0,
+            )
+
+            # ========================================================
+            # SAVE ROLE PRIOR
+            # ========================================================
 
             p["championship_role"] = {
                 "start_rate": start_rate,
@@ -515,20 +836,43 @@ class PredictionEngine:
                 "starts": starts,
                 "matches": matches,
                 "season": "auto",
-                "api_player_name": matched_record.get("display_name", fpl_name),
-                "fpl_team_id": matched_record.get("team_id")
+                "api_player_name": matched_record.get("display_name", fpl_name,),
+                "api_team_id": matched_record.get("team_id"),
             }
             matched += 1
             print(
-                f"[CHAMPIONSHIP] {fpl_name} <-> {matched_record['display_name']} | "
-                f"{minutes} mins | {matches} apps | starts={starts} | "
-                f"start_rate={start_rate:.2f} | avg_mins={avg_minutes:.1f} | "
+                f"[CHAMPIONSHIP] {fpl_name} "
+                f"<-> "
+                f"{matched_record['display_name']} | "
+                f"{minutes} mins | "
+                f"{matches} apps | "
+                f"starts={starts} | "
+                f"start_rate={start_rate:.2f} | "
+                f"avg_mins={avg_minutes:.1f} | "
                 f"team_id={matched_record.get('team_id')}"
             )
 
-        print(f"[CHAMPIONSHIP] Matched promoted players: {matched}/{len(promoted_players)}")
-        print(f"[CHAMPIONSHIP DEBUG] Name matches without team_id: {name_matches_without_team}")
-        print(f"[CHAMPIONSHIP DEBUG] Names found but wrong/mismatched team: {name_matches_with_wrong_team}")
+        # ============================================================
+        # FINAL DIAGNOSTICS
+        # ============================================================
+
+        print(
+            f"[CHAMPIONSHIP] Matched promoted players: "
+            f"{matched}/{len(promoted_players)}"
+        )
+
+        print(
+            f"[CHAMPIONSHIP DEBUG] "
+            f"Name matches without team_id: "
+            f"{name_matches_without_team}"
+        )
+
+        print(
+            f"[CHAMPIONSHIP DEBUG] "
+            f"Names found but wrong/mismatched team: "
+            f"{name_matches_with_wrong_team}"
+        )
+
         print("=" * 70)
 
     def _build_previous_season_priors(self) -> dict:
