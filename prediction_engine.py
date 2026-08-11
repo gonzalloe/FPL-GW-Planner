@@ -301,17 +301,14 @@ class PredictionEngine:
         def find_player_records(obj, inherited_team_id=None):
             """
             Recursively find API-Football player-stat records.
-
             API-Football does not always put team_id directly on the
             player object. In many event structures the player sits
             underneath the home/away lineup, while the team ID exists
             on the match object.
-
             Therefore we propagate the current team ID down the tree.
             """
 
             found = []
-
             if isinstance(obj, dict):
 
                 # ----------------------------------------------------
@@ -838,7 +835,7 @@ class PredictionEngine:
                 f"starts={starts} | "
                 f"start_rate={start_rate:.2f} | "
                 f"avg_mins={avg_minutes:.1f} | "
-                f"team_ids={sorted(matched_record.get('team_ids', set()))}"
+                f"team_id={matched_record.get('team_id')}"
             )
 
         # ============================================================
