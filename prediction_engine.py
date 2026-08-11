@@ -819,31 +819,16 @@ class PredictionEngine:
             # ========================================================
 
             p["championship_role"] = {
-
                 "start_rate": start_rate,
-
                 "avg_minutes": avg_minutes,
-
                 "minutes": minutes,
-
                 "starts": starts,
-
                 "matches": matches,
-
                 "season": "auto",
-
-                "api_player_name": matched_record.get(
-                    "display_name",
-                    fpl_name,
-                ),
-
-                "api_team_id": matched_record.get(
-                    "team_id"
-                ),
+                "api_player_name": matched_record.get("display_name", fpl_name,),
+                "api_team_id": matched_record.get("team_id"),
             }
-
             matched += 1
-
             print(
                 f"[CHAMPIONSHIP] {fpl_name} "
                 f"<-> "
@@ -853,7 +838,7 @@ class PredictionEngine:
                 f"starts={starts} | "
                 f"start_rate={start_rate:.2f} | "
                 f"avg_mins={avg_minutes:.1f} | "
-                f"team_id={matched_record.get('team_id')}"
+                f"team_ids={sorted(matched_record.get('team_ids', set()))}"
             )
 
         # ============================================================
