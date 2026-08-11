@@ -272,35 +272,14 @@ class PredictionEngine:
             return found
 
         for event in events:
-            # debug print
-            print(
-                f"[CHAMPIONSHIP DEBUG] Extracted player records: "
-                f"{len(player_records)}"
-            )
-
-            if player_records:
-                print(
-                    "[CHAMPIONSHIP DEBUG] Sample records:"
-                )
-                for record in player_records[:10]:
-                    print(record)
-            else:
-                print(
-                    "[CHAMPIONSHIP DEBUG] WARNING: "
-                    "No player records extracted from events!"
-                )
             if not isinstance(event, dict):
                 continue
-
             for player in find_player_records(event):
-
                 minutes_raw = player.get(
                     "player_minutes_played"
                 )
-
                 if minutes_raw in (None, ""):
                     continue
-
                 try:
                     minutes = int(minutes_raw)
                 except (TypeError, ValueError):
@@ -313,48 +292,44 @@ class PredictionEngine:
                 if not player_name:
                     continue
 
-                player_team_id = (
-                    player.get("team_key")
-                    or player.get("team_id")
-                    or player.get("player_team_id")
-                )
-
-                try:
-                    player_team_id = int(player_team_id) if player_team_id else None
-                except (TypeError, ValueError):
-                    player_team_id = None
-
                 player_records.append({
                     "player_name": player_name,
-                    "team_id": player_team_id,
                     "minutes": minutes,
                 })
 
+        # DEBUG — AFTER ALL EVENTS HAVE BEEN PROCESSED
+        print(
+            f"[CHAMPIONSHIP DEBUG] Extracted player records: "
+            f"{len(player_records)}"
+        )
+        if player_records:
+            print("[CHAMPIONSHIP DEBUG] Sample records:")
+            for record in player_records[:10]:
+                print(record)
         # ------------------------------------------------------------
         # Build role statistics for each API-Football player name.
         # ------------------------------------------------------------
 
         historical_by_name = {}
         for record in player_records:
-            name = normalize_name(record["player_name"])
+            name = normalize_name(
+                record["player_name"]
+            )
             if not name:
                 continue
-            team_id = record.get("team_id")
-            key = (name, team_id)
             historical_by_name.setdefault(
-                key,
+                name,
                 {
                     "minutes": 0,
                     "matches": 0,
                     "starts": 0,
                     "display_name": record["player_name"],
-                    "team_id": team_id,
                 }
             )
-            historical_by_name[key]["minutes"] += record["minutes"]
-            historical_by_name[key]["matches"] += 1
+            historical_by_name[name]["minutes"] += record["minutes"]
+            historical_by_name[name]["matches"] += 1
             if record["minutes"] >= 60:
-                historical_by_name[key]["starts"] += 1
+                historical_by_name[name]["starts"] += 1
 
         # ------------------------------------------------------------
         # Match FPL players to API-Football names.
@@ -388,7 +363,7 @@ class PredictionEngine:
                     f"[MATCH DEBUG] FPL={repr(fpl_name)} "
                     f"normalized={repr(normalize_name(fpl_name))}"
                 )
-                
+
             if not fpl_name:
                 continue
             matched_record = None
