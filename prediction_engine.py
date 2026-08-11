@@ -296,8 +296,20 @@ class PredictionEngine:
                 if not player_name:
                     continue
 
+                player_team_id = (
+                    player.get("team_key")
+                    or player.get("team_id")
+                    or player.get("player_team_id")
+                )
+
+                try:
+                    player_team_id = int(player_team_id) if player_team_id else None
+                except (TypeError, ValueError):
+                    player_team_id = None
+
                 player_records.append({
                     "player_name": player_name,
+                    "team_id": player_team_id,
                     "minutes": minutes,
                 })
 
@@ -306,35 +318,26 @@ class PredictionEngine:
         # ------------------------------------------------------------
 
         historical_by_name = {}
-
         for record in player_records:
-
-            name = normalize_name(
-                record["player_name"]
-            )
-
+            name = normalize_name(record["player_name"])
             if not name:
                 continue
-
+            team_id = record.get("team_id")
+            key = (name, team_id)
             historical_by_name.setdefault(
-                name,
+                key,
                 {
                     "minutes": 0,
                     "matches": 0,
                     "starts": 0,
                     "display_name": record["player_name"],
+                    "team_id": team_id,
                 }
             )
-
-            historical_by_name[name]["minutes"] += (
-                record["minutes"]
-            )
-
-            historical_by_name[name]["matches"] += 1
-
-            # Treat 60+ minutes as a start.
+            historical_by_name[key]["minutes"] += record["minutes"]
+            historical_by_name[key]["matches"] += 1
             if record["minutes"] >= 60:
-                historical_by_name[name]["starts"] += 1
+                historical_by_name[key]["starts"] += 1
 
         # ------------------------------------------------------------
         # Match FPL players to API-Football names.
@@ -351,9 +354,15 @@ class PredictionEngine:
 
             matched_record = None
 
-            for api_name, stats in historical_by_name.items():
-
-                if name_matches(fpl_name, api_name):
+            fpl_team_id = p.get("team")
+            for (api_name, api_team_id), stats in historical_by_name.items():
+                # Prefer exact team + name matching.
+                if (
+                    fpl_team_id is not None
+                    and api_team_id is not None
+                    and int(fpl_team_id) == int(api_team_id)
+                    and name_matches(fpl_name, api_name)
+                ):
                     matched_record = stats
                     break
 
@@ -367,12 +376,12 @@ class PredictionEngine:
             if minutes < 450 or matches <= 0:
                 continue
 
-            avg_minutes = minutes / matches
+            avg_minutes = min(minutes / matches, 90.0)
             start_rate = starts / matches
 
             p["championship_role"] = {
                 "start_rate": min(start_rate, 1.0),
-                "avg_minutes": min(avg_minutes, 90.0),
+                "avg_minutes": avg_minutes,
                 "minutes": minutes,
                 "starts": starts,
                 "matches": matches,
@@ -1063,13 +1072,16 @@ class PredictionEngine:
         p_sub_appearance = 0.35
         p_plays_60 = (p_start * mins_ratio +(1 - p_start) * p_sub_appearance * 0.05)
         p_plays_60 *= availability
-        p_plays_60 *= (1.0 - mins_volatility * 0.3)
+        if total_minutes > 0:
+            p_plays_60 *= (1.0 - mins_volatility * 0.3)
         p_plays_60 = min(max(p_plays_60, 0.0), 1.0)
 
         # Rotation risk: ambiguous start rate (mid-range) is the actual risk signal,
         # not "low tier" — a 5%-start benchwarmer isn't a rotation risk, they're just not playing.
         rotation_risk = max(0.0, min(1.0 - abs(p_start - 0.5) * 2.0, 1.0))
-        rotation_risk = max(rotation_risk, mins_volatility * 0.5)
+        # Only use volatility as a floor when we have meaningful current-season minutes evidence.
+        if total_minutes > 0:
+            rotation_risk = max(rotation_risk, mins_volatility * 0.5)
 
         # Injury boost applied directly to probabilities, not via tier-jump lookup
         if teammates_out >= 1:
