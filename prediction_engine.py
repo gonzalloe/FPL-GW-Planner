@@ -157,17 +157,6 @@ class PredictionEngine:
 
         events = self.championship_history
 
-        print("\n" + "=" * 70)
-        print("[CHAMPIONSHIP DEBUG] INSPECTING FIRST EVENT STRUCTURE")
-        print("=" * 70)
-        if events:
-            first_event = events[0]
-            if isinstance(first_event, dict):
-                print("[CHAMPIONSHIP DEBUG] Top-level event keys:")
-                for key in first_event.keys():
-                    print(f"  {key}")
-        print("=" * 70)
-
         if not isinstance(events, list):
             print("[CHAMPIONSHIP] No usable historical data.")
             return
@@ -464,9 +453,6 @@ class PredictionEngine:
 
             normalized_fpl_name = normalize_name(fpl_name)
 
-            if fpl_name in {"O'Shea", "Furlong", "Woolfenden", "Targett", "Rushworth"}:
-                print(f"[MATCH DEBUG] FPL={repr(fpl_name)} normalized={repr(normalized_fpl_name)} team_id={fpl_team_id}")
-
             # FIRST PASS: exact team (now correctly in FPL's own ID space) + name
             matched_record = None
             for (api_name, mapped_team_id), stats in historical_by_player.items():
@@ -519,12 +505,6 @@ class PredictionEngine:
                 "fpl_team_id": matched_record.get("team_id")
             }
             matched += 1
-            print(
-                f"[CHAMPIONSHIP] {fpl_name} <-> {matched_record['display_name']} | "
-                f"{minutes} mins | {matches} apps | starts={starts} | "
-                f"start_rate={start_rate:.2f} | avg_mins={avg_minutes:.1f} | "
-                f"team_id={matched_record.get('team_id')}"
-            )
 
         print(f"[CHAMPIONSHIP] Matched promoted players: {matched}/{len(promoted_players)}")
         print(f"[CHAMPIONSHIP DEBUG] Name matches without team_id: {name_matches_without_team}")
