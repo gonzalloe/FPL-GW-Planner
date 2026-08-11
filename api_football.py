@@ -150,10 +150,8 @@ def apifootball_call(action, cache_key=None, cache_ttl=None, **params):
 def get_championship_league():
     """
     Automatically find the current Championship league.
-
     We do NOT hard-code the league ID here.
     """
-
     data = apifootball_call(
         "get_leagues",
         cache_key="england_leagues",
@@ -992,56 +990,3 @@ def summarize_player_stats(records):
             else None
         ),
     }
-
-
-# ============================================================
-# SIMPLE TEST
-# ============================================================
-#
-# IMPORTANT:
-# This is ONLY a manual test.
-#
-# It does NOT run automatically when the module is imported.
-#
-# Replace the values below when testing.
-# ============================================================
-
-if __name__ == "__main__":
-
-    print("=" * 70)
-    print("API-FOOTBALL MODULE TEST")
-    print("=" * 70)
-
-    # Championship
-    TEST_LEAGUE_ID = 153
-
-    # 2025/26 Championship season
-    TEST_FROM_DATE = "2025-08-01"
-    TEST_TO_DATE = "2026-05-31"
-
-    # Dara O'Shea API-Football player key
-    TEST_PLAYER_KEY = "954369483"
-
-    records = get_historical_player_stats(
-        league_id=TEST_LEAGUE_ID,
-        from_date=TEST_FROM_DATE,
-        to_date=TEST_TO_DATE,
-        player_key=TEST_PLAYER_KEY,
-    )
-
-    print("\n")
-    print("=" * 70)
-    print("FIRST 3 RECORDS")
-    print("=" * 70)
-
-    for record in records[:3]:
-        print(record)
-
-    print("\n")
-    print("=" * 70)
-    print("SEASON SUMMARY")
-    print("=" * 70)
-
-    summary = summarize_player_stats(records)
-
-    print(summary)

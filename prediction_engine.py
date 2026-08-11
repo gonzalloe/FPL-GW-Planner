@@ -34,7 +34,6 @@ from data_fetcher import (
     get_next_gameweek, get_current_gameweek,
     get_last_season_rates, get_previous_season_team_stats, get_recent_gw_stats
 )
-from api_football import get_historical_player_stats_bulk
 from api_football import get_championship_player_history
 from team_analysis import (
     build_team_stats, get_h2h, get_fixture_xg,
@@ -61,11 +60,6 @@ PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for player
 POSITION_START_RATE_PRIOR = {1: 0.55, 2: 0.70, 3: 0.65, 4: 0.65}
 POSITION_MINUTES_PRIOR = {1: 0.70, 2: 0.65, 3: 0.60, 4: 0.60}
 PLAYER_PRIOR_PHASEOUT_GW = 12
-
-# API-Football Championship historical data
-CHAMPIONSHIP_LEAGUE_ID = 153
-CHAMPIONSHIP_FROM_DATE = "2025-08-01"
-CHAMPIONSHIP_TO_DATE = "2026-05-31"
 
 # ══════════════════════════════════════════════════════════════
 #  Poisson helpers
@@ -138,8 +132,9 @@ class PredictionEngine:
 
         # API-Football historical Championship data
         # One API call, then persistent cache.
-        self.championship_history = (get_championship_player_history(self.bootstrap))
-        previous_priors = (self._build_previous_season_priors())
+        self.championship_history = get_championship_player_history(self.bootstrap)
+        previous_priors = self._build_previous_season_priors()
+        self._prepare_championship_roles()
         self.team_stats = build_team_stats(
             self.fixtures,
             self.teams,
@@ -151,13 +146,22 @@ class PredictionEngine:
 
     def _prepare_championship_roles(self):
         """
-        Load historical Championship role data for players belonging to
-        newly promoted teams.
-        API-Football events are fetched once and indexed by player name.
+        Build Championship role priors for players belonging to promoted teams.
+        Uses the already-fetched/cached Championship event data from
+        self.championship_history.
+        No additional API-Football calls are made here.
         """
 
         if not getattr(self, "promoted_team_ids", None):
+            print("[CHAMPIONSHIP] No promoted teams detected.")
             return
+
+        events = self.championship_history
+
+        if not isinstance(events, list):
+            print("[CHAMPIONSHIP] No usable historical data.")
+            return
+
         promoted_players = [
             (pid, p)
             for pid, p in self.players.items()
@@ -165,58 +169,208 @@ class PredictionEngine:
         ]
 
         if not promoted_players:
+            print("[CHAMPIONSHIP] No promoted-team players found.")
             return
 
-        print("\n=== API-FOOTBALL CHAMPIONSHIP ROLE PRIORS ===")
+        print("\n" + "=" * 70)
+        print("API-FOOTBALL CHAMPIONSHIP ROLE PRIORS")
+        print("=" * 70)
         print(
-            f"Promoted teams: {len(self.promoted_team_ids)} | "
-            f"Players: {len(promoted_players)}"
+            f"Promoted teams: {len(self.promoted_team_ids)}"
+        )
+        print(
+            f"Promoted players: {len(promoted_players)}"
+        )
+        print(
+            f"Historical events: {len(events)}"
         )
 
-        try:
-            historical_players = get_historical_player_stats_bulk(
-                league_id=CHAMPIONSHIP_LEAGUE_ID,
-                from_date=CHAMPIONSHIP_FROM_DATE,
-                to_date=CHAMPIONSHIP_TO_DATE,
+        def normalize_name(name):
+            """
+            Normalize names enough to match FPL web_name against
+            API-Football full player names.
+            """
+
+            if not name:
+                return ""
+
+            name = str(name).strip().lower()
+
+            # Remove punctuation differences.
+            name = (
+                name
+                .replace("’", "'")
+                .replace(".", "")
+                .replace("-", " ")
             )
-        except Exception as exc:
-            print(
-                f"[WARN] Could not load Championship history: {exc}"
+
+            # Collapse whitespace.
+            name = " ".join(name.split())
+
+            return name
+
+        def name_matches(fpl_name, api_name):
+            """
+            Match FPL web_name against API-Football player_name.
+
+            Examples:
+                O'Shea <-> Dara O'Shea
+                Furlong <-> Darnell Furlong
+                Rogers <-> Morgan Rogers
+            """
+
+            fpl = normalize_name(fpl_name)
+            api = normalize_name(api_name)
+
+            if not fpl or not api:
+                return False
+
+            # Exact match.
+            if fpl == api:
+                return True
+
+            # FPL web_name is usually surname/display name.
+            api_parts = api.split()
+
+            if fpl in api_parts:
+                return True
+
+            # Also allow suffix match.
+            if api.endswith(" " + fpl):
+                return True
+
+            return False
+
+        # ------------------------------------------------------------
+        # Extract every player record from every event.
+        # ------------------------------------------------------------
+
+        player_records = []
+
+        def find_player_records(obj):
+            found = []
+
+            if isinstance(obj, dict):
+
+                if (
+                    "player_key" in obj
+                    and (
+                        "player_minutes_played" in obj
+                        or "player_goals" in obj
+                        or "player_rating" in obj
+                        or "player_assists" in obj
+                    )
+                ):
+                    found.append(obj)
+
+                for value in obj.values():
+                    found.extend(find_player_records(value))
+
+            elif isinstance(obj, list):
+
+                for item in obj:
+                    found.extend(find_player_records(item))
+
+            return found
+
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+
+            for player in find_player_records(event):
+
+                minutes_raw = player.get(
+                    "player_minutes_played"
+                )
+
+                if minutes_raw in (None, ""):
+                    continue
+
+                try:
+                    minutes = int(minutes_raw)
+                except (TypeError, ValueError):
+                    continue
+
+                player_name = str(
+                    player.get("player_name", "")
+                ).strip()
+
+                if not player_name:
+                    continue
+
+                player_records.append({
+                    "player_name": player_name,
+                    "minutes": minutes,
+                })
+
+        # ------------------------------------------------------------
+        # Build role statistics for each API-Football player name.
+        # ------------------------------------------------------------
+
+        historical_by_name = {}
+
+        for record in player_records:
+
+            name = normalize_name(
+                record["player_name"]
             )
-            return
+
+            if not name:
+                continue
+
+            historical_by_name.setdefault(
+                name,
+                {
+                    "minutes": 0,
+                    "matches": 0,
+                    "starts": 0,
+                    "display_name": record["player_name"],
+                }
+            )
+
+            historical_by_name[name]["minutes"] += (
+                record["minutes"]
+            )
+
+            historical_by_name[name]["matches"] += 1
+
+            # Treat 60+ minutes as a start.
+            if record["minutes"] >= 60:
+                historical_by_name[name]["starts"] += 1
+
+        # ------------------------------------------------------------
+        # Match FPL players to API-Football names.
+        # ------------------------------------------------------------
+
+        matched = 0
 
         for pid, p in promoted_players:
-            player_name = p.get("web_name", "").strip()
 
-            if not player_name:
+            fpl_name = p.get("web_name", "").strip()
+
+            if not fpl_name:
                 continue
 
-            records = historical_players.get(
-                player_name.lower(),
-                []
-            )
+            matched_record = None
 
-            if not records:
+            for api_name, stats in historical_by_name.items():
+
+                if name_matches(fpl_name, api_name):
+                    matched_record = stats
+                    break
+
+            if not matched_record:
                 continue
 
-            matches = len(records)
+            minutes = matched_record["minutes"]
+            matches = matched_record["matches"]
+            starts = matched_record["starts"]
 
-            minutes = sum(
-                int(r.get("minutes", 0) or 0)
-                for r in records
-            )
-
-            if minutes < 450:
+            if minutes < 450 or matches <= 0:
                 continue
-
-            starts = sum(
-                1
-                for r in records
-                if int(r.get("minutes", 0) or 0) >= 60
-            )
 
             avg_minutes = minutes / matches
-            start_rate = starts / matches if matches else 0.0
+            start_rate = starts / matches
 
             p["championship_role"] = {
                 "start_rate": min(start_rate, 1.0),
@@ -224,17 +378,27 @@ class PredictionEngine:
                 "minutes": minutes,
                 "starts": starts,
                 "matches": matches,
-                "season": "2025/2026",
+                "season": "auto",
+                "api_player_name": matched_record["display_name"],
             }
 
+            matched += 1
+
             print(
-                f"[CHAMPIONSHIP] {player_name}: "
+                f"[CHAMPIONSHIP] {fpl_name} "
+                f"<-> {matched_record['display_name']} | "
                 f"{minutes} mins | "
                 f"{matches} apps | "
                 f"starts={starts} | "
                 f"start_rate={start_rate:.2f} | "
                 f"avg_mins={avg_minutes:.1f}"
             )
+
+        print(
+            f"[CHAMPIONSHIP] Matched promoted players: "
+            f"{matched}/{len(promoted_players)}"
+        )
+        print("=" * 70)
 
     def _build_previous_season_priors(self) -> dict:
         """
@@ -305,19 +469,6 @@ class PredictionEngine:
                     # get_last_season_rates currently does not return games. Use 38 only as a fallback for role-rate calculation.
                     p["previous_games"] = int(rates.get("games", 38) or 38) 
                     p["_previous_season_name"] = rates.get("season_name", "")
-                    if p.get("web_name") in DEBUG_PLAYERS:
-                        print(
-                            "========== PRIOR SEASON ==========",
-                            {
-                                "name": p.get("web_name"),
-                                "season": rates.get("season_name"),
-                                "minutes": rates.get("minutes"),
-                                "starts": rates.get("starts"),
-                                "xg_per90": rates.get("xg_per90"),
-                                "xa_per90": rates.get("xa_per90"),
-                                "bonus_per_start": rates.get("bonus_per_start"),
-                            }
-                        )
                 else: 
                     p["previous_minutes"] = 0 
                     p["previous_starts"] = 0 
