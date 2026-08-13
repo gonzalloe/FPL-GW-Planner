@@ -1212,42 +1212,6 @@ class PredictionEngine:
         else:
             dgw_both_prob = None
             dgw_effective = 1.0
-
-        DEBUG_PLAYERS = {
-            "Kinsky",
-            "Muharemović",
-            "Verbruggen",
-            "Meslier",
-            "Groß",
-            "Gvardiol",
-            "Furlong",
-            "Rogers",
-            "Woolfenden",
-            "O'Shea"
-        }
-
-        if p.get("web_name") in DEBUG_PLAYERS:
-            print("\n========== MINUTES MODEL DEBUG ==========")
-            print({
-                "name": p.get("web_name"),
-                "current_gw": self.current_gw,
-                "gws_played": gws_played,
-                "current_minutes": total_minutes,
-                "starts": starts,
-                "season_avg_mins": round(season_avg_mins, 2),
-                "season_start_rate": round(season_start_rate, 3),
-                "recent_start_rate": p.get("_recent_start_rate"),
-                "recent_avg_mins": p.get("_recent_avg_mins"),
-                "start_rate": round(start_rate, 3),
-                "avg_mins": round(avg_mins, 2),
-                "availability": round(availability, 3),
-                "p_start": round(p_start, 3),
-                "p_plays_60": round(p_plays_60, 3),
-                "rotation_risk": round(rotation_risk, 3),
-                "xmins": round(xmins, 1),
-                "teammates_out": teammates_out,
-                "out_minutes": out_minutes,
-            })
         
         return {
             "p_start": round(p_start, 3),
