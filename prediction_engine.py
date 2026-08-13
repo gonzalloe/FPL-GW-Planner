@@ -271,7 +271,6 @@ class PredictionEngine:
                 if fpl_tid is not None:
                     api_to_fpl_team[api_tid] = fpl_tid
 
-        print(f"[CHAMPIONSHIP DEBUG] API->FPL team ID mappings built: {len(api_to_fpl_team)}")
         for api_tid, fpl_tid in list(api_to_fpl_team.items())[:10]:
             print(f"  api_team_id={api_tid} -> fpl_team_id={fpl_tid}")
 
@@ -378,17 +377,6 @@ class PredictionEngine:
                 continue
             player_records.extend(find_player_records(event))
 
-        print(f"[CHAMPIONSHIP DEBUG] Extracted player records: {len(player_records)}")
-        if player_records:
-            print("[CHAMPIONSHIP DEBUG] Sample records:")
-            for record in player_records[:10]:
-                print(record)
-
-        records_with_team = sum(1 for r in player_records if r.get("team_id") is not None)
-        print(f"[CHAMPIONSHIP DEBUG] Records with team_id: {records_with_team}/{len(player_records)}")
-        if player_records and records_with_team == 0:
-            print("[CHAMPIONSHIP WARNING] No team IDs could be derived from historical player records.")
-
         # ============================================================
         # BUILD HISTORICAL ROLE STATS
         # Key = (normalized player name, FPL team_id) — translate the
@@ -427,12 +415,6 @@ class PredictionEngine:
                 stats["starts"] += 1
             elif started is None and minutes >= 60:
                 stats["starts"] += 1
-
-        print(f"[CHAMPIONSHIP DEBUG] Historical player/team records: {len(historical_by_player)}")
-        print("[CHAMPIONSHIP DEBUG] Sample API names:")
-        for key in list(historical_by_player.keys())[:20]:
-            api_name, mapped_team_id = key
-            print(f"  {api_name} | fpl_team_id={mapped_team_id}")
 
         # ============================================================
         # MATCH FPL PLAYERS
@@ -507,8 +489,6 @@ class PredictionEngine:
             matched += 1
 
         print(f"[CHAMPIONSHIP] Matched promoted players: {matched}/{len(promoted_players)}")
-        print(f"[CHAMPIONSHIP DEBUG] Name matches without team_id: {name_matches_without_team}")
-        print(f"[CHAMPIONSHIP DEBUG] Names found but wrong/mismatched team: {name_matches_with_wrong_team}")
         print("=" * 70)
 
     def _build_previous_season_priors(self) -> dict:
