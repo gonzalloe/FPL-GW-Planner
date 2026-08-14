@@ -174,7 +174,6 @@ class SeasonChipPlanner:
 
     def _score_bb(self, gw, meta, predictions, gw_info, current_squad_ids=None):
         """Score Bench Boost for a GW. Best in large DGWs with strong bench."""
-        baseline_predictions = baseline_predictions or []
         score = 0
         reasons = []
         details = {}
@@ -308,92 +307,6 @@ class SeasonChipPlanner:
 
         return score, " · ".join(reasons), details
 
-        # ------------------------------------------------------------
-        # 2. Normal GW: use baseline player quality + this GW fixtures
-        # ------------------------------------------------------------
-
-        candidates = baseline_predictions
-
-        if current_squad_ids:
-            candidates = [
-                baseline_by_id[pid]
-                for pid in current_squad_ids
-                if pid in baseline_by_id
-            ]
-
-        if not candidates:
-            reasons.append("No baseline captain data")
-            return 0, " · ".join(reasons), details
-
-        # Evaluate the baseline captain candidates against this GW's
-        # fixture difficulty.
-        best = None
-        best_adjusted_xp = -1
-
-        for player in candidates:
-            pid = player["player_id"]
-
-            ease = self._lightweight_fixture_ease(
-                gw,
-                [pid]
-            )
-
-            base_xp = player.get("predicted_points", 0.0)
-
-            # Convert fixture signal into a modest adjustment.
-            # +2 FDR signal ~= +10%; -2 ~= -10%.
-            fixture_multiplier = 1.0 + (ease * 0.05)
-
-            adjusted_xp = base_xp * fixture_multiplier
-
-            if adjusted_xp > best_adjusted_xp:
-                best_adjusted_xp = adjusted_xp
-                best = player
-
-        if best is None:
-            return 0, "No captain candidate", details
-
-        details["best_captain"] = best["name"]
-        details["captain_xpts"] = round(best_adjusted_xp, 1)
-
-        # Normal-GW TC should be possible, but substantially less attractive
-        # than a genuine DGW premium captain.
-        if best_adjusted_xp >= 15:
-            score += 20
-            reasons.append(
-                f"{best['name']} ~{best_adjusted_xp:.1f} xPts"
-            )
-        elif best_adjusted_xp >= 12:
-            score += 12
-            reasons.append(
-                f"{best['name']} ~{best_adjusted_xp:.1f} xPts"
-            )
-        elif best_adjusted_xp >= 10:
-            score += 8
-            reasons.append(
-                f"{best['name']} ~{best_adjusted_xp:.1f} xPts"
-            )
-        else:
-            score += 5
-            reasons.append(
-                f"{best['name']} ~{best_adjusted_xp:.1f} xPts"
-            )
-
-        ease = self._lightweight_fixture_ease(
-            gw,
-            [best["player_id"]]
-        )
-
-        if ease > 0:
-            reasons.append(
-                f"Good fixture ({ease:+.1f})"
-            )
-        elif ease < 0:
-            reasons.append(
-                f"Difficult fixture ({ease:+.1f})"
-            )
-
-        return score, " · ".join(reasons), details
 
     def _score_fh(self, gw, meta, predictions, current_squad_ids):
         """Score Free Hit for a GW. Best for BGWs or one-off DGWs."""
