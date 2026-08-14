@@ -23,15 +23,13 @@ class SeasonChipPlanner:
         self.fixtures = self.engine.fixtures
         self.teams = self.engine.teams
         self.next_gw = self.engine.next_gw
-        self._cache = {}
 
     def _get_gw_predictions(self, gw):
-        if gw not in self._cache:
-            self._cache[gw] = {
-                "predictions": self.engine.predict_all(gw),
-                "gw_info": self.engine.get_gw_info(gw),
-            }
-        return self._cache[gw]
+        data = {
+            "predictions": self.engine.predict_all(gw),
+            "gw_info": self.engine.get_gw_info(gw),
+        }
+        return data
 
     def _lightweight_fixture_ease(self, gw, player_ids):
         if not player_ids:
@@ -72,20 +70,6 @@ class SeasonChipPlanner:
         max_gw = 38
         remaining_gws = list(range(self.next_gw, max_gw + 1))
 
-        # Build one baseline prediction set.
-        # This gives us player quality/xPts without running the expensive
-        # prediction engine for every ordinary GW.
-        try:
-            baseline_data = self._get_gw_predictions(self.next_gw)
-            baseline_predictions = baseline_data["predictions"]
-        except Exception:
-            baseline_predictions = []
-
-        baseline_by_id = {
-            p["player_id"]: p
-            for p in baseline_predictions
-        }
-
         # Build GW metadata for all remaining weeks
         gw_meta = {}
         for gw in remaining_gws:
@@ -111,9 +95,6 @@ class SeasonChipPlanner:
         for gw in remaining_gws:
             meta = gw_meta[gw]
 
-            # Use the full prediction engine only for DGW/BGW weeks.
-            # Ordinary GWs use the baseline player projections plus cheap
-            # fixture-based adjustments.
             detailed = meta["is_dgw"] or meta["is_bgw"]
             if detailed:
                 try:
@@ -128,7 +109,7 @@ class SeasonChipPlanner:
                 gw_info = meta
 
             for chip in chips_available:
-                score_data = self._score_chip_for_gw(chip, gw, meta, predictions, gw_info, current_squad_ids, bank, baseline_predictions)
+                score_data = self._score_chip_for_gw(chip, gw, meta, predictions, gw_info, current_squad_ids, bank)
                 chip_scores[chip].append(score_data)
 
         # Find best GW for each chip
@@ -159,14 +140,14 @@ class SeasonChipPlanner:
         }
 
     def _score_chip_for_gw(self, chip, gw, meta, predictions, gw_info,
-                           current_squad_ids, bank, baseline_predictions):
+                           current_squad_ids, bank):
         """Score a specific chip for a specific GW."""
         score = 0
         reason = ""
         details = {}
 
         if chip == "BB":
-            score, reason, details = self._score_bb(gw, meta, predictions, gw_info, current_squad_ids, baseline_predictions)
+            score, reason, details = self._score_bb(gw, meta, predictions, gw_info, current_squad_ids)
         elif chip == "TC":
             score, reason, details = self._score_tc(gw, meta, predictions, current_squad_ids)
         elif chip == "FH":
@@ -191,7 +172,7 @@ class SeasonChipPlanner:
             **details,
         }
 
-    def _score_bb(self, gw, meta, predictions, gw_info, current_squad_ids=None, baseline_predictions=None):
+    def _score_bb(self, gw, meta, predictions, gw_info, current_squad_ids=None):
         """Score Bench Boost for a GW. Best in large DGWs with strong bench."""
         baseline_predictions = baseline_predictions or []
         score = 0
@@ -235,45 +216,8 @@ class SeasonChipPlanner:
                     score += 20
                     reasons.append(f"{bench_dgw}/4 bench have DGW")
         else:
-            # Normal GW: BB value comes from the actual four bench players
-            # and their fixture quality.
-            if current_squad_ids:
-                pred_map = {
-                    p["player_id"]: p
-                    for p in baseline_predictions
-                }
-
-                squad_preds = [
-                    pred_map[pid]
-                    for pid in current_squad_ids
-                    if pid in pred_map
-                ]
-
-                squad_preds.sort(
-                    key=lambda p: p["predicted_points"],
-                    reverse=True
-                )
-
-                bench_preds = squad_preds[11:] if len(squad_preds) > 11 else []
-                bench_ids = [p["player_id"] for p in bench_preds]
-
-            else:
-                # No user squad: use the baseline projected squad.
-                baseline_squad = baseline_predictions[:15]
-                bench_ids = [
-                    p["player_id"]
-                    for p in baseline_squad[11:]
-                ]
-
-            ease = self._lightweight_fixture_ease(gw, bench_ids)
-
-            # Keep normal-GW BB relatively low.
-            # DGW logic above remains the dominant BB signal.
-            score += max(0, min(20, 10 + ease * 3))
-
-            reasons.append(
-                f"No DGW — bench fixture ease {ease:+.1f}"
-            )
+            score += 5
+            reasons.append("No DGW — BB less effective")
 
         if meta["total_fixtures"] >= 12:
             score += 10
@@ -357,6 +301,12 @@ class SeasonChipPlanner:
                 )
 
             return score, " · ".join(reasons), details
+        
+        # Normal GW — no detailed prediction data
+        score += 5
+        reasons.append("Standard GW")
+
+        return score, " · ".join(reasons), details
 
         # ------------------------------------------------------------
         # 2. Normal GW: use baseline player quality + this GW fixtures
