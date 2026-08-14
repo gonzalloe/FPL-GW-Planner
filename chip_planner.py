@@ -18,6 +18,11 @@ class SeasonChipPlanner:
         self.fixtures = engine.fixtures
         self.teams = engine.teams
         self.next_gw = engine.next_gw
+        self._baseline_predictions = getattr(
+            engine,
+            "_baseline_predictions",
+            []
+        )
 
     def _lightweight_fixture_ease(self, gw, player_ids):
         if not player_ids:

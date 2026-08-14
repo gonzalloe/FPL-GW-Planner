@@ -92,6 +92,23 @@ else:
         def exempt(self, f): return f
     limiter = _NoopLimiter()
 
+_prediction_engine = None
+def _get_prediction_engine():
+    global _prediction_engine
+
+    if _prediction_engine is None:
+        import time as _t
+        from prediction_engine import PredictionEngine
+
+        t0 = _t.time()
+        _prediction_engine = PredictionEngine()
+        print(
+            f"  [TIMING] PredictionEngine init: "
+            f"{_t.time() - t0:.1f}s"
+        )
+
+    return _prediction_engine
+
 def upload_prediction_cache(data):
     if not supabase:
         print("[CACHE] Supabase disabled")
@@ -269,12 +286,10 @@ except Exception as _e:
 
 def _run_predictions(gw=None):
     import time as _t
-    from prediction_engine import PredictionEngine
     from squad_optimizer import SquadOptimizer, ChipAdvisor
 
+    engine = _get_prediction_engine()
     t0 = _t.time()
-    engine = PredictionEngine()
-    print(f"  [TIMING] PredictionEngine init: {_t.time()-t0:.1f}s")
 
     target_gw = gw or engine.next_gw
     gw_info = engine.get_gw_info(target_gw)
@@ -282,6 +297,7 @@ def _run_predictions(gw=None):
     t1 = _t.time()
     predictions = engine.predict_all(target_gw)
     print(f"  [TIMING] predict_all: {_t.time()-t1:.1f}s")
+    engine._baseline_predictions = predictions
 
     t2 = _t.time()
     optimizer = SquadOptimizer(predictions)
@@ -1575,8 +1591,8 @@ def api_squad_predictions():
         if cached and cached.get("gameweek") == gw:
             pred_map = {p["player_id"]: p for p in preds}
         else:
-            from prediction_engine import PredictionEngine
-            pred_map = {p["player_id"]: p for p in PredictionEngine().predict_all(gw)}
+            engine = _get_prediction_engine()
+            pred_map = {p["player_id"]: p for p in engine.predict_all(gw)}
         results = []
         for pid in player_ids:
             pred = pred_map.get(pid)
@@ -1596,50 +1612,144 @@ def api_simulate_transfer():
     try:
         data = request.get_json(silent=True) or {}
         squad_ids = data.get("squad_ids", [])
-        out_id, in_id, target_gw = data.get("out_id"), data.get("in_id"), data.get("gw")
+        out_id = data.get("out_id")
+        in_id = data.get("in_id")
+        target_gw = data.get("gw")
+
         if not squad_ids or not out_id or not in_id:
-            return jsonify({"error": "Missing squad_ids, out_id, or in_id"}), 400
+            return jsonify({
+                "error": "Missing squad_ids, out_id, or in_id"
+            }), 400
+
+        engine = _get_prediction_engine()
         preds, _, _ = _cached_predictions()
         if preds:
-            pred_map = {p["player_id"]: p for p in preds}
+            pred_map = {
+                p["player_id"]: p
+                for p in preds
+            }
         else:
-            from prediction_engine import PredictionEngine
-            pred_map = {p["player_id"]: p for p in PredictionEngine().predict_all(target_gw)}
-        out_p, in_p = pred_map.get(out_id, {}), pred_map.get(in_id, {})
-        cur = sorted([pred_map.get(pid, {}) for pid in squad_ids], key=lambda x: x.get("predicted_points",0), reverse=True)[:11]
-        cur_xpts = sum(p.get("predicted_points",0) for p in cur)
-        new_ids = [pid for pid in squad_ids if pid != out_id] + [in_id]
-        new = sorted([pred_map.get(pid, {}) for pid in new_ids], key=lambda x: x.get("predicted_points",0), reverse=True)[:11]
-        new_xpts = sum(p.get("predicted_points",0) for p in new)
-        from prediction_engine import PredictionEngine
-        engine = PredictionEngine()
+            predictions = engine.predict_all(target_gw)
+            pred_map = {
+                p["player_id"]: p
+                for p in predictions
+            }
+
+        out_p = pred_map.get(out_id, {})
+        in_p = pred_map.get(in_id, {})
+
+        cur = sorted(
+            [pred_map.get(pid, {}) for pid in squad_ids],
+            key=lambda x: x.get("predicted_points", 0),
+            reverse=True
+        )[:11]
+
+        cur_xpts = sum(
+            p.get("predicted_points", 0)
+            for p in cur
+        )
+
+        new_ids = [
+            pid for pid in squad_ids
+            if pid != out_id
+        ] + [in_id]
+
+        new = sorted(
+            [pred_map.get(pid, {}) for pid in new_ids],
+            key=lambda x: x.get("predicted_points", 0),
+            reverse=True
+        )[:11]
+
+        new_xpts = sum(
+            p.get("predicted_points", 0)
+            for p in new
+        )
+
         gw = target_gw or engine.next_gw
+
         multi_gw = []
-        for fgw in range(gw, min(gw+4, 39)):
+
+        for fgw in range(gw, min(gw + 4, 39)):
             if fgw == gw:
-                inf, outf = in_p.get("predicted_points",0), out_p.get("predicted_points",0)
+                inf = in_p.get("predicted_points", 0)
+                outf = out_p.get("predicted_points", 0)
             else:
-                inf = engine.predict_player(in_id, fgw).get("predicted_points",0)
-                outf = engine.predict_player(out_id, fgw).get("predicted_points",0)
-            multi_gw.append({"gw":fgw,"in_xpts":round(inf,2),"out_xpts":round(outf,2),"gain":round(inf-outf,2)})
+                inf = engine.predict_player(
+                    in_id, fgw
+                ).get("predicted_points", 0)
+
+                outf = engine.predict_player(
+                    out_id, fgw
+                ).get("predicted_points", 0)
+
+            multi_gw.append({
+                "gw": fgw,
+                "in_xpts": round(inf, 2),
+                "out_xpts": round(outf, 2),
+                "gain": round(inf - outf, 2),
+            })
+
         return jsonify({
             "gameweek": gw,
-            "out_player": {"player_id":out_id,"name":out_p.get("name","?"),"team":out_p.get("team","?"),
-                           "position":out_p.get("position","?"),"price":out_p.get("price",0),
-                           "predicted_points":out_p.get("predicted_points",0),"fixtures":out_p.get("fixtures",[])},
-            "in_player": {"player_id":in_id,"name":in_p.get("name","?"),"team":in_p.get("team","?"),
-                          "position":in_p.get("position","?"),"price":in_p.get("price",0),
-                          "predicted_points":in_p.get("predicted_points",0),"fixtures":in_p.get("fixtures",[]),
-                          "is_dgw":in_p.get("is_dgw",False),"starter_quality":in_p.get("starter_quality",{}),"form":in_p.get("form",0)},
-            "impact": {"this_gw_gain":round(in_p.get("predicted_points",0)-out_p.get("predicted_points",0),2),
-                       "xi_xpts_before":round(cur_xpts,1),"xi_xpts_after":round(new_xpts,1),
-                       "xi_gain":round(new_xpts-cur_xpts,1),
-                       "price_delta":round(in_p.get("price",0)-out_p.get("price",0),1)},
-            "multi_gw": multi_gw, "total_multi_gw_gain": round(sum(g["gain"] for g in multi_gw), 2),
+
+            "out_player": {
+                "player_id": out_id,
+                "name": out_p.get("name", "?"),
+                "team": out_p.get("team", "?"),
+                "position": out_p.get("position", "?"),
+                "price": out_p.get("price", 0),
+                "predicted_points": out_p.get(
+                    "predicted_points", 0
+                ),
+                "fixtures": out_p.get("fixtures", []),
+            },
+
+            "in_player": {
+                "player_id": in_id,
+                "name": in_p.get("name", "?"),
+                "team": in_p.get("team", "?"),
+                "position": in_p.get("position", "?"),
+                "price": in_p.get("price", 0),
+                "predicted_points": in_p.get(
+                    "predicted_points", 0
+                ),
+                "fixtures": in_p.get("fixtures", []),
+                "is_dgw": in_p.get("is_dgw", False),
+                "starter_quality": in_p.get(
+                    "starter_quality", {}
+                ),
+                "form": in_p.get("form", 0),
+            },
+
+            "impact": {
+                "this_gw_gain": round(
+                    in_p.get("predicted_points", 0)
+                    - out_p.get("predicted_points", 0),
+                    2
+                ),
+                "xi_xpts_before": round(cur_xpts, 1),
+                "xi_xpts_after": round(new_xpts, 1),
+                "xi_gain": round(new_xpts - cur_xpts, 1),
+                "price_delta": round(
+                    in_p.get("price", 0)
+                    - out_p.get("price", 0),
+                    1
+                ),
+            },
+
+            "multi_gw": multi_gw,
+            "total_multi_gw_gain": round(
+                sum(g["gain"] for g in multi_gw),
+                2
+            ),
         })
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({"error": "Internal server error"}), 500
+
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "error": "Internal server error"
+        }), 500
 
 @app.route("/api/season-chips")
 def api_season_chips():
@@ -1672,6 +1782,7 @@ def api_season_chips():
                         if h == current_half: used.add(code)
                     chips_available = [c for c in ["BB","TC","FH","WC"] if c not in used]
             except: pass
+        engine = _get_prediction_engine()    
         result = SeasonChipPlanner(engine).analyze_season(chips_available=chips_available, current_squad_ids=squad_ids, bank=bank)
         # temp debug print
         print(f"[CHIP] squad_ids count: {len(squad_ids) if squad_ids else 0}")
