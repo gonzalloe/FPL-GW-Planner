@@ -106,8 +106,8 @@ def _get_prediction_engine():
             f"  [TIMING] PredictionEngine init: "
             f"{_t.time() - t0:.1f}s"
         )
-
     return _prediction_engine
+
 
 def upload_prediction_cache(data):
     if not supabase:
@@ -286,10 +286,19 @@ except Exception as _e:
 
 def _run_predictions(gw=None):
     import time as _t
+    from prediction_engine import PredictionEngine
     from squad_optimizer import SquadOptimizer, ChipAdvisor
 
-    engine = _get_prediction_engine()
+    global _prediction_engine
+
     t0 = _t.time()
+    _prediction_engine = PredictionEngine()
+    engine = _prediction_engine
+
+    print(
+        f"  [TIMING] PredictionEngine init: "
+        f"{_t.time() - t0:.1f}s"
+    )
 
     target_gw = gw or engine.next_gw
     gw_info = engine.get_gw_info(target_gw)
@@ -1756,10 +1765,17 @@ def api_season_chips():
     try:
         from chip_planner import SeasonChipPlanner
         settings = _load_settings()
-        squad_ids = None; chips_available = ["BB","TC","FH","WC"]; chips_used_list = []; bank = 0.0
+        squad_ids = None
+        chips_available = ["BB","TC","FH","WC"]
+        chips_used_list = []
+        bank = 0.0
         HALF_CUTOFF = 20; current_half = 2
         cmap = {"bboost":"BB","3xc":"TC","freehit":"FH","wildcard":"WC"}
-        if settings.get("team_id"):
+        team_id = settings.get("team_id")
+        # temp debug print 
+        print(f"[CHIP] settings team_id = {team_id}")
+
+        if team_id:
             try:
                 from my_team import fetch_my_team
                 from data_fetcher import get_current_gameweek
@@ -1781,7 +1797,10 @@ def api_season_chips():
                         h = 2 if c.get("event",0) >= HALF_CUTOFF else 1
                         if h == current_half: used.add(code)
                     chips_available = [c for c in ["BB","TC","FH","WC"] if c not in used]
-            except: pass
+            except Exception as e:
+                import traceback
+                print("[CHIP] ERROR loading team:")
+                traceback.print_exc()
         engine = _get_prediction_engine()    
         result = SeasonChipPlanner(engine).analyze_season(chips_available=chips_available, current_squad_ids=squad_ids, bank=bank)
         # temp debug print

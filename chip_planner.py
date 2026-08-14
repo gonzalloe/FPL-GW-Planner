@@ -3,8 +3,6 @@ FPL Predictor - Season-Wide Chip Planner
 Scans all remaining GWs to find the best gameweek for each chip.
 """
 from data_fetcher import (get_dgw_teams, get_bgw_teams, get_fixtures_for_gameweek, get_player_fixtures)
-from squad_optimizer import SquadOptimizer
-
 
 class SeasonChipPlanner:
     """
@@ -210,23 +208,108 @@ class SeasonChipPlanner:
         }
 
     def _score_bb(self, gw, meta, predictions, gw_info, current_squad_ids=None):
-        """Score Bench Boost for a GW. Best in large DGWs with strong bench."""
+        """Score Bench Boost for a GW."""
         score = 0
         reasons = []
         details = {}
 
-        # DGW is crucial for BB
+        # ------------------------------------------------------------
+        # DGW strength
+        # ------------------------------------------------------------
         if meta["is_dgw"]:
             dgw_count = meta["dgw_team_count"]
+
             score += min(40, dgw_count * 7)
             reasons.append(f"{dgw_count} DGW teams")
             details["dgw_team_count"] = dgw_count
 
+        # ------------------------------------------------------------
+        # Current squad / bench quality
+        # ------------------------------------------------------------
+        baseline = getattr(
+            self.engine,
+            "_baseline_predictions",
+            []
+        )
+
+        if current_squad_ids and baseline:
+            pred_map = {
+                p["player_id"]: p
+                for p in baseline
+            }
+
+            squad_preds = [
+                pred_map[pid]
+                for pid in current_squad_ids
+                if pid in pred_map
+            ]
+
+            squad_preds.sort(
+                key=lambda p: p.get("predicted_points", 0),
+                reverse=True
+            )
+
+            # FPL squad = 15 players.
+            # Approximation: top 11 = starters, remaining 4 = bench.
+            bench_preds = squad_preds[11:15]
+
+            bench_xpts = sum(
+                p.get("predicted_points", 0)
+                for p in bench_preds
+            )
+
+            bench_dgw = sum(
+                1
+                for p in bench_preds
+                if p.get("is_dgw")
+            )
+
+            details["bench_xpts"] = round(bench_xpts, 1)
+            details["bench_dgw_count"] = bench_dgw
+
+            if bench_xpts >= 20:
+                score += 30
+                reasons.append(
+                    f"Strong bench ({bench_xpts:.1f} xPts)"
+                )
+            elif bench_xpts >= 15:
+                score += 20
+                reasons.append(
+                    f"Good bench ({bench_xpts:.1f} xPts)"
+                )
+            elif bench_xpts >= 10:
+                score += 10
+                reasons.append(
+                    f"Decent bench ({bench_xpts:.1f} xPts)"
+                )
+
+            if bench_dgw >= 3:
+                score += 20
+                reasons.append(
+                    f"{bench_dgw}/4 bench have DGW"
+                )
+            elif bench_dgw >= 2:
+                score += 10
+                reasons.append(
+                    f"{bench_dgw}/4 bench have DGW"
+                )
+
+        elif not current_squad_ids:
+            reasons.append("No current squad")
+
+        elif not baseline:
+            reasons.append("No baseline predictions")
+
+        # ------------------------------------------------------------
+        # Large fixture count
+        # ------------------------------------------------------------
         if meta["total_fixtures"] >= 12:
             score += 10
-            reasons.append(f"{meta['total_fixtures']} fixtures")
-
+            reasons.append(
+                f"{meta['total_fixtures']} fixtures"
+            )
         return score, " · ".join(reasons), details
+
 
     def _score_tc(self, gw, meta, predictions, current_squad_ids=None):
         """Score Triple Captain for a GW."""
@@ -265,7 +348,7 @@ class SeasonChipPlanner:
         # IMPORTANT:
         # Do not call predict_all() here. Only use predictions if they were already supplied/cached.
         candidates = getattr(
-            self,
+            self.engine,
             "_baseline_predictions",
             []
         )
