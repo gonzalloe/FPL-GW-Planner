@@ -1,13 +1,36 @@
 """
 FPL Predictor - Season-Wide Chip Planner
 Scans all remaining GWs to find the best gameweek for each chip.
+
+Preseason behavior:
+- FPL account/team info may exist before GW1.
+- Current squad picks are not available before the first deadline.
+- Chip scores are therefore NOT calculated preseason.
+- Scores are returned as None rather than misleading 0/5 values.
 """
-from data_fetcher import (get_dgw_teams, get_bgw_teams, get_fixtures_for_gameweek, get_player_fixtures)
+
+from data_fetcher import (
+    get_dgw_teams,
+    get_bgw_teams,
+    get_fixtures_for_gameweek,
+    get_player_fixtures,
+)
+
 
 class SeasonChipPlanner:
     """
     Analyzes ALL remaining GWs to find the optimal deployment for each chip.
-    Considers DGWs, BGWs, fixture swings, and squad composition.
+
+    Considers:
+    - DGWs
+    - BGWs
+    - fixture swings
+    - current squad composition
+    - bench quality
+    - captain candidates
+
+    Preseason:
+    - Returns score=None until GW1 squad data exists.
     """
 
     def __init__(self, engine):
@@ -16,29 +39,41 @@ class SeasonChipPlanner:
         self.fixtures = engine.fixtures
         self.teams = engine.teams
         self.next_gw = engine.next_gw
+
         self._baseline_predictions = getattr(
             engine,
             "_baseline_predictions",
             []
         )
 
+    # ------------------------------------------------------------------
+    # Fixture helper
+    # ------------------------------------------------------------------
+
     def _lightweight_fixture_ease(self, gw, player_ids):
         if not player_ids:
             return 0.0
+
         total = 0.0
         count = 0
+
         for pid in player_ids:
             player = self.engine.players.get(pid)
+
             if not player:
                 continue
+
             team_id = player.get("team")
+
             if not team_id:
                 continue
+
             fixtures = get_player_fixtures(
                 team_id,
                 gw,
                 self.fixtures
             )
+
             for fixture in fixtures:
                 fdr = fixture.get("fdr", 3)
 
@@ -50,35 +85,78 @@ class SeasonChipPlanner:
 
         return total / count if count else 0.0
 
-    def analyze_season(self, chips_available=None, current_squad_ids=None, bank=0.0):
-        """
-        Scan all remaining GWs and score each chip for every GW.
+    # ------------------------------------------------------------------
+    # Main analysis
+    # ------------------------------------------------------------------
 
-        Performance strategy:
-        - Run predict_all() ONCE for baseline player projections.
-        - Run predict_all() only for genuine DGWs.
-        - Normal GWs use lightweight fixture adjustments.
-        - BGWs do not need full prediction generation.
+    def analyze_season(
+        self,
+        chips_available=None,
+        current_squad_ids=None,
+        bank=0.0,
+    ):
         """
-        print(
-            f"[CHIP] Analyze season: GW{self.next_gw}-38 | "
-            f"squad={len(current_squad_ids) if current_squad_ids else 0}"
-        )
+        Scan all remaining GWs and score each chip.
+
+        Preseason:
+            If this is GW1 and no current squad exists, chip scores are
+            unavailable and returned as None.
+
+        Normal season:
+            Scores are calculated normally.
+        """
+
         if chips_available is None:
             chips_available = ["BB", "TC", "FH", "WC"]
 
         max_gw = 38
-        remaining_gws = list(range(self.next_gw, max_gw + 1))
+        remaining_gws = list(
+            range(self.next_gw, max_gw + 1)
+        )
+
+        # ------------------------------------------------------------
+        # IMPORTANT:
+        # Only classify as preseason when we are actually at GW1.
+        #
+        # Do NOT use simply:
+        #     not current_squad_ids
+        #
+        # because a temporary API failure during GW20 should not
+        # suddenly become "preseason".
+        # ------------------------------------------------------------
+        preseason = (
+            self.next_gw == 1
+            and not current_squad_ids
+        )
+
+        print(
+            f"[CHIP] Analyze season: GW{self.next_gw}-38 | "
+            f"squad={len(current_squad_ids) if current_squad_ids else 0} | "
+            f"preseason={preseason}"
+        )
 
         # ------------------------------------------------------------
         # Build GW metadata
         # ------------------------------------------------------------
+
         gw_meta = {}
 
         for gw in remaining_gws:
-            fixes = get_fixtures_for_gameweek(gw, self.fixtures)
-            dgw = get_dgw_teams(gw, self.fixtures)
-            bgw = get_bgw_teams(gw, self.fixtures, self.bootstrap)
+            fixes = get_fixtures_for_gameweek(
+                gw,
+                self.fixtures
+            )
+
+            dgw = get_dgw_teams(
+                gw,
+                self.fixtures
+            )
+
+            bgw = get_bgw_teams(
+                gw,
+                self.fixtures,
+                self.bootstrap
+            )
 
             gw_meta[gw] = {
                 "gameweek": gw,
@@ -86,29 +164,121 @@ class SeasonChipPlanner:
 
                 "is_dgw": len(dgw) > 0,
                 "dgw_team_count": len(dgw),
+
                 "dgw_teams": {
-                    tid: self.teams.get(tid, {}).get("short_name", "?")
+                    tid: self.teams.get(
+                        tid,
+                        {}
+                    ).get(
+                        "short_name",
+                        "?"
+                    )
                     for tid in dgw
                 },
 
                 "is_bgw": len(bgw) > 0,
                 "bgw_team_count": len(bgw),
+
                 "bgw_teams": {
-                    tid: self.teams.get(tid, {}).get("short_name", "?")
+                    tid: self.teams.get(
+                        tid,
+                        {}
+                    ).get(
+                        "short_name",
+                        "?"
+                    )
                     for tid in bgw
                 },
             }
 
         # ------------------------------------------------------------
+        # PRESEASON
+        # ------------------------------------------------------------
+        #
+        # Do not run the normal scoring engine.
+        #
+        # 0 = genuinely scored zero
+        # 5 = genuinely weak score
+        # None = cannot evaluate yet
+        #
+        # This is the correct semantic meaning before GW1.
+        # ------------------------------------------------------------
+
+        if preseason:
+            chip_scores = {
+                chip: [
+                    {
+                        "gameweek": gw,
+                        "score": None,
+                        "reason": (
+                            "Preseason — current squad "
+                            "data unavailable"
+                        ),
+                        "is_dgw": gw_meta[gw]["is_dgw"],
+                        "is_bgw": gw_meta[gw]["is_bgw"],
+                        "dgw_teams": gw_meta[gw][
+                            "dgw_team_count"
+                        ],
+                        "fixtures": gw_meta[gw][
+                            "total_fixtures"
+                        ],
+                        "score_available": False,
+                        "reason_code": "PRESEASON",
+                    }
+                    for gw in remaining_gws
+                ]
+                for chip in chips_available
+            }
+
+            return {
+                "from_gw": self.next_gw,
+                "to_gw": max_gw,
+                "remaining_gws": len(remaining_gws),
+
+                "gw_metadata": gw_meta,
+
+                "chip_analysis": {
+                    chip: {
+                        "best_gw": None,
+                        "best_score": None,
+                        "best_reason": (
+                            "Preseason — waiting for "
+                            "GW1 squad data"
+                        ),
+                        "top_3": [],
+                        "all_scores": chip_scores[chip],
+                        "score_available": False,
+                        "reason_code": "PRESEASON",
+                    }
+                    for chip in chips_available
+                },
+
+                "recommended_sequence": [],
+
+                "chips_available": chips_available,
+
+                # Explicit UI state.
+                "preseason": True,
+                "squad_data_available": False,
+                "score_status": "unavailable",
+                "score_status_reason": (
+                    "Chip scores will be calculated "
+                    "once GW1 squad data is available."
+                ),
+            }
+
+        # ------------------------------------------------------------
         # Score every chip for every GW
         # ------------------------------------------------------------
+
         chip_scores = {
             chip: []
             for chip in chips_available
         }
 
         for gw in remaining_gws:
-            meta = gw_meta[gw]    
+            meta = gw_meta[gw]
+
             predictions = []
             gw_info = meta
 
@@ -123,11 +293,14 @@ class SeasonChipPlanner:
                     bank,
                 )
 
-                chip_scores[chip].append(score_data)
+                chip_scores[chip].append(
+                    score_data
+                )
 
         # ------------------------------------------------------------
         # Find best GW for each chip
         # ------------------------------------------------------------
+
         best_gws = {}
 
         for chip in chips_available:
@@ -136,13 +309,33 @@ class SeasonChipPlanner:
             if not scores:
                 continue
 
+            # Only numerical scores participate.
+            valid_scores = [
+                x
+                for x in scores
+                if x.get("score") is not None
+            ]
+
+            if not valid_scores:
+                best_gws[chip] = {
+                    "best_gw": None,
+                    "best_score": None,
+                    "best_reason": (
+                        "Chip score unavailable"
+                    ),
+                    "top_3": [],
+                    "all_scores": scores,
+                    "score_available": False,
+                }
+                continue
+
             best = max(
-                scores,
+                valid_scores,
                 key=lambda x: x["score"]
             )
 
             top_3 = sorted(
-                scores,
+                valid_scores,
                 key=lambda x: x["score"],
                 reverse=True
             )[:3]
@@ -153,11 +346,13 @@ class SeasonChipPlanner:
                 "best_reason": best["reason"],
                 "top_3": top_3,
                 "all_scores": scores,
+                "score_available": True,
             }
 
         # ------------------------------------------------------------
         # Build recommended chip sequence
         # ------------------------------------------------------------
+
         sequence = self._build_chip_sequence(
             best_gws,
             chips_available,
@@ -168,47 +363,125 @@ class SeasonChipPlanner:
             "from_gw": self.next_gw,
             "to_gw": max_gw,
             "remaining_gws": len(remaining_gws),
+
             "gw_metadata": gw_meta,
+
             "chip_analysis": best_gws,
+
             "recommended_sequence": sequence,
+
             "chips_available": chips_available,
+
+            "preseason": False,
+            "squad_data_available": bool(
+                current_squad_ids
+            ),
+            "score_status": "available",
+            "score_status_reason": None,
         }
 
-    def _score_chip_for_gw(self, chip, gw, meta, predictions, gw_info,
-                           current_squad_ids, bank):
-        """Score a specific chip for a specific GW."""
+    # ------------------------------------------------------------------
+    # Individual chip scoring
+    # ------------------------------------------------------------------
+
+    def _score_chip_for_gw(
+        self,
+        chip,
+        gw,
+        meta,
+        predictions,
+        gw_info,
+        current_squad_ids,
+        bank,
+    ):
+        """Score one chip for one GW."""
+
         score = 0
         reason = ""
         details = {}
 
         if chip == "BB":
-            score, reason, details = self._score_bb(gw, meta, predictions, gw_info, current_squad_ids)
-        elif chip == "TC":
-            score, reason, details = self._score_tc(gw, meta, predictions, current_squad_ids)
-        elif chip == "FH":
-            score, reason, details = self._score_fh(gw, meta, predictions, current_squad_ids)
-        elif chip == "WC":
-            score, reason, details = self._score_wc(gw, meta, predictions, current_squad_ids)
+            score, reason, details = self._score_bb(
+                gw,
+                meta,
+                predictions,
+                gw_info,
+                current_squad_ids,
+            )
 
-        if chip in ("BB", "TC"):
-            print(
-                f"[CHIP DEBUG] GW{gw} {chip}: "
-                f"{min(100, max(0, score))} | {reason}"
-            )    
+        elif chip == "TC":
+            score, reason, details = self._score_tc(
+                gw,
+                meta,
+                predictions,
+                current_squad_ids,
+            )
+
+        elif chip == "FH":
+            score, reason, details = self._score_fh(
+                gw,
+                meta,
+                predictions,
+                current_squad_ids,
+            )
+
+        elif chip == "WC":
+            score, reason, details = self._score_wc(
+                gw,
+                meta,
+                predictions,
+                current_squad_ids,
+            )
+
+        # ------------------------------------------------------------
+        # Preserve None.
+        #
+        # Never convert unavailable -> 0.
+        # ------------------------------------------------------------
+
+        score_value = (
+            None
+            if score is None
+            else min(
+                100,
+                max(0, score)
+            )
+        )
 
         return {
             "gameweek": gw,
-            "score": min(100, max(0, score)),
+            "score": score_value,
             "reason": reason,
+
             "is_dgw": meta["is_dgw"],
             "is_bgw": meta["is_bgw"],
-            "dgw_teams": meta.get("dgw_team_count", 0),
-            "fixtures": meta["total_fixtures"],
+
+            "dgw_teams": meta.get(
+                "dgw_team_count",
+                0
+            ),
+
+            "fixtures": meta[
+                "total_fixtures"
+            ],
+
             **details,
         }
 
-    def _score_bb(self, gw, meta, predictions, gw_info, current_squad_ids=None):
+    # ------------------------------------------------------------------
+    # Bench Boost
+    # ------------------------------------------------------------------
+
+    def _score_bb(
+        self,
+        gw,
+        meta,
+        predictions,
+        gw_info,
+        current_squad_ids=None,
+    ):
         """Score Bench Boost for a GW."""
+
         score = 0
         reasons = []
         details = {}
@@ -216,16 +489,29 @@ class SeasonChipPlanner:
         # ------------------------------------------------------------
         # DGW strength
         # ------------------------------------------------------------
-        if meta["is_dgw"]:
-            dgw_count = meta["dgw_team_count"]
 
-            score += min(40, dgw_count * 7)
-            reasons.append(f"{dgw_count} DGW teams")
-            details["dgw_team_count"] = dgw_count
+        if meta["is_dgw"]:
+            dgw_count = meta[
+                "dgw_team_count"
+            ]
+
+            score += min(
+                40,
+                dgw_count * 7
+            )
+
+            reasons.append(
+                f"{dgw_count} DGW teams"
+            )
+
+            details[
+                "dgw_team_count"
+            ] = dgw_count
 
         # ------------------------------------------------------------
         # Current squad / bench quality
         # ------------------------------------------------------------
+
         baseline = getattr(
             self.engine,
             "_baseline_predictions",
@@ -233,6 +519,7 @@ class SeasonChipPlanner:
         )
 
         if current_squad_ids and baseline:
+
             pred_map = {
                 p["player_id"]: p
                 for p in baseline
@@ -245,16 +532,23 @@ class SeasonChipPlanner:
             ]
 
             squad_preds.sort(
-                key=lambda p: p.get("predicted_points", 0),
+                key=lambda p: p.get(
+                    "predicted_points",
+                    0
+                ),
                 reverse=True
             )
 
-            # FPL squad = 15 players.
-            # Approximation: top 11 = starters, remaining 4 = bench.
+            # Approximation:
+            # top 11 = starters
+            # remaining 4 = bench
             bench_preds = squad_preds[11:15]
 
             bench_xpts = sum(
-                p.get("predicted_points", 0)
+                p.get(
+                    "predicted_points",
+                    0
+                )
                 for p in bench_preds
             )
 
@@ -264,19 +558,27 @@ class SeasonChipPlanner:
                 if p.get("is_dgw")
             )
 
-            details["bench_xpts"] = round(bench_xpts, 1)
-            details["bench_dgw_count"] = bench_dgw
+            details["bench_xpts"] = round(
+                bench_xpts,
+                1
+            )
+
+            details[
+                "bench_dgw_count"
+            ] = bench_dgw
 
             if bench_xpts >= 20:
                 score += 30
                 reasons.append(
                     f"Strong bench ({bench_xpts:.1f} xPts)"
                 )
+
             elif bench_xpts >= 15:
                 score += 20
                 reasons.append(
                     f"Good bench ({bench_xpts:.1f} xPts)"
                 )
+
             elif bench_xpts >= 10:
                 score += 10
                 reasons.append(
@@ -288,6 +590,7 @@ class SeasonChipPlanner:
                 reasons.append(
                     f"{bench_dgw}/4 bench have DGW"
                 )
+
             elif bench_dgw >= 2:
                 score += 10
                 reasons.append(
@@ -295,36 +598,77 @@ class SeasonChipPlanner:
                 )
 
         elif not current_squad_ids:
-            reasons.append("No current squad")
+
+            # Normally only reachable if squad data unexpectedly
+            # disappears during the season.
+            return (
+                None,
+                "Unavailable — current squad missing",
+                {
+                    "score_available": False,
+                    "reason_code": "NO_SQUAD",
+                },
+            )
 
         elif not baseline:
-            reasons.append("No baseline predictions")
+
+            return (
+                None,
+                "Unavailable — baseline predictions missing",
+                {
+                    "score_available": False,
+                    "reason_code": "NO_BASELINE",
+                },
+            )
 
         # ------------------------------------------------------------
         # Large fixture count
         # ------------------------------------------------------------
+
         if meta["total_fixtures"] >= 12:
             score += 10
+
             reasons.append(
                 f"{meta['total_fixtures']} fixtures"
             )
-        return score, " · ".join(reasons), details
 
+        return (
+            score,
+            " · ".join(reasons),
+            details,
+        )
 
-    def _score_tc(self, gw, meta, predictions, current_squad_ids=None):
+    # ------------------------------------------------------------------
+    # Triple Captain
+    # ------------------------------------------------------------------
+
+    def _score_tc(
+        self,
+        gw,
+        meta,
+        predictions,
+        current_squad_ids=None,
+    ):
         """Score Triple Captain for a GW."""
+
         score = 0
         reasons = []
         details = {}
 
         # ------------------------------------------------------------
         # DGW
-        # No predict_all() here. Use DGW strength only.
         # ------------------------------------------------------------
-        if meta["is_dgw"]:
-            dgw_count = meta["dgw_team_count"]
 
-            score += min(45, dgw_count * 9)
+        if meta["is_dgw"]:
+
+            dgw_count = meta[
+                "dgw_team_count"
+            ]
+
+            score += min(
+                45,
+                dgw_count * 9
+            )
 
             reasons.append(
                 f"DGW: {dgw_count} teams"
@@ -332,21 +676,36 @@ class SeasonChipPlanner:
 
             if dgw_count >= 6:
                 score += 20
-                reasons.append("Large DGW")
+                reasons.append(
+                    "Large DGW"
+                )
+
             elif dgw_count >= 4:
                 score += 10
-                reasons.append("Strong DGW")
+                reasons.append(
+                    "Strong DGW"
+                )
 
-            return score, " · ".join(reasons), details
+            return (
+                score,
+                " · ".join(reasons),
+                details,
+            )
 
         # ------------------------------------------------------------
-        # Normal GW
+        # Normal GW requires squad
         # ------------------------------------------------------------
+
         if not current_squad_ids:
-            return 5, "Standard GW — no squad data", details
+            return (
+                None,
+                "Unavailable — no current squad",
+                {
+                    "score_available": False,
+                    "reason_code": "NO_SQUAD",
+                },
+            )
 
-        # IMPORTANT:
-        # Do not call predict_all() here. Only use predictions if they were already supplied/cached.
         candidates = getattr(
             self.engine,
             "_baseline_predictions",
@@ -354,7 +713,14 @@ class SeasonChipPlanner:
         )
 
         if not candidates:
-            return 5, "Standard GW — no baseline data", details
+            return (
+                None,
+                "Unavailable — no baseline predictions",
+                {
+                    "score_available": False,
+                    "reason_code": "NO_BASELINE",
+                },
+            )
 
         baseline_by_id = {
             p["player_id"]: p
@@ -368,32 +734,55 @@ class SeasonChipPlanner:
         ]
 
         if not squad_candidates:
-            return 5, "Standard GW — no captain candidates", details
+            return (
+                None,
+                "Unavailable — no captain candidates",
+                {
+                    "score_available": False,
+                    "reason_code": (
+                        "NO_CAPTAIN_CANDIDATES"
+                    ),
+                },
+            )
 
         best = None
         best_xp = -1
 
         for player in squad_candidates:
+
+            team_id = self.engine.players.get(
+                player["player_id"],
+                {}
+            ).get("team")
+
             fixtures = get_player_fixtures(
-                self.engine.players.get(player["player_id"], {}).get("team"),
+                team_id,
                 gw,
                 self.fixtures
             )
 
             if not fixtures:
-                adjusted_xp = player.get("predicted_points", 0.0)
+                adjusted_xp = player.get(
+                    "predicted_points",
+                    0.0
+                )
+
             else:
-                # Average fixture adjustment.
                 avg_fdr = sum(
                     f.get("fdr", 3)
                     for f in fixtures
                 ) / len(fixtures)
 
-                # Small, bounded fixture adjustment.
-                multiplier = 1.0 + ((3.0 - avg_fdr) * 0.05)
+                multiplier = (
+                    1.0
+                    + ((3.0 - avg_fdr) * 0.05)
+                )
 
                 adjusted_xp = (
-                    player.get("predicted_points", 0.0)
+                    player.get(
+                        "predicted_points",
+                        0.0
+                    )
                     * multiplier
                 )
 
@@ -402,17 +791,30 @@ class SeasonChipPlanner:
                 best = player
 
         if best is None:
-            return 5, "Standard GW — no captain candidate", details
+            return (
+                None,
+                "Unavailable — no captain candidate",
+                {
+                    "score_available": False,
+                    "reason_code": "NO_CAPTAIN",
+                },
+            )
 
         details["best_captain"] = best["name"]
-        details["captain_xpts"] = round(best_xp, 1)
+        details["captain_xpts"] = round(
+            best_xp,
+            1
+        )
 
         if best_xp >= 15:
             score += 20
+
         elif best_xp >= 12:
             score += 12
+
         elif best_xp >= 10:
             score += 8
+
         else:
             score += 5
 
@@ -420,37 +822,65 @@ class SeasonChipPlanner:
             f"{best['name']} ~{best_xp:.1f} xPts"
         )
 
-        return score, " · ".join(reasons), details
+        return (
+            score,
+            " · ".join(reasons),
+            details,
+        )
 
+    # ------------------------------------------------------------------
+    # Free Hit
+    # ------------------------------------------------------------------
 
-    def _score_fh(self, gw, meta, predictions, current_squad_ids):
-        """Score Free Hit for a GW. Best for BGWs or one-off DGWs."""
+    def _score_fh(
+        self,
+        gw,
+        meta,
+        predictions,
+        current_squad_ids,
+    ):
+        """Score Free Hit for a GW."""
+
         score = 0
         reasons = []
         details = {}
 
+        # ------------------------------------------------------------
         # BGW
-        if meta["is_bgw"]:
-            bgw_count = meta["bgw_team_count"]
+        # ------------------------------------------------------------
 
-            score += min(60, bgw_count * 8)
+        if meta["is_bgw"]:
+
+            bgw_count = meta[
+                "bgw_team_count"
+            ]
+
+            score += min(
+                60,
+                bgw_count * 8
+            )
 
             reasons.append(
                 f"BGW: {bgw_count} teams missing"
             )
 
-            # Count how many current squad players have no fixture.
-            # This uses fixture data directly and avoids predict_all().
+            # Current squad impact
             if current_squad_ids:
+
                 blanking = 0
 
                 for pid in current_squad_ids:
-                    player = self.engine.players.get(pid)
+
+                    player = self.engine.players.get(
+                        pid
+                    )
 
                     if not player:
                         continue
 
-                    team_id = player.get("team")
+                    team_id = player.get(
+                        "team"
+                    )
 
                     if not team_id:
                         continue
@@ -464,6 +894,10 @@ class SeasonChipPlanner:
                     if not fixtures:
                         blanking += 1
 
+                details[
+                    "blanking_players"
+                ] = blanking
+
                 if blanking >= 5:
                     score += 30
                     reasons.append(
@@ -476,12 +910,22 @@ class SeasonChipPlanner:
                         f"{blanking} squad players blank"
                     )
 
-                details["blanking_players"] = blanking
+            else:
+                return (
+                    None,
+                    "Unavailable — no current squad",
+                    {
+                        "score_available": False,
+                        "reason_code": "NO_SQUAD",
+                    },
+                )
 
         # ------------------------------------------------------------
         # Small fixture week
         # ------------------------------------------------------------
+
         elif meta["total_fixtures"] < 8:
+
             score += 30
 
             reasons.append(
@@ -491,83 +935,209 @@ class SeasonChipPlanner:
         # ------------------------------------------------------------
         # DGW
         # ------------------------------------------------------------
+
         if meta["is_dgw"] and not meta["is_bgw"]:
+
             score += 15
 
             reasons.append(
-                f"DGW opportunity ({meta['dgw_team_count']} teams)"
+                f"DGW opportunity "
+                f"({meta['dgw_team_count']} teams)"
             )
-        return score, " · ".join(reasons), details
 
+        return (
+            score,
+            " · ".join(reasons),
+            details,
+        )
 
-    def _score_wc(self, gw, meta, predictions, current_squad_ids):
-        """Score Wildcard for a GW. Best before a big DGW."""
+    # ------------------------------------------------------------------
+    # Wildcard
+    # ------------------------------------------------------------------
+
+    def _score_wc(
+        self,
+        gw,
+        meta,
+        predictions,
+        current_squad_ids,
+    ):
+        """Score Wildcard for a GW."""
+
         score = 0
         reasons = []
         details = {}
 
-        # Check if NEXT GW is a big DGW (WC before DGW + BB)
+        # ------------------------------------------------------------
+        # Look ahead for a large DGW
+        # ------------------------------------------------------------
+
         next_gw_meta = None
-        for future_gw in range(gw + 1, min(gw + 3, 39)):
-            future_fixes = get_fixtures_for_gameweek(future_gw, self.fixtures)
-            future_dgw = get_dgw_teams(future_gw, self.fixtures)
+
+        for future_gw in range(
+            gw + 1,
+            min(gw + 3, 39)
+        ):
+
+            future_dgw = get_dgw_teams(
+                future_gw,
+                self.fixtures
+            )
+
             if len(future_dgw) >= 4:
+
                 next_gw_meta = {
                     "gw": future_gw,
-                    "dgw_count": len(future_dgw),
+                    "dgw_count": len(
+                        future_dgw
+                    ),
                 }
+
                 break
 
         if next_gw_meta:
-            score += min(50, next_gw_meta["dgw_count"] * 8)
-            reasons.append(f"GW{next_gw_meta['gw']} has {next_gw_meta['dgw_count']}-team DGW ahead")
-            reasons.append("WC to build DGW squad → BB next week")
-            details["target_dgw"] = next_gw_meta["gw"]
 
+            score += min(
+                50,
+                next_gw_meta["dgw_count"] * 8
+            )
+
+            reasons.append(
+                f"GW{next_gw_meta['gw']} has "
+                f"{next_gw_meta['dgw_count']}-team DGW ahead"
+            )
+
+            reasons.append(
+                "WC to build DGW squad → BB next week"
+            )
+
+            details[
+                "target_dgw"
+            ] = next_gw_meta["gw"]
+
+        # ------------------------------------------------------------
         # Major fixture swing
-        if meta["is_dgw"]:
-            score += 10
-            reasons.append("Fixture swing opportunity")
+        # ------------------------------------------------------------
 
+        if meta["is_dgw"]:
+
+            score += 10
+
+            reasons.append(
+                "Fixture swing opportunity"
+            )
+
+        # ------------------------------------------------------------
         # Late-season WC
+        # ------------------------------------------------------------
+
         if gw >= 30:
+
             score += 5
-            reasons.append("Late season — WC for final push")
+
+            reasons.append(
+                "Late season — WC for final push"
+            )
 
         if not reasons:
-            reasons.append("No strong WC trigger — save for later")
 
-        return score, " · ".join(reasons), details
+            reasons.append(
+                "No strong WC trigger — save for later"
+            )
 
-    def _build_chip_sequence(self, best_gws, chips_available, gw_meta):
-        """Build a recommended chip deployment sequence — 1 chip per GW."""
+        return (
+            score,
+            " · ".join(reasons),
+            details,
+        )
+
+    # ------------------------------------------------------------------
+    # Recommended sequence
+    # ------------------------------------------------------------------
+
+    def _build_chip_sequence(
+        self,
+        best_gws,
+        chips_available,
+        gw_meta,
+    ):
+        """
+        Build recommended chip deployment sequence.
+
+        One chip per GW.
+        """
+
         sequence = []
         used_gws = set()
 
-        # Sort chips by best score (deploy highest-confidence first)
+        # ------------------------------------------------------------
+        # Only chips with valid scores
+        # ------------------------------------------------------------
+
+        valid_chips = [
+            chip
+            for chip in chips_available
+            if chip in best_gws
+            and best_gws[chip].get(
+                "best_score"
+            ) is not None
+        ]
+
         sorted_chips = sorted(
-            chips_available,
-            key=lambda c: best_gws[c]["best_score"],
+            valid_chips,
+            key=lambda c: best_gws[c][
+                "best_score"
+            ],
             reverse=True
         )
 
         for chip in sorted_chips:
+
             analysis = best_gws[chip]
-            # Search ALL scores (sorted desc), not just top 3
-            all_sorted = sorted(analysis["all_scores"],
-                                key=lambda x: x["score"], reverse=True)
+
+            all_sorted = sorted(
+                [
+                    x
+                    for x in analysis[
+                        "all_scores"
+                    ]
+                    if x.get("score") is not None
+                ],
+                key=lambda x: x["score"],
+                reverse=True
+            )
+
             for candidate in all_sorted:
-                gw = candidate["gameweek"]
-                if gw not in used_gws and candidate["score"] > 0:
+
+                gw = candidate[
+                    "gameweek"
+                ]
+
+                if (
+                    gw not in used_gws
+                    and candidate["score"] > 0
+                ):
+
                     sequence.append({
                         "chip": chip,
                         "gameweek": gw,
                         "score": candidate["score"],
                         "reason": candidate["reason"],
-                        "is_dgw": gw_meta.get(gw, {}).get("is_dgw", False),
+                        "is_dgw": gw_meta.get(
+                            gw,
+                            {}
+                        ).get(
+                            "is_dgw",
+                            False
+                        ),
                     })
+
                     used_gws.add(gw)
+
                     break
 
-        sequence.sort(key=lambda x: x["gameweek"])
+        sequence.sort(
+            key=lambda x: x["gameweek"]
+        )
+
         return sequence

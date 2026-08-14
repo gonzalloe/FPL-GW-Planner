@@ -1238,7 +1238,7 @@ table tr:hover { background:var(--surface2); }
   <div class="chip-grid" id="chip-cards"></div>
 
   <!-- Season heatmap -->
-  <div class="card" style="margin-top:20px;" id="chip-heatmap-card" style="display:none;">
+  <div class="card" id="chip-heatmap-card" style="margin-top:20px; display:none;"></div>
     <div class="card-header"><h3>🗓 Chip Score Heatmap (All GWs)</h3></div>
     <div id="chip-heatmap" style="overflow-x:auto;"></div>
   </div>
@@ -4417,21 +4417,59 @@ setInterval(updateRefreshStatus, 60000);
 async function loadSeasonChips() {
   const btn = document.getElementById('chip-season-btn');
   const seqDiv = document.getElementById('chip-sequence');
-  if (btn) { btn.disabled = true; btn.textContent = 'Analyzing...'; }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Analyzing...';
+  }
   seqDiv.innerHTML = '<div class="loading">Scanning all remaining GWs...</div>';
   try {
-    const r = await fetch('/api/season-chips');
+    const r = await fetch('/api/season-chips', {
+      headers: authHeaders()
+    });
     const data = await r.json();
-    if (data.error) { seqDiv.innerHTML = '<p style="color:var(--red);">Error: ' + data.error + '</p>'; return; }
+    if (data.error) {
+      seqDiv.innerHTML =
+        '<p style="color:var(--red);">Error: ' + data.error + '</p>';
+      return;
+    }
+    // Preseason: squad data is not available yet.
+    if (data.preseason && data.score_status === 'unavailable') {
+      seqDiv.innerHTML = `
+        <div class="chip-preseason-message">
+          <h3>⏳ Chip Planner will activate after GW1 starts</h3>
+          <p>
+            Your current FPL squad is not available yet because the season
+            has not started. Chip scores cannot be calculated accurately
+            without your squad.
+          </p>
+          <p>
+            Once GW1 squad data is available, this planner will calculate
+            the recommended gameweek for each chip.
+          </p>
+        </div>
+      `;
+      // Hide heatmap while scores are unavailable.
+      const heatmapCard = document.getElementById('chip-heatmap-card');
+      if (heatmapCard) {
+        heatmapCard.style.display = 'none';
+      }
+      return;
+    }
+    // Normal in-season rendering.
     renderSeasonChips(data);
   } catch(e) {
-    seqDiv.innerHTML = '<p style="color:var(--red);">Error: ' + e.message + '</p>';
+    seqDiv.innerHTML =
+      '<p style="color:var(--red);">Error: ' + e.message + '</p>';
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Analyze Season'; }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Analyze Season';
+    }
   }
 }
 
 function renderSeasonChips(data) {
+  if (data.preseason && data.score_status === 'unavailable') { return; }
   const seq = data.recommended_sequence || [];
   const analysis = data.chip_analysis || {};
   const userAvailable = data.user_chips_available || [];
