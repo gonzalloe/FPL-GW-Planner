@@ -33,6 +33,34 @@ class SeasonChipPlanner:
             }
         return self._cache[gw]
 
+    def _lightweight_fixture_ease(self, gw, player_ids):
+        if not player_ids:
+            return 0.0
+        total = 0.0
+        count = 0
+        for pid in player_ids:
+            player = self.engine.players.get(pid)
+            if not player:
+                continue
+            team_id = player.get("team")
+            if not team_id:
+                continue
+            fixtures = get_player_fixtures(
+                team_id,
+                gw,
+                self.fixtures
+            )
+            for fixture in fixtures:
+                fdr = fixture.get("fdr", 3)
+
+                # FDR 3 = neutral
+                # FDR 1/2 = positive
+                # FDR 4/5 = negative
+                total += 3 - fdr
+                count += 1
+
+        return total / count if count else 0.0
+
     def analyze_season(self, chips_available=None, current_squad_ids=None, bank=0.0):
         """
         Scan all remaining GWs and score each chip for every GW.
@@ -43,6 +71,20 @@ class SeasonChipPlanner:
 
         max_gw = 38
         remaining_gws = list(range(self.next_gw, max_gw + 1))
+
+        # Build one baseline prediction set.
+        # This gives us player quality/xPts without running the expensive
+        # prediction engine for every ordinary GW.
+        try:
+            baseline_data = self._get_gw_predictions(self.next_gw)
+            baseline_predictions = baseline_data["predictions"]
+        except Exception:
+            baseline_predictions = []
+
+        baseline_by_id = {
+            p["player_id"]: p
+            for p in baseline_predictions
+        }
 
         # Build GW metadata for all remaining weeks
         gw_meta = {}
@@ -69,10 +111,10 @@ class SeasonChipPlanner:
         for gw in remaining_gws:
             meta = gw_meta[gw]
 
-            # Only compute detailed predictions for GWs with DGW/BGW or nearby
-            # For efficiency, use lightweight scoring for most GWs
-            detailed = meta["is_dgw"] or meta["is_bgw"] or meta["total_fixtures"] < 8
-
+            # Use the full prediction engine only for DGW/BGW weeks.
+            # Ordinary GWs use the baseline player projections plus cheap
+            # fixture-based adjustments.
+            detailed = meta["is_dgw"] or meta["is_bgw"]
             if detailed:
                 try:
                     data = self._get_gw_predictions(gw)
@@ -135,6 +177,12 @@ class SeasonChipPlanner:
         elif chip == "WC":
             score, reason, details = self._score_wc(gw, meta, predictions, current_squad_ids)
 
+        if chip in ("BB", "TC"):
+            print(
+                f"[CHIP DEBUG] GW{gw} {chip}: "
+                f"{min(100, max(0, score))} | {reason}"
+            )    
+
         return {
             "gameweek": gw,
             "score": min(100, max(0, score)),
@@ -189,8 +237,42 @@ class SeasonChipPlanner:
                     score += 20
                     reasons.append(f"{bench_dgw}/4 bench have DGW")
         else:
-            score += 5
-            reasons.append("No DGW — BB less effective")
+            # Normal GW: BB value comes from the actual four bench players
+            # and their fixture quality.
+            if current_squad_ids:
+                pred_map = baseline_by_id
+
+                squad_preds = [
+                    pred_map[pid]
+                    for pid in current_squad_ids
+                    if pid in pred_map
+                ]
+
+                squad_preds.sort(
+                    key=lambda p: p["predicted_points"],
+                    reverse=True
+                )
+
+                bench_preds = squad_preds[11:] if len(squad_preds) > 11 else []
+                bench_ids = [p["player_id"] for p in bench_preds]
+
+            else:
+                # No user squad: use the baseline projected squad.
+                baseline_squad = baseline_predictions[:15]
+                bench_ids = [
+                    p["player_id"]
+                    for p in baseline_squad[11:]
+                ]
+
+            ease = self._lightweight_fixture_ease(gw, bench_ids)
+
+            # Keep normal-GW BB relatively low.
+            # DGW logic above remains the dominant BB signal.
+            score += max(0, min(20, 10 + ease * 3))
+
+            reasons.append(
+                f"No DGW — bench fixture ease {ease:+.1f}"
+            )
 
         if meta["total_fixtures"] >= 12:
             score += 10
@@ -204,51 +286,161 @@ class SeasonChipPlanner:
         reasons = []
         details = {}
 
+        # ------------------------------------------------------------
+        # 1. DGW: use the real GW prediction
+        # ------------------------------------------------------------
         if predictions:
-            # If we have the user's squad, find the best captain IN their squad
             if current_squad_ids:
-                pred_map = {p["player_id"]: p for p in predictions}
-                squad_preds = [pred_map[pid] for pid in current_squad_ids if pid in pred_map]
-                squad_preds.sort(key=lambda p: p["predicted_points"], reverse=True)
+                pred_map = {
+                    p["player_id"]: p
+                    for p in predictions
+                }
+
+                squad_preds = [
+                    pred_map[pid]
+                    for pid in current_squad_ids
+                    if pid in pred_map
+                ]
+
+                squad_preds.sort(
+                    key=lambda p: p["predicted_points"],
+                    reverse=True
+                )
+
                 top = squad_preds[0] if squad_preds else predictions[0]
             else:
                 top = predictions[0]
+
             xp = top["predicted_points"]
             details["best_captain"] = top["name"]
             details["captain_xpts"] = round(xp, 1)
 
             if top.get("is_dgw"):
                 score += 35
-                reasons.append(f"{top['name']} DGW ({xp:.1f} xPts)")
-                if xp >= 15:
-                    score += 30
-                    reasons.append("Elite xPts (15+)")
-                elif xp >= 10:
-                    score += 15
-                    reasons.append("Strong xPts (10+)")
-            else:
-                if xp >= 12:
-                    score += 20
-                    reasons.append(f"{top['name']} SGW ({xp:.1f} xPts)")
-                else:
-                    score += 5
-                    reasons.append(f"Best captain only {xp:.1f} xPts")
+                reasons.append(
+                    f"{top['name']} DGW ({xp:.1f} xPts)"
+                )
 
-            # Easy fixtures bonus
-            easy = sum(1 for f in top.get("fixtures", []) if f.get("fdr", 3) <= 2)
-            if easy >= 1:
+            if xp >= 15:
+                score += 30
+                reasons.append("Elite xPts (15+)")
+            elif xp >= 10:
+                score += 15
+                reasons.append("Strong xPts (10+)")
+            else:
+                score += 5
+                reasons.append(
+                    f"Best captain {xp:.1f} xPts"
+                )
+
+            easy = sum(
+                1
+                for f in top.get("fixtures", [])
+                if f.get("fdr", 3) <= 2
+            )
+
+            if easy:
                 score += 10
-                reasons.append(f"{easy} easy fixture(s)")
+                reasons.append(
+                    f"{easy} easy fixture(s)"
+                )
 
             if top.get("starter_quality", {}).get("tier") == "nailed":
                 score += 10
                 reasons.append("Nailed")
-        elif meta["is_dgw"]:
+
+            elif meta["is_dgw"]:
+                score += 20
+                reasons.append(
+                    f"DGW ({meta['dgw_team_count']} teams)"
+                )
+
+            return score, " · ".join(reasons), details
+
+        # ------------------------------------------------------------
+        # 2. Normal GW: use baseline player quality + this GW fixtures
+        # ------------------------------------------------------------
+
+        candidates = baseline_predictions
+
+        if current_squad_ids:
+            candidates = [
+                baseline_by_id[pid]
+                for pid in current_squad_ids
+                if pid in baseline_by_id
+            ]
+
+        if not candidates:
+            reasons.append("No baseline captain data")
+            return 0, " · ".join(reasons), details
+
+        # Evaluate the baseline captain candidates against this GW's
+        # fixture difficulty.
+        best = None
+        best_adjusted_xp = -1
+
+        for player in candidates:
+            pid = player["player_id"]
+
+            ease = self._lightweight_fixture_ease(
+                gw,
+                [pid]
+            )
+
+            base_xp = player.get("predicted_points", 0.0)
+
+            # Convert fixture signal into a modest adjustment.
+            # +2 FDR signal ~= +10%; -2 ~= -10%.
+            fixture_multiplier = 1.0 + (ease * 0.05)
+
+            adjusted_xp = base_xp * fixture_multiplier
+
+            if adjusted_xp > best_adjusted_xp:
+                best_adjusted_xp = adjusted_xp
+                best = player
+
+        if best is None:
+            return 0, "No captain candidate", details
+
+        details["best_captain"] = best["name"]
+        details["captain_xpts"] = round(best_adjusted_xp, 1)
+
+        # Normal-GW TC should be possible, but substantially less attractive
+        # than a genuine DGW premium captain.
+        if best_adjusted_xp >= 15:
             score += 20
-            reasons.append(f"DGW ({meta['dgw_team_count']} teams)")
+            reasons.append(
+                f"{best['name']} ~{best_adjusted_xp:.1f} xPts"
+            )
+        elif best_adjusted_xp >= 12:
+            score += 12
+            reasons.append(
+                f"{best['name']} ~{best_adjusted_xp:.1f} xPts"
+            )
+        elif best_adjusted_xp >= 10:
+            score += 8
+            reasons.append(
+                f"{best['name']} ~{best_adjusted_xp:.1f} xPts"
+            )
         else:
             score += 5
-            reasons.append("Standard GW")
+            reasons.append(
+                f"{best['name']} ~{best_adjusted_xp:.1f} xPts"
+            )
+
+        ease = self._lightweight_fixture_ease(
+            gw,
+            [best["player_id"]]
+        )
+
+        if ease > 0:
+            reasons.append(
+                f"Good fixture ({ease:+.1f})"
+            )
+        elif ease < 0:
+            reasons.append(
+                f"Difficult fixture ({ease:+.1f})"
+            )
 
         return score, " · ".join(reasons), details
 
