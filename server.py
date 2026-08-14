@@ -1780,6 +1780,11 @@ def api_season_chips():
                 from my_team import fetch_my_team
                 from data_fetcher import get_current_gameweek
                 td = fetch_my_team(settings["team_id"])
+                # temp debug print
+                print(f"[CHIP] fetch_my_team type: {type(td).__name__}")
+                print(f"[CHIP] fetch_my_team error: {td.get('error') if isinstance(td, dict) else 'NOT_DICT'}")
+                print(f"[CHIP] fetch_my_team picks: {len(td.get('picks', [])) if isinstance(td, dict) else 'NOT_DICT'}")
+
                 if not td.get("error"):
                     squad_ids = [p.get("element") for p in td.get("picks",[])]
                     bank = td.get("gw_summary",{}).get("bank",0)
