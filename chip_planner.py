@@ -2,11 +2,7 @@
 FPL Predictor - Season-Wide Chip Planner
 Scans all remaining GWs to find the best gameweek for each chip.
 """
-from data_fetcher import (
-    fetch_bootstrap, fetch_fixtures, build_player_map, build_team_map,
-    get_next_gameweek, get_dgw_teams, get_bgw_teams,
-    get_fixtures_for_gameweek, get_player_fixtures
-)
+from data_fetcher import (get_dgw_teams, get_bgw_teams, get_fixtures_for_gameweek, get_player_fixtures)
 from prediction_engine import PredictionEngine
 from squad_optimizer import SquadOptimizer
 
@@ -62,16 +58,26 @@ class SeasonChipPlanner:
     def analyze_season(self, chips_available=None, current_squad_ids=None, bank=0.0):
         """
         Scan all remaining GWs and score each chip for every GW.
-        Returns the optimal GW for each chip + season-wide heatmap.
+
+        Performance strategy:
+        - Run predict_all() ONCE for baseline player projections.
+        - Run predict_all() only for genuine DGWs.
+        - Normal GWs use lightweight fixture adjustments.
+        - BGWs do not need full prediction generation.
         """
+        print(
+            f"[CHIP] Analyze season: GW{self.next_gw}-38 | "
+            f"squad={len(current_squad_ids) if current_squad_ids else 0}"
+        )
         if chips_available is None:
             chips_available = ["BB", "TC", "FH", "WC"]
 
         max_gw = 38
         remaining_gws = list(range(self.next_gw, max_gw + 1))
 
-        # One baseline prediction run for normal GWs.
-        # Reused throughout the season scan.
+        # ------------------------------------------------------------
+        # 1. Build ONE baseline prediction set
+        # ------------------------------------------------------------
         try:
             baseline_data = self._get_gw_predictions(self.next_gw)
             self._baseline_predictions = baseline_data["predictions"]
@@ -79,38 +85,59 @@ class SeasonChipPlanner:
             print(f"[CHIP] Baseline prediction failed: {e}")
             self._baseline_predictions = []
 
-        # Build GW metadata for all remaining weeks
+        # ------------------------------------------------------------
+        # 2. Build GW metadata
+        # ------------------------------------------------------------
         gw_meta = {}
+
         for gw in remaining_gws:
             fixes = get_fixtures_for_gameweek(gw, self.fixtures)
             dgw = get_dgw_teams(gw, self.fixtures)
             bgw = get_bgw_teams(gw, self.fixtures, self.bootstrap)
+
             gw_meta[gw] = {
                 "gameweek": gw,
                 "total_fixtures": len(fixes),
+
                 "is_dgw": len(dgw) > 0,
                 "dgw_team_count": len(dgw),
-                "dgw_teams": {tid: self.teams.get(tid, {}).get("short_name", "?")
-                              for tid in dgw},
+                "dgw_teams": {
+                    tid: self.teams.get(tid, {}).get("short_name", "?")
+                    for tid in dgw
+                },
+
                 "is_bgw": len(bgw) > 0,
                 "bgw_team_count": len(bgw),
-                "bgw_teams": {tid: self.teams.get(tid, {}).get("short_name", "?")
-                              for tid in bgw},
+                "bgw_teams": {
+                    tid: self.teams.get(tid, {}).get("short_name", "?")
+                    for tid in bgw
+                },
             }
 
-        # Score each chip for each GW
-        chip_scores = {chip: [] for chip in chips_available}
+        # ------------------------------------------------------------
+        # 3. Score every chip for every GW
+        # ------------------------------------------------------------
+        chip_scores = {
+            chip: []
+            for chip in chips_available
+        }
 
         for gw in remaining_gws:
             meta = gw_meta[gw]
-
-            detailed = meta["is_dgw"] or meta["is_bgw"]
-            if detailed:
+            if meta["is_dgw"]:
                 try:
                     data = self._get_gw_predictions(gw)
                     predictions = data["predictions"]
                     gw_info = data["gw_info"]
-                except Exception:
+
+                    print(
+                        f"[CHIP] GW{gw}: detailed DGW prediction generated"
+                    )
+
+                except Exception as e:
+                    print(
+                        f"[CHIP] GW{gw}: DGW prediction failed: {e}"
+                    )
                     predictions = []
                     gw_info = meta
             else:
@@ -118,15 +145,40 @@ class SeasonChipPlanner:
                 gw_info = meta
 
             for chip in chips_available:
-                score_data = self._score_chip_for_gw(chip, gw, meta, predictions, gw_info, current_squad_ids, bank)
+                score_data = self._score_chip_for_gw(
+                    chip,
+                    gw,
+                    meta,
+                    predictions,
+                    gw_info,
+                    current_squad_ids,
+                    bank,
+                )
+
                 chip_scores[chip].append(score_data)
 
-        # Find best GW for each chip
+        # ------------------------------------------------------------
+        # 4. Find best GW for each chip
+        # ------------------------------------------------------------
         best_gws = {}
+
         for chip in chips_available:
             scores = chip_scores[chip]
-            best = max(scores, key=lambda x: x["score"])
-            top_3 = sorted(scores, key=lambda x: x["score"], reverse=True)[:3]
+
+            if not scores:
+                continue
+
+            best = max(
+                scores,
+                key=lambda x: x["score"]
+            )
+
+            top_3 = sorted(
+                scores,
+                key=lambda x: x["score"],
+                reverse=True
+            )[:3]
+
             best_gws[chip] = {
                 "best_gw": best["gameweek"],
                 "best_score": best["score"],
@@ -135,8 +187,14 @@ class SeasonChipPlanner:
                 "all_scores": scores,
             }
 
-        # Build recommended chip sequence
-        sequence = self._build_chip_sequence(best_gws, chips_available, gw_meta)
+        # ------------------------------------------------------------
+        # 5. Build recommended chip sequence
+        # ------------------------------------------------------------
+        sequence = self._build_chip_sequence(
+            best_gws,
+            chips_available,
+            gw_meta,
+        )
 
         return {
             "from_gw": self.next_gw,
@@ -256,7 +314,7 @@ class SeasonChipPlanner:
                 ]
 
                 ease = self._lightweight_fixture_ease(gw, bench_ids)
-                score += max(0, min(20, 10 + ease * 4))
+                score += max(0, min(20, 5 + ease * 5))
 
                 reasons.append(
                     f"No DGW — bench fixture ease {ease:+.1f}"
@@ -433,35 +491,76 @@ class SeasonChipPlanner:
         reasons = []
         details = {}
 
-        # BGW is the primary FH trigger
+        # BGW
         if meta["is_bgw"]:
             bgw_count = meta["bgw_team_count"]
-            score += min(60, bgw_count * 8)
-            reasons.append(f"BGW: {bgw_count} teams missing")
 
-            # If many squad players blank
-            if current_squad_ids and predictions:
-                pred_map = {p["player_id"]: p for p in predictions}
-                blanking = sum(1 for pid in current_squad_ids
-                               if pred_map.get(pid, {}).get("num_fixtures", 0) == 0)
+            score += min(60, bgw_count * 8)
+
+            reasons.append(
+                f"BGW: {bgw_count} teams missing"
+            )
+
+            # Count how many current squad players have no fixture.
+            # This uses fixture data directly and avoids predict_all().
+            if current_squad_ids:
+                blanking = 0
+
+                for pid in current_squad_ids:
+                    player = self.engine.players.get(pid)
+
+                    if not player:
+                        continue
+
+                    team_id = player.get("team")
+
+                    if not team_id:
+                        continue
+
+                    fixtures = get_player_fixtures(
+                        team_id,
+                        gw,
+                        self.fixtures,
+                    )
+
+                    if not fixtures:
+                        blanking += 1
+
                 if blanking >= 5:
                     score += 30
-                    reasons.append(f"{blanking} squad players blank")
+                    reasons.append(
+                        f"{blanking} squad players blank"
+                    )
+
                 elif blanking >= 3:
                     score += 15
-                    reasons.append(f"{blanking} squad players blank")
+                    reasons.append(
+                        f"{blanking} squad players blank"
+                    )
+
                 details["blanking_players"] = blanking
 
+        # ------------------------------------------------------------
+        # Small fixture week
+        # ------------------------------------------------------------
         elif meta["total_fixtures"] < 8:
             score += 30
-            reasons.append(f"Only {meta['total_fixtures']} fixtures")
 
-        # One-off DGW where squad has low DGW exposure
+            reasons.append(
+                f"Only {meta['total_fixtures']} fixtures"
+            )
+
+        # ------------------------------------------------------------
+        # DGW
+        # ------------------------------------------------------------
         if meta["is_dgw"] and not meta["is_bgw"]:
             score += 15
-            reasons.append(f"DGW opportunity ({meta['dgw_team_count']} teams)")
 
+            reasons.append(
+                f"DGW opportunity ({meta['dgw_team_count']} teams)"
+            )
         return score, " · ".join(reasons), details
+
 
     def _score_wc(self, gw, meta, predictions, current_squad_ids):
         """Score Wildcard for a GW. Best before a big DGW."""
