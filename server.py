@@ -1772,18 +1772,11 @@ def api_season_chips():
         HALF_CUTOFF = 20; current_half = 2
         cmap = {"bboost":"BB","3xc":"TC","freehit":"FH","wildcard":"WC"}
         team_id = settings.get("team_id")
-        # temp debug print 
-        print(f"[CHIP] settings team_id = {team_id}")
-
         if team_id:
             try:
                 from my_team import fetch_my_team
                 from data_fetcher import get_current_gameweek
                 td = fetch_my_team(settings["team_id"])
-                # temp debug print
-                print(f"[CHIP] fetch_my_team type: {type(td).__name__}")
-                print(f"[CHIP] fetch_my_team error: {td.get('error') if isinstance(td, dict) else 'NOT_DICT'}")
-                print(f"[CHIP] fetch_my_team picks: {len(td.get('picks', [])) if isinstance(td, dict) else 'NOT_DICT'}")
 
                 if not td.get("error"):
                     squad_ids = [p.get("element") for p in td.get("picks",[])]
@@ -1808,8 +1801,6 @@ def api_season_chips():
                 traceback.print_exc()
         engine = _get_prediction_engine()    
         result = SeasonChipPlanner(engine).analyze_season(chips_available=chips_available, current_squad_ids=squad_ids, bank=bank)
-        # temp debug print
-        print(f"[CHIP] squad_ids count: {len(squad_ids) if squad_ids else 0}")
         result["user_chips_available"] = chips_available
         result["user_chips_used"] = [{"name":c.get("name"),"code":cmap.get(c.get("name",""),"?"),"gw":c.get("event"),
                                       "half":2 if c.get("event",0)>=HALF_CUTOFF else 1} for c in chips_used_list]
