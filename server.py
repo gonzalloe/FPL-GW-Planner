@@ -1672,7 +1672,7 @@ def api_season_chips():
                         if h == current_half: used.add(code)
                     chips_available = [c for c in ["BB","TC","FH","WC"] if c not in used]
             except: pass
-        result = SeasonChipPlanner().analyze_season(chips_available=chips_available, current_squad_ids=squad_ids, bank=bank)
+        result = SeasonChipPlanner(engine).analyze_season(chips_available=chips_available, current_squad_ids=squad_ids, bank=bank)
         # temp debug print
         print(f"[CHIP] squad_ids count: {len(squad_ids) if squad_ids else 0}")
         result["user_chips_available"] = chips_available
