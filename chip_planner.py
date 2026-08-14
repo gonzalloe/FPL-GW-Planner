@@ -128,10 +128,7 @@ class SeasonChipPlanner:
                 gw_info = meta
 
             for chip in chips_available:
-                score_data = self._score_chip_for_gw(
-                    chip, gw, meta, predictions, gw_info,
-                    current_squad_ids, bank
-                )
+                score_data = self._score_chip_for_gw(chip, gw, meta, predictions, gw_info, current_squad_ids, bank, baseline_predictions)
                 chip_scores[chip].append(score_data)
 
         # Find best GW for each chip
@@ -162,14 +159,14 @@ class SeasonChipPlanner:
         }
 
     def _score_chip_for_gw(self, chip, gw, meta, predictions, gw_info,
-                           current_squad_ids, bank):
+                           current_squad_ids, bank, baseline_predictions):
         """Score a specific chip for a specific GW."""
         score = 0
         reason = ""
         details = {}
 
         if chip == "BB":
-            score, reason, details = self._score_bb(gw, meta, predictions, gw_info, current_squad_ids)
+            score, reason, details = self._score_bb(gw, meta, predictions, gw_info, current_squad_ids, baseline_predictions)
         elif chip == "TC":
             score, reason, details = self._score_tc(gw, meta, predictions, current_squad_ids)
         elif chip == "FH":
@@ -194,8 +191,9 @@ class SeasonChipPlanner:
             **details,
         }
 
-    def _score_bb(self, gw, meta, predictions, gw_info, current_squad_ids=None):
+    def _score_bb(self, gw, meta, predictions, gw_info, current_squad_ids=None, baseline_predictions=None):
         """Score Bench Boost for a GW. Best in large DGWs with strong bench."""
+        baseline_predictions = baseline_predictions or []
         score = 0
         reasons = []
         details = {}
@@ -240,7 +238,10 @@ class SeasonChipPlanner:
             # Normal GW: BB value comes from the actual four bench players
             # and their fixture quality.
             if current_squad_ids:
-                pred_map = baseline_by_id
+                pred_map = {
+                    p["player_id"]: p
+                    for p in baseline_predictions
+                }
 
                 squad_preds = [
                     pred_map[pid]
