@@ -684,7 +684,17 @@ class GWPlanner:
 
         picks = team_data.get("picks", [])
         if not picks:
-            return {"error": "No picks found for this team"}
+            return {
+                "preseason": True,
+                "score_status": "unavailable",
+                "error": None,
+                "message": "GW Planner will activate after GW1 starts",
+                "from_gw": self.next_gw,
+                "to_gw": self.next_gw,
+                "gw_plans": [],
+                "chips_remaining": ["BB", "TC", "FH", "WC"],
+                "chips_used_this_season": [],
+            }
 
         squad_ids = [p["element"] for p in picks]
         bank = team_data.get("gw_summary", {}).get("bank", 0)

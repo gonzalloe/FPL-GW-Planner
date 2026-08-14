@@ -1478,11 +1478,19 @@ def api_gw_planner():
         return jsonify({"error": "No team ID"}), 400
     try:
         from gw_planner import GWPlanner
-        planner = GWPlanner(horizon=request.args.get("horizon", 5, type=int))
-        plan = planner.plan_from_team_id(int(team_id), horizon=planner.horizon)
-        return jsonify(plan) if not plan.get("error") else (jsonify(plan), 400)
+        planner = GWPlanner(
+            horizon=request.args.get("horizon", 5, type=int)
+        )
+        plan = planner.plan_from_team_id(
+            int(team_id),
+            horizon=planner.horizon
+        )
+        if plan.get("error"):
+            return jsonify(plan), 400
+        return jsonify(plan)
     except Exception as e:
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route("/api/fixture-ticker")

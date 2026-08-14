@@ -4438,7 +4438,7 @@ async function loadSeasonChips() {
     if (data.preseason && data.score_status === 'unavailable') {
       seqDiv.innerHTML = `
         <div class="chip-preseason-message">
-          <h3 style="color:#facc15;">⏳ Chip Planner will activate after GW1 starts</h3>
+          <h3 style="color:#fde047;">⏳ Chip Planner will activate after GW1 starts</h3>
           <p>
             Your current FPL squad is not available yet because the season
             has not started. Chip scores cannot be calculated accurately
@@ -4712,6 +4712,37 @@ async function loadGWPlanner() {
     const data = await r.json();
     if (data.error) {
       alert('Error: ' + data.error);
+      return;
+    }
+    // Preseason: squad data is not available yet.
+    if (data.preseason && data.score_status === 'unavailable') {
+      const summary = document.getElementById('planner-summary');
+      const timeline = document.getElementById('planner-timeline-wrap');
+      const detail = document.getElementById('planner-detail-wrap');
+
+      if (summary) {
+        summary.style.display = '';
+        document.getElementById('planner-summary-stats').innerHTML = `
+          <div class="chip-preseason-message">
+            <h3 style="color:#fde047;">
+              ⏳ GW Planner will activate after GW1 starts
+            </h3>
+            <p>
+              Your current FPL squad is not available yet because the season
+              has not started. Transfer planning cannot be calculated
+              accurately without your squad.
+            </p>
+            <p>
+              Once GW1 squad data is available, the planner will generate
+              your recommended transfers and gameweek plan.
+            </p>
+          </div>
+        `;
+      }
+
+      if (timeline) timeline.style.display = 'none';
+      if (detail) detail.style.display = 'none';
+
       return;
     }
     PLANNER_DATA = data;
