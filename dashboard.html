@@ -1447,26 +1447,40 @@ table tr:hover { background:var(--surface2); }
 
     <!-- Tab: GW Planner -->
     <div class="mtab" id="mtab-planner" style="display:none;">
-      <div class="planner-header">
-        <label style="font-size:13px;color:var(--text2);">Planning horizon:</label>
-        <select id="planner-horizon" onchange="loadGWPlanner()">
-          <option value="3">3 Gameweeks</option>
-          <option value="5" selected>5 Gameweeks</option>
-          <option value="8">8 Gameweeks</option>
-        </select>
-        <button class="btn btn-primary" onclick="loadGWPlanner()" id="planner-btn">Generate Plan</button>
-        <span id="planner-loading" style="display:none;color:var(--text3);font-size:12px;">
-          <span class="chat-spinner" style="width:14px;height:14px;border-width:2px;vertical-align:middle;margin-right:6px;"></span>Analyzing...
-        </span>
+      <div id="planner-preseason-message" class="planner-preseason-message" style="display:none;">
+        <h3 style="color:#fde047;">⏳ GW Planner will activate after GW1 starts</h3>
+        <p>
+          Your current FPL squad is not available yet because the season
+          has not started. Transfer planning cannot be calculated accurately
+          without your squad.
+        </p>
+        <p>
+          Once GW1 squad data is available, this planner will generate your
+          recommended transfers, chips, and gameweek-by-gameweek plan.
+        </p>
       </div>
-      <div id="planner-summary" style="display:none;"><div class="planner-summary" id="planner-summary-stats"></div></div>
-      <div id="planner-timeline-wrap" style="display:none;">
-        <div class="card" style="margin-bottom:20px;"><div class="card-header"><h3>📅 Transfer Timeline</h3><span id="planner-range" style="color:var(--text3);font-size:12px;"></span></div><div class="planner-timeline" id="planner-timeline"></div></div>
+
+      <div id="planner-controls">
+        <div class="planner-header">
+          <label style="font-size:13px;color:var(--text2);">Planning horizon:</label>
+          <select id="planner-horizon" onchange="loadGWPlanner()">
+            <option value="3">3 Gameweeks</option>
+            <option value="5" selected>5 Gameweeks</option>
+            <option value="8">8 Gameweeks</option>
+          </select>
+          <button class="btn btn-primary" onclick="loadGWPlanner()" id="planner-btn">Generate Plan</button>
+          <span id="planner-loading" style="display:none;color:var(--text3);font-size:12px;">
+            <span class="chat-spinner" style="width:14px;height:14px;border-width:2px;vertical-align:middle;margin-right:6px;"></span>Analyzing...
+          </span>
+        </div>
+        <div id="planner-summary" style="display:none;"><div class="planner-summary" id="planner-summary-stats"></div></div>
+        <div id="planner-timeline-wrap" style="display:none;">
+          <div class="card" style="margin-bottom:20px;"><div class="card-header"><h3>📅 Transfer Timeline</h3><span id="planner-range" style="color:var(--text3);font-size:12px;"></span></div><div class="planner-timeline" id="planner-timeline"></div></div>
+        </div>
+        <div id="planner-detail-wrap" style="display:none;">
+          <div class="card"><div class="card-header"><h3>📋 GW-by-GW Breakdown</h3></div><div id="planner-detail"></div></div>
+        </div>
       </div>
-      <div id="planner-detail-wrap" style="display:none;">
-        <div class="card"><div class="card-header"><h3>📋 GW-by-GW Breakdown</h3></div><div id="planner-detail"></div></div>
-      </div>
-    </div>
 
     <!-- Tab: Fixture Ticker -->
     <div class="mtab" id="mtab-fixtures" style="display:none;">
@@ -4716,35 +4730,27 @@ async function loadGWPlanner() {
     }
     // Preseason: squad data is not available yet.
     if (data.preseason && data.score_status === 'unavailable') {
+      const preseason = document.getElementById('planner-preseason-message');
+      const controls = document.getElementById('planner-controls');
+      if (preseason) {preseason.style.display = '';}
+      if (controls) {controls.style.display = 'none';}
+
+      // Clear any stale planner results.
       const summary = document.getElementById('planner-summary');
       const timeline = document.getElementById('planner-timeline-wrap');
       const detail = document.getElementById('planner-detail-wrap');
-
-      if (summary) {
-        summary.style.display = '';
-        document.getElementById('planner-summary-stats').innerHTML = `
-          <div class="chip-preseason-message">
-            <h3 style="color:#fde047;">
-              ⏳ GW Planner will activate after GW1 starts
-            </h3>
-            <p>
-              Your current FPL squad is not available yet because the season
-              has not started. Transfer planning cannot be calculated
-              accurately without your squad.
-            </p>
-            <p>
-              Once GW1 squad data is available, the planner will generate
-              your recommended transfers and gameweek plan.
-            </p>
-          </div>
-        `;
-      }
-
+      if (summary) summary.style.display = 'none';
       if (timeline) timeline.style.display = 'none';
       if (detail) detail.style.display = 'none';
-
+      PLANNER_DATA = null;
       return;
     }
+    // Normal in-season rendering.
+    const preseason = document.getElementById('planner-preseason-message');
+    const controls = document.getElementById('planner-controls');
+    if (preseason) {preseason.style.display = 'none';}
+    if (controls) {controls.style.display = '';}
+
     PLANNER_DATA = data;
     renderPlanner(data);
   } catch(e) {
