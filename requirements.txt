@@ -6,3 +6,4 @@ flask-limiter>=3.5.0
 stripe>=5.0.0
 supabase>=2.0.0
 pulp
+psutil
