@@ -1485,6 +1485,9 @@ def api_gw_planner():
             int(team_id),
             horizon=planner.horizon
         )
+        # debug print
+        print("[GW PLANNER DEBUG] plan keys:", list(plan.keys()))
+        print("[GW PLANNER DEBUG] preseason:", plan.get("preseason"))
         if plan.get("error"):
             return jsonify(plan), 400
         return jsonify(plan)
