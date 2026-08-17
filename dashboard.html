@@ -1374,7 +1374,7 @@ table tr:hover { background:var(--surface2); }
     <div class="filters" style="margin-bottom:16px;">
       <button class="filter-btn active" data-mtab="squad" onclick="switchMyTeamTab(this)">📋 My Squad</button>
       <button class="filter-btn" data-mtab="simulator" id="mtab-btn-simulator" onclick="switchMyTeamTab(this)">🔄 Transfer Simulator</button>
-      <button class="filter-btn" data-mtab="planner" id="mtab-btn-planner" onclick="switchMyTeamTab(this)">📅 GW Planner</button>
+      <button type="button" class="filter-btn" data-mtab="planner" id="mtab-btn-planner" onclick="console.log('[HTML BUTTON] GW Planner clicked'); switchMyTeamTab(this)">📅 GW Planner</button>
       <button class="filter-btn" data-mtab="fixtures" onclick="switchMyTeamTab(this)">📊 Fixture Ticker</button>
     </div>
 
@@ -3214,13 +3214,18 @@ let SIM_FH_GW = null; // GW where Free Hit was applied (squad reverts after)
 
 function switchMyTeamTab(btn) {
   // debug print
-  console.log('[MY TEAM TAB] switchMyTeamTab called:', btn);
+  console.log('[MY TEAM TAB] clicked:', btn);
   console.log('[MY TEAM TAB] data-mtab:', btn?.dataset?.mtab);
 
   document.querySelectorAll('#page-myteam .mtab').forEach(t => t.style.display = 'none');
   document.querySelectorAll('#page-myteam [data-mtab]').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   const tab = document.getElementById('mtab-' + btn.dataset.mtab);
+
+  //debug print 
+  console.log('[MY TEAM TAB] tabName:', tabName);
+  console.log('[MY TEAM TAB] tab element:', tab);
+
   if (tab) { tab.style.display = 'block'; tab.classList.add('active'); }
   if (btn.dataset.mtab === 'planner') {loadGWPlanner()};
   if (btn.dataset.mtab === 'fixtures' && !document.getElementById('planner-ticker').innerHTML) {loadFixtureTicker()};
