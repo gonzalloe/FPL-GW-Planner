@@ -27,7 +27,7 @@ from functools import wraps
 from data_fetcher import fetch_bootstrap
 from supabase import create_client
 
-GW_PLANNER_LOCK = threading.Lock()
+_prediction_engine_lock = threading.Lock()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -102,22 +102,16 @@ def _log_gw_planner_memory(label):
     except Exception as e:
         print(f"[GW PLANNER MEMORY] Failed to read memory: {e}")
 
-_prediction_engine = None
 def _get_prediction_engine():
-    global _prediction_engine
-
-    if _prediction_engine is None:
-        import time as _t
-        from prediction_engine import PredictionEngine
-
-        t0 = _t.time()
-        _prediction_engine = PredictionEngine()
-        print(
-            f"  [TIMING] PredictionEngine init: "
-            f"{_t.time() - t0:.1f}s"
-        )
-    return _prediction_engine
-
+    import time as _t
+    from prediction_engine import PredictionEngine
+    t0 = _t.time()
+    engine = PredictionEngine()
+    print(
+        f"  [TIMING] PredictionEngine init: "
+        f"{_t.time() - t0:.1f}s"
+    )
+    return engine
 
 def upload_prediction_cache(data):
     if not supabase:
@@ -294,90 +288,152 @@ except Exception as _e:
     print(f"  [STARTUP] apply_overrides_to_config skipped: {_e}")
 
 
+_prediction_run_lock = threading.Lock()
 def _run_predictions(gw=None):
     import time as _t
     from prediction_engine import PredictionEngine
     from squad_optimizer import SquadOptimizer, ChipAdvisor
 
-    global _prediction_engine
+    # Never allow two prediction jobs to run simultaneously.
+    if not _prediction_run_lock.acquire(blocking=False):
+        print("[REFRESH] Prediction already running — skipping.")
+        return None
 
-    t0 = _t.time()
-    _prediction_engine = PredictionEngine()
-    engine = _prediction_engine
-
-    print(
-        f"  [TIMING] PredictionEngine init: "
-        f"{_t.time() - t0:.1f}s"
-    )
-
-    target_gw = gw or engine.next_gw
-    gw_info = engine.get_gw_info(target_gw)
-
-    t1 = _t.time()
-    predictions = engine.predict_all(target_gw)
-    print(f"  [TIMING] predict_all: {_t.time()-t1:.1f}s")
-    engine._baseline_predictions = predictions
-
-    t2 = _t.time()
-    optimizer = SquadOptimizer(predictions)
-    squad = optimizer.optimize_squad()
-    print(f"  [TIMING] optimize_squad (normal): {_t.time()-t2:.1f}s")
-
-    t3 = _t.time()
-    bb_squad = optimizer.optimize_squad(chip="bench_boost")
-    print(f"  [TIMING] optimize_squad (bench_boost): {_t.time()-t3:.1f}s")
-    
-    target_gw = gw or engine.next_gw
-    prediction_file = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
-    chip_advisor = ChipAdvisor(predictions, gw_info)
-    chip_analysis = chip_advisor.analyze()
-    output = {
-        "generated_at": datetime.now().isoformat(), "gameweek": target_gw,
-        "gw_info": gw_info, "predictions": predictions, "squad": squad,
-        "bb_squad": bb_squad, "chip_analysis": chip_analysis,
-        "top_picks": predictions[:30],
-        "differentials": [p for p in predictions if float(p.get("selected_by_percent", 0)) < 10
-                          and p.get("starter_quality", {}).get("tier") in ("nailed", "regular")][:15],
-        "value_picks": sorted([p for p in predictions if p.get("price", 99) <= 6.5
-                               and p.get("starter_quality", {}).get("tier") in ("nailed", "regular")],
-                              key=lambda x: x["predicted_points"] / max(x.get("price", 4), 3.5), reverse=True)[:15],
-    }
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    filename = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
-    # Atomic write for current GW cache
-    tmp = filename.with_suffix(".tmp")
-    tmp.write_text(
-        json.dumps(output, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8"
-    )
-    os.replace(tmp, filename)
-    # Update stale fallback cache only after successful prediction
-    latest = OUTPUT_DIR / "latest_predictions.json"
-    latest_tmp = latest.with_suffix(".tmp")
-    latest_tmp.write_text(
-        json.dumps(output, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8"
-    )
-    os.replace(latest_tmp, latest)
-    # Keep only latest 3 GW files
     try:
-        old_files = sorted(
-            OUTPUT_DIR.glob("gw*_predictions.json"),
-            key=lambda x: x.stat().st_mtime,
-            reverse=True
+        t0 = _t.time()
+        print("[ENGINE] Creating PredictionEngine...")
+        engine = PredictionEngine()
+        print(
+            f"  [TIMING] PredictionEngine init: "
+            f"{_t.time() - t0:.1f}s"
         )
-        for old in old_files[3:]:
-            old.unlink()
-            print("[CACHE CLEAN] Removed", old.name)
-    except Exception as e:
-        print("[CACHE CLEAN] Failed:", e)
+        target_gw = gw or engine.next_gw
+        gw_info = engine.get_gw_info(target_gw)
 
-    try:
-        upload_prediction_cache(output)
-    except Exception as e:
-        print(f"[CACHE] Supabase upload failed: {e}")
-    invalidate_cache()
-    return output
+        t1 = _t.time()
+        predictions = engine.predict_all(target_gw)
+        print(f"  [TIMING] predict_all: {_t.time()-t1:.1f}s")
+
+        engine._baseline_predictions = predictions
+
+        t2 = _t.time()
+        optimizer = SquadOptimizer(predictions)
+        squad = optimizer.optimize_squad()
+        print(
+            f"  [TIMING] optimize_squad (normal): "
+            f"{_t.time()-t2:.1f}s"
+        )
+
+        t3 = _t.time()
+        bb_squad = optimizer.optimize_squad(chip="bench_boost")
+        print(
+            f"  [TIMING] optimize_squad (bench_boost): "
+            f"{_t.time()-t3:.1f}s"
+        )
+
+        chip_advisor = ChipAdvisor(predictions, gw_info)
+        chip_analysis = chip_advisor.analyze()
+
+        output = {
+            "generated_at": datetime.now().isoformat(),
+            "gameweek": target_gw,
+            "gw_info": gw_info,
+            "predictions": predictions,
+            "squad": squad,
+            "bb_squad": bb_squad,
+            "chip_analysis": chip_analysis,
+            "top_picks": predictions[:30],
+            "differentials": [
+                p for p in predictions
+                if float(p.get("selected_by_percent", 0)) < 10
+                and p.get("starter_quality", {}).get("tier")
+                    in ("nailed", "regular")
+            ][:15],
+            "value_picks": sorted(
+                [
+                    p for p in predictions
+                    if p.get("price", 99) <= 6.5
+                    and p.get("starter_quality", {}).get("tier")
+                        in ("nailed", "regular")
+                ],
+                key=lambda x:
+                    x["predicted_points"] /
+                    max(x.get("price", 4), 3.5),
+                reverse=True
+            )[:15],
+        }
+
+        OUTPUT_DIR.mkdir(exist_ok=True)
+
+        prediction_file = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
+        tmp = prediction_file.with_suffix(".tmp")
+
+        tmp.write_text(
+            json.dumps(
+                output,
+                indent=2,
+                ensure_ascii=False,
+                default=str
+            ),
+            encoding="utf-8"
+        )
+
+        os.replace(tmp, prediction_file)
+
+        latest = OUTPUT_DIR / "latest_predictions.json"
+        latest_tmp = latest.with_suffix(".tmp")
+
+        latest_tmp.write_text(
+            json.dumps(
+                output,
+                indent=2,
+                ensure_ascii=False,
+                default=str
+            ),
+            encoding="utf-8"
+        )
+
+        os.replace(latest_tmp, latest)
+
+        # Keep only latest 3 GW files
+        try:
+            old_files = sorted(
+                OUTPUT_DIR.glob("gw*_predictions.json"),
+                key=lambda x: x.stat().st_mtime,
+                reverse=True
+            )
+
+            for old in old_files[3:]:
+                old.unlink()
+                print("[CACHE CLEAN] Removed", old.name)
+
+        except Exception as e:
+            print("[CACHE CLEAN] Failed:", e)
+
+        try:
+            upload_prediction_cache(output)
+        except Exception as e:
+            print(f"[CACHE] Supabase upload failed: {e}")
+
+        invalidate_cache()
+
+        # Explicitly release large temporary objects before returning.
+        del chip_advisor
+        del optimizer
+        del bb_squad
+        del squad
+        del predictions
+        del engine
+        import gc
+        gc.collect()
+
+        print("[ENGINE] Prediction run complete; large objects released.")
+        return output
+
+    finally:
+        _prediction_run_lock.release()
+        print("[ENGINE] Prediction lock released.")
+
 
 def _refresh_data():
     global _last_refresh
@@ -396,18 +452,6 @@ def _refresh_data():
                 except: pass
         print(f"  [REFRESH] {datetime.now().strftime('%H:%M:%S')} — Running predictions...")
         _run_predictions()
-        # Also ensure last-completed GW predictions exist (needed by model optimizer)
-        try:
-            from data_fetcher import get_current_gameweek
-            current_gw = get_current_gameweek()
-            last_completed = current_gw - 1
-            if last_completed > 0:
-                last_file = OUTPUT_DIR / f"gw{last_completed}_predictions.json"
-                if not last_file.exists():
-                    print(f"  [REFRESH] Generating GW{last_completed} predictions for model analysis...")
-                    _run_predictions(gw=last_completed)
-        except Exception as e:
-            print(f"  [REFRESH] Could not generate last-completed GW predictions: {e}")
         _last_refresh = time.time()
         print(f"  [REFRESH] {datetime.now().strftime('%H:%M:%S')} — Done.")
     except Exception as e:
@@ -660,7 +704,6 @@ def _cached_predictions():
         _PREDICTIONS_MEMO["status"] = status
     print("[CACHE LOADED]",p.name,len(preds),"players","status:",status)
     return preds, data, status
-# ── Middleware ──
 
 # Endpoints safe to cache privately in the browser for a short time.
 _BROWSER_CACHE_API = {
@@ -1299,18 +1342,19 @@ def _run_predictions_bg(gw):
         return
     try:
         _prediction_status["running"] = True
-        _prediction_status["started_at"] = datetime.now().isoformat()
+        _prediction_status["started_at"] = time.time()
         _prediction_status["last_error"] = None
+        result = _run_predictions(gw)
         print("[RUN] Prediction generation started")
-        _run_predictions(gw)
-        _prediction_status["finished_at"] = datetime.now().isoformat()
-        print("[RUN] Prediction generation finished")
+        return result 
+        
     except Exception as e:
         _prediction_status["last_error"] = str(e)
         print("[RUN] Prediction failed:", e)
+
     finally:
         _prediction_status["running"] = False
-        _refresh_lock.release()
+        _prediction_run_lock.release()
 
 @app.route("/api/refresh")
 @limiter.limit("5 per minute")
@@ -1368,7 +1412,6 @@ def api_chat():
 
 
 # ── My Team ──
-
 @app.route("/api/my-team")
 def api_my_team():
     team_id = request.args.get("id") or _load_settings().get("team_id")
