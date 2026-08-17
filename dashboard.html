@@ -3237,7 +3237,7 @@ async function loadMyTeam() {
     const r = await fetch('/api/my-team?id=' + id);
     const data = await r.json();
     // debug print
-    console.log('[GW PLANNER] API response:', data);
+    console.log('[MY TEAM] API response:', data);
 
     if (data.error) { content.innerHTML = '<div class="card"><p style="color:var(--red);">Error: ' + data.error + '</p></div>'; loadingEl.style.display = 'none'; return; }
 
@@ -4700,80 +4700,107 @@ async function sendChat(){
 // ── GW Planner ──
 let PLANNER_DATA = null;
 async function loadGWPlanner() {
-  const horizon = document.getElementById('planner-horizon').value;
+  console.log('[GW PLANNER] loadGWPlanner() called');
+
+  const horizon = document.getElementById('planner-horizon')?.value || '5';
   const btn = document.getElementById('planner-btn');
   const loading = document.getElementById('planner-loading');
   const preseason = document.getElementById('planner-preseason-message');
 
-  // debug prints
   console.log('[GW PLANNER] preseason element:', preseason);
   console.log('[GW PLANNER] preseason display BEFORE:', preseason?.style.display);
-  console.log('[GW PLANNER] current URL:', window.location.href);
 
   // Check if team ID is saved
   let teamId = document.getElementById('team-id-input')?.value?.trim();
+
   if (!teamId) {
     try {
       const r = await fetch('/api/settings');
       const s = await r.json();
       teamId = s.team_id;
-    } catch (e) {}
+    } catch (e) {
+      console.error('[GW PLANNER] Failed to load settings:', e);
+    }
   }
+
+  // IMPORTANT:
+  // Do not require a team ID during preseason.
+  // The backend can tell us that GW1 has not started yet.
   if (!teamId) {
     alert('Import your team first on the My Squad tab.');
     return;
   }
+
   if (btn) {
     btn.disabled = true;
     btn.textContent = 'Generating...';
   }
+
   if (loading) {
     loading.style.display = '';
   }
 
   try {
-    const r = await fetch(`/api/gw-planner?id=${teamId}&horizon=${horizon}`);
+    const url = `/api/gw-planner?id=${teamId}&horizon=${horizon}`;
+
+    console.log('[GW PLANNER] Fetching:', url);
+
+    const r = await fetch(url);
     const data = await r.json();
+
+    console.log('[GW PLANNER] API response:', data);
+
     if (data.error) {
+      console.error('[GW PLANNER] API error:', data.error);
       alert('Error: ' + data.error);
       return;
     }
 
-    // ── Preseason ──
-    // FPL squad/picks are not available until GW1 starts.
-    if (data.preseason && data.score_status === 'unavailable') {
-      // debug log
+    // ── PRESEASON ──
+    if (data.preseason === true &&
+        data.score_status === 'unavailable') {
+
       console.log('[GW PLANNER] PRESEASON DETECTED');
+
       if (preseason) {
+        preseason.style.display = 'block';
+
         console.log(
           '[GW PLANNER] preseason display AFTER:',
-          preseason.style.display = ''
+          preseason.style.display
         );
       } else {
         console.error(
-          '[GW PLANNER] planner-preseason-message NOT FOUND'
+          '[GW PLANNER] ERROR: #planner-preseason-message NOT FOUND'
         );
       }
 
-      // Hide any stale planner results.
+      // Hide stale planner results
       const summary = document.getElementById('planner-summary');
       const timeline = document.getElementById('planner-timeline-wrap');
       const detail = document.getElementById('planner-detail-wrap');
+
       if (summary) summary.style.display = 'none';
       if (timeline) timeline.style.display = 'none';
       if (detail) detail.style.display = 'none';
+
       PLANNER_DATA = null;
+
       return;
     }
 
-    // ── Normal in-season rendering ──
+    // ── NORMAL IN-SEASON ──
+    console.log('[GW PLANNER] In-season data received');
+
     if (preseason) {
       preseason.style.display = 'none';
     }
+
     PLANNER_DATA = data;
     renderPlanner(data);
 
   } catch (e) {
+    console.error('[GW PLANNER] Request failed:', e);
     alert('Error loading planner: ' + e.message);
 
   } finally {
@@ -4781,6 +4808,7 @@ async function loadGWPlanner() {
       btn.disabled = false;
       btn.textContent = 'Generate Plan';
     }
+
     if (loading) {
       loading.style.display = 'none';
     }
