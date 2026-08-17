@@ -102,16 +102,6 @@ def _log_gw_planner_memory(label):
     except Exception as e:
         print(f"[GW PLANNER MEMORY] Failed to read memory: {e}")
 
-def _get_prediction_engine():
-    import time as _t
-    from prediction_engine import PredictionEngine
-    t0 = _t.time()
-    engine = PredictionEngine()
-    print(
-        f"  [TIMING] PredictionEngine init: "
-        f"{_t.time() - t0:.1f}s"
-    )
-    return engine
 
 def upload_prediction_cache(data):
     if not supabase:
@@ -1846,8 +1836,15 @@ def api_squad_predictions():
         if cached and cached.get("gameweek") == gw:
             pred_map = {p["player_id"]: p for p in preds}
         else:
-            engine = _get_prediction_engine()
-            pred_map = {p["player_id"]: p for p in engine.predict_all(gw)}
+            from prediction_engine import PredictionEngine
+            engine = PredictionEngine()
+            try:
+                pred_map = {
+                    p["player_id"]: p
+                    for p in engine.predict_all(gw)
+                }
+            finally:
+                del engine
         results = []
         for pid in player_ids:
             pred = pred_map.get(pid)
@@ -1876,7 +1873,6 @@ def api_simulate_transfer():
                 "error": "Missing squad_ids, out_id, or in_id"
             }), 400
 
-        engine = _get_prediction_engine()
         preds, _, _ = _cached_predictions()
         if preds:
             pred_map = {
@@ -1884,11 +1880,17 @@ def api_simulate_transfer():
                 for p in preds
             }
         else:
-            predictions = engine.predict_all(target_gw)
-            pred_map = {
-                p["player_id"]: p
-                for p in predictions
-            }
+            from prediction_engine import PredictionEngine
+            engine = PredictionEngine()
+            try:
+                predictions = engine.predict_all(target_gw)
+                pred_map = {
+                    p["player_id"]: p
+                    for p in predictions
+                }
+            finally:
+                del predictions
+                del engine
 
         out_p = pred_map.get(out_id, {})
         in_p = pred_map.get(in_id, {})
@@ -2045,8 +2047,16 @@ def api_season_chips():
                 import traceback
                 print("[CHIP] ERROR loading team:")
                 traceback.print_exc()
-        engine = _get_prediction_engine()    
-        result = SeasonChipPlanner(engine).analyze_season(chips_available=chips_available, current_squad_ids=squad_ids, bank=bank)
+        from prediction_engine import PredictionEngine
+        engine = PredictionEngine()
+        try:
+            result = SeasonChipPlanner(engine).analyze_season(
+                chips_available=chips_available,
+                current_squad_ids=squad_ids,
+                bank=bank
+            )
+        finally:
+            del engine
         result["user_chips_available"] = chips_available
         result["user_chips_used"] = [{"name":c.get("name"),"code":cmap.get(c.get("name",""),"?"),"gw":c.get("event"),
                                       "half":2 if c.get("event",0)>=HALF_CUTOFF else 1} for c in chips_used_list]
