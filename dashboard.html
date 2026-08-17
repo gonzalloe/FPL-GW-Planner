@@ -3213,6 +3213,10 @@ let SIM_CURRENT_GW = null; // Currently selected GW in simulator
 let SIM_FH_GW = null; // GW where Free Hit was applied (squad reverts after)
 
 function switchMyTeamTab(btn) {
+  // debug print
+  console.log('[MY TEAM TAB] switchMyTeamTab called:', btn);
+  console.log('[MY TEAM TAB] data-mtab:', btn?.dataset?.mtab);
+
   document.querySelectorAll('#page-myteam .mtab').forEach(t => t.style.display = 'none');
   document.querySelectorAll('#page-myteam [data-mtab]').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
