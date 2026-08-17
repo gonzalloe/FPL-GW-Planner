@@ -1371,17 +1371,14 @@ table tr:hover { background:var(--surface2); }
     <div id="myteam-preseason-message"
         class="card"
         style="display:none;margin-bottom:16px;text-align:center;padding:24px;">
-      <div style="font-size:28px;margin-bottom:8px;">📅</div>
+      <div style="font-size:28px;margin-bottom:8px;">⏳</div>
 
       <h3 style="margin-bottom:8px;color:#fde047;">
-        FPL Preseason
+        New Season — GW1 Pending
       </h3>
 
-      <p style="color:var(--text3);margin:0;">
-        Your FPL squad has been imported successfully, but the new season
-        has not started yet. Live gameweek data will become available
-        when GW1 begins.
-      </p>
+      <p style="color:var(--text3);margin:0;">Your FPL squad has been imported successfully, but the new season has not started yet.</p>
+      <p style="color:var(--text3);margin:0;">Live gameweek data will become available when GW1 begins.</p>
     </div>
 
     <!-- Stats row -->
@@ -4778,7 +4775,16 @@ async function sendChat(){
 
 // ── GW Planner ──
 let PLANNER_DATA = null;
+let PLANNER_LOADING = false;
 async function loadGWPlanner() {
+  // Prevent overlapping planner calculations
+  if (PLANNER_LOADING) {
+    console.warn('[GW PLANNER] Already running — ignoring duplicate request');
+    return;
+  }
+  PLANNER_LOADING = true;
+  console.log('[GW PLANNER] loadGWPlanner() called');
+
   const horizon =
     document.getElementById('planner-horizon')?.value || '5';
 
@@ -4806,6 +4812,7 @@ async function loadGWPlanner() {
 
   if (!teamId) {
     alert('Import your team first on the My Squad tab.');
+    PLANNER_LOADING = false;
     return;
   }
 
@@ -4822,8 +4829,7 @@ async function loadGWPlanner() {
     const url =
       `/api/gw-planner` +
       `?id=${encodeURIComponent(teamId)}` +
-      `&horizon=${encodeURIComponent(horizon)}` +
-      `&_t=${Date.now()}`;
+      `&horizon=${encodeURIComponent(horizon)}`;
 
     console.log('[GW PLANNER] Fetching:', url);
 
@@ -4852,11 +4858,11 @@ async function loadGWPlanner() {
     alert('Error loading planner: ' + e.message);
 
   } finally {
+    PLANNER_LOADING = false;
     if (btn) {
       btn.disabled = false;
       btn.textContent = 'Generate Plan';
     }
-
     if (loading) {
       loading.style.display = 'none';
     }

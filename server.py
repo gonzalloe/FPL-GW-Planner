@@ -20,12 +20,14 @@ import re
 import os
 import requests
 import traceback
+import psutil
 from pathlib import Path
 from datetime import datetime, timezone
 from functools import wraps
 from data_fetcher import fetch_bootstrap
 from supabase import create_client
 
+GW_PLANNER_LOCK = threading.Lock()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -91,6 +93,14 @@ else:
             return decorator
         def exempt(self, f): return f
     limiter = _NoopLimiter()
+
+def _log_gw_planner_memory(label):
+    try:
+        process = psutil.Process(os.getpid())
+        mem_mb = process.memory_info().rss / 1024 / 1024
+        print(f"[GW PLANNER MEMORY] {label}: {mem_mb:.1f} MB")
+    except Exception as e:
+        print(f"[GW PLANNER MEMORY] Failed to read memory: {e}")
 
 _prediction_engine = None
 def _get_prediction_engine():
@@ -1474,31 +1484,209 @@ def api_chip_analysis():
 @limiter.limit("5 per minute")
 def api_gw_planner():
     print("========== GW PLANNER REQUEST ==========")
-    print("[GW PLANNER] team_id:", request.args.get("id"))
-    print("[GW PLANNER] horizon:", request.args.get("horizon"))
     team_id = request.args.get("id") or _load_settings().get("team_id")
+    horizon = request.args.get("horizon", 5, type=int)
+    print("[GW PLANNER] team_id:", team_id)
+    print("[GW PLANNER] horizon:", horizon)
+
+    _log_gw_planner_memory("planner request START")
+  
     if not team_id:
         return jsonify({"error": "No team ID"}), 400
     try:
+        team_id = int(team_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid team ID"}), 400
+
+    # ── Validate horizon ──
+    # UI currently allows 3, 5, 8.
+    # Keep a hard server-side maximum to prevent accidental huge calculations.
+    horizon = max(1, min(horizon, 8))
+
+    # ─────────────────────────────────────────────
+    # PRESEASON CHECK
+    # ─────────────────────────────────────────────
+    
+    try:
+        import requests
+
+        fpl_url = f"https://fantasy.premierleague.com/api/entry/{team_id}/"
+
+        fpl_response = requests.get(fpl_url, timeout=10)
+        if fpl_response.ok:
+            team_data = fpl_response.json()
+            current_event = team_data.get("current_event")
+            print("[GW PLANNER] FPL current_event:", current_event)
+
+            # Preseason:
+            # FPL has not assigned the team to a current gameweek yet.
+            if current_event is None:
+                print(
+                    "[GW PLANNER] PRESEASON — "
+                    "skipping expensive planner calculation"
+                )
+
+                return jsonify({
+                    "preseason": True,
+                    "score_status": "unavailable",
+                    "from_gw": 1,
+                    "to_gw": horizon,
+                    "message": "GW Planner will activate after GW1 begins."
+                })
+
+    except Exception as e:
+        # Don't kill the planner just because the optional
+        # preseason check failed. The actual planner can still
+        # determine the state itself.
+        print(
+            "[GW PLANNER] Preseason check failed:",
+            repr(e)
+        )
+
+    # ─────────────────────────────────────────────
+    # PREVENT CONCURRENT HEAVY CALCULATIONS
+    # ─────────────────────────────────────────────
+
+    if not GW_PLANNER_LOCK.acquire(blocking=False):
+        print(
+            "[GW PLANNER] Another calculation is already running"
+        )
+
+        return jsonify({
+            "error": (
+                "GW Planner is already calculating. "
+                "Please wait for the current calculation to finish."
+            )
+        }), 429
+
+    try:
+        print(
+            "[GW PLANNER] Lock acquired — "
+            "starting planner calculation"
+        )
+
+        _log_gw_planner_memory("before GWPlanner")
+
+        # ─────────────────────────────────────────
+        # CREATE PLANNER
+        # ─────────────────────────────────────────
+
         from gw_planner import GWPlanner
+
         planner = GWPlanner(
-            horizon=request.args.get("horizon", 5, type=int)
+            horizon=horizon
         )
+
+        _log_gw_planner_memory("after GWPlanner init")
+
+        # ─────────────────────────────────────────
+        # RUN PLANNER
+        # ─────────────────────────────────────────
+
+        print(
+            "[GW PLANNER] Running plan_from_team_id:",
+            team_id
+        )
+
         plan = planner.plan_from_team_id(
-            int(team_id),
-            horizon=planner.horizon
+            team_id,
+            horizon=horizon
         )
-        # debug print
-        print("[GW PLANNER DEBUG] plan keys:", list(plan.keys()))
-        print("[GW PLANNER DEBUG] preseason:", plan.get("preseason"))
-        print("[GW PLANNER] score_status:", plan.get("score_status"))
-        if plan.get("error"):
+
+        _log_gw_planner_memory(
+            "after plan_from_team_id"
+        )
+
+        # ─────────────────────────────────────────
+        # DEBUG
+        # ─────────────────────────────────────────
+
+        if isinstance(plan, dict):
+            print(
+                "[GW PLANNER DEBUG] plan keys:",
+                list(plan.keys())
+            )
+
+            print(
+                "[GW PLANNER DEBUG] preseason:",
+                plan.get("preseason")
+            )
+
+            print(
+                "[GW PLANNER DEBUG] score_status:",
+                plan.get("score_status")
+            )
+
+        # ─────────────────────────────────────────
+        # PLANNER ERROR
+        # ─────────────────────────────────────────
+
+        if isinstance(plan, dict) and plan.get("error"):
+            print(
+                "[GW PLANNER] Planner returned error:",
+                plan.get("error")
+            )
+
             return jsonify(plan), 400
+
+        # ─────────────────────────────────────────
+        # SUCCESS
+        # ─────────────────────────────────────────
+
+        print(
+            "[GW PLANNER] Calculation complete"
+        )
+
+        _log_gw_planner_memory("before response")
+
         return jsonify(plan)
+
+    except MemoryError:
+        # Python-level MemoryError.
+        # Render may kill the process before this executes,
+        # but keeping this here is still useful.
+        print(
+            "[GW PLANNER] !!! PYTHON MEMORY ERROR !!!"
+        )
+
+        _log_gw_planner_memory("MemoryError")
+
+        return jsonify({
+            "error": (
+                "GW Planner ran out of memory while calculating "
+                "the plan. Try a shorter planning horizon."
+            )
+        }), 500
+
     except Exception as e:
         import traceback
+
+        print(
+            "[GW PLANNER] Exception:",
+            repr(e)
+        )
+
         traceback.print_exc()
-        return jsonify({"error": "Internal server error"}), 500
+
+        _log_gw_planner_memory(
+            "exception"
+        )
+
+        return jsonify({
+            "error": "Internal server error"
+        }), 500
+
+    finally:
+        # Always release the lock.
+        GW_PLANNER_LOCK.release()
+
+        print(
+            "[GW PLANNER] Lock released"
+        )
+
+        _log_gw_planner_memory(
+            "request finished"
+        )
 
 @app.route("/api/fixture-ticker")
 @cached_response(ttl_seconds=120, key_prefix="fixture-ticker")
