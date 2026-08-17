@@ -3218,9 +3218,9 @@ function switchMyTeamTab(btn) {
   btn.classList.add('active');
   const tab = document.getElementById('mtab-' + btn.dataset.mtab);
   if (tab) { tab.style.display = 'block'; tab.classList.add('active'); }
-  if (btn.dataset.mtab === 'planner' && !PLANNER_DATA) loadGWPlanner();
-  if (btn.dataset.mtab === 'fixtures' && !document.getElementById('planner-ticker').innerHTML) loadFixtureTicker();
-  if (btn.dataset.mtab === 'simulator') initSimulator();
+  if (btn.dataset.mtab === 'planner') {loadGWPlanner()};
+  if (btn.dataset.mtab === 'fixtures' && !document.getElementById('planner-ticker').innerHTML) {loadFixtureTicker()};
+  if (btn.dataset.mtab === 'simulator') {initSimulator()};
 }
 
 async function loadMyTeam() {
