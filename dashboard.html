@@ -3236,6 +3236,7 @@ async function loadMyTeam() {
   try {
     const r = await fetch('/api/my-team?id=' + id);
     const data = await r.json();
+    console.log('[GW PLANNER] API response:', data);
     if (data.error) { content.innerHTML = '<div class="card"><p style="color:var(--red);">Error: ' + data.error + '</p></div>'; loadingEl.style.display = 'none'; return; }
 
     MY_TEAM_DATA = data;
