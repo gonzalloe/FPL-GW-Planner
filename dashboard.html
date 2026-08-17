@@ -1460,27 +1460,26 @@ table tr:hover { background:var(--surface2); }
         </p>
       </div>
 
-      <div id="planner-controls">
-        <div class="planner-header">
-          <label style="font-size:13px;color:var(--text2);">Planning horizon:</label>
-          <select id="planner-horizon" onchange="loadGWPlanner()">
-            <option value="3">3 Gameweeks</option>
-            <option value="5" selected>5 Gameweeks</option>
-            <option value="8">8 Gameweeks</option>
-          </select>
-          <button class="btn btn-primary" onclick="loadGWPlanner()" id="planner-btn">Generate Plan</button>
-          <span id="planner-loading" style="display:none;color:var(--text3);font-size:12px;">
-            <span class="chat-spinner" style="width:14px;height:14px;border-width:2px;vertical-align:middle;margin-right:6px;"></span>Analyzing...
-          </span>
-        </div>
-        <div id="planner-summary" style="display:none;"><div class="planner-summary" id="planner-summary-stats"></div></div>
-        <div id="planner-timeline-wrap" style="display:none;">
-          <div class="card" style="margin-bottom:20px;"><div class="card-header"><h3>📅 Transfer Timeline</h3><span id="planner-range" style="color:var(--text3);font-size:12px;"></span></div><div class="planner-timeline" id="planner-timeline"></div></div>
-        </div>
-        <div id="planner-detail-wrap" style="display:none;">
-          <div class="card"><div class="card-header"><h3>📋 GW-by-GW Breakdown</h3></div><div id="planner-detail"></div></div>
-        </div>
+      <div class="planner-header">
+         <label style="font-size:13px;color:var(--text2);">Planning horizon:</label>
+         <select id="planner-horizon" onchange="loadGWPlanner()">
+          <option value="3">3 Gameweeks</option>
+          <option value="5" selected>5 Gameweeks</option>
+          <option value="8">8 Gameweeks</option>
+        </select>
+        <button class="btn btn-primary" onclick="loadGWPlanner()" id="planner-btn">Generate Plan</button>
+        <span id="planner-loading" style="display:none;color:var(--text3);font-size:12px;">
+          <span class="chat-spinner" style="width:14px;height:14px;border-width:2px;vertical-align:middle;margin-right:6px;"></span>Analyzing...
+        </span>
       </div>
+      <div id="planner-summary" style="display:none;"><div class="planner-summary" id="planner-summary-stats"></div></div>
+      <div id="planner-timeline-wrap" style="display:none;">
+        <div class="card" style="margin-bottom:20px;"><div class="card-header"><h3>📅 Transfer Timeline</h3><span id="planner-range" style="color:var(--text3);font-size:12px;"></span></div><div class="planner-timeline" id="planner-timeline"></div></div>
+      </div>
+      <div id="planner-detail-wrap" style="display:none;">
+        <div class="card"><div class="card-header"><h3>📋 GW-by-GW Breakdown</h3></div><div id="planner-detail"></div></div>
+      </div>
+  
 
     <!-- Tab: Fixture Ticker -->
     <div class="mtab" id="mtab-fixtures" style="display:none;">
@@ -4697,11 +4696,11 @@ async function sendChat(){
 
 // ── GW Planner ──
 let PLANNER_DATA = null;
-
 async function loadGWPlanner() {
   const horizon = document.getElementById('planner-horizon').value;
   const btn = document.getElementById('planner-btn');
   const loading = document.getElementById('planner-loading');
+  const preseason = document.getElementById('planner-preseason-message');
 
   // Check if team ID is saved
   let teamId = document.getElementById('team-id-input')?.value?.trim();
@@ -4710,16 +4709,19 @@ async function loadGWPlanner() {
       const r = await fetch('/api/settings');
       const s = await r.json();
       teamId = s.team_id;
-    } catch(e) {}
+    } catch (e) {}
   }
   if (!teamId) {
     alert('Import your team first on the My Squad tab.');
     return;
   }
-
-  btn.disabled = true;
-  if (loading) loading.style.display = '';
-  btn.textContent = 'Generating...';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+  }
+  if (loading) {
+    loading.style.display = '';
+  }
 
   try {
     const r = await fetch(`/api/gw-planner?id=${teamId}&horizon=${horizon}`);
@@ -4728,14 +4730,15 @@ async function loadGWPlanner() {
       alert('Error: ' + data.error);
       return;
     }
-    // Preseason: squad data is not available yet.
-    if (data.preseason && data.score_status === 'unavailable') {
-      const preseason = document.getElementById('planner-preseason-message');
-      const controls = document.getElementById('planner-controls');
-      if (preseason) {preseason.style.display = '';}
-      if (controls) {controls.style.display = 'none';}
 
-      // Clear any stale planner results.
+    // ── Preseason ──
+    // FPL squad/picks are not available until GW1 starts.
+    if (data.preseason && data.score_status === 'unavailable') {
+      if (preseason) {
+        preseason.style.display = '';
+      }
+
+      // Hide any stale planner results.
       const summary = document.getElementById('planner-summary');
       const timeline = document.getElementById('planner-timeline-wrap');
       const detail = document.getElementById('planner-detail-wrap');
@@ -4745,20 +4748,25 @@ async function loadGWPlanner() {
       PLANNER_DATA = null;
       return;
     }
-    // Normal in-season rendering.
-    const preseason = document.getElementById('planner-preseason-message');
-    const controls = document.getElementById('planner-controls');
-    if (preseason) {preseason.style.display = 'none';}
-    if (controls) {controls.style.display = '';}
 
+    // ── Normal in-season rendering ──
+    if (preseason) {
+      preseason.style.display = 'none';
+    }
     PLANNER_DATA = data;
     renderPlanner(data);
-  } catch(e) {
+
+  } catch (e) {
     alert('Error loading planner: ' + e.message);
+
   } finally {
-    btn.disabled = false;
-    if (loading) loading.style.display = 'none';
-    btn.textContent = 'Generate Plan';
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Generate Plan';
+    }
+    if (loading) {
+      loading.style.display = 'none';
+    }
   }
 }
 
