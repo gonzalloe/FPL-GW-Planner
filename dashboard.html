@@ -1367,6 +1367,23 @@ table tr:hover { background:var(--surface2); }
 
   <!-- After team is loaded, these sections appear -->
   <div id="myteam-loaded" style="display:none;">
+    <!-- Preseason notice -->
+    <div id="myteam-preseason-message"
+        class="card"
+        style="display:none;margin-bottom:16px;text-align:center;padding:24px;">
+      <div style="font-size:28px;margin-bottom:8px;">📅</div>
+
+      <h3 style="margin-bottom:8px;color:#fde047;">
+        FPL Preseason
+      </h3>
+
+      <p style="color:var(--text3);margin:0;">
+        Your FPL squad has been imported successfully, but the new season
+        has not started yet. Live gameweek data will become available
+        when GW1 begins.
+      </p>
+    </div>
+
     <!-- Stats row -->
     <div class="stats-row" id="myteam-stats"></div>
 
@@ -1374,7 +1391,7 @@ table tr:hover { background:var(--surface2); }
     <div class="filters" style="margin-bottom:16px;">
       <button class="filter-btn active" data-mtab="squad" onclick="switchMyTeamTab(this)">📋 My Squad</button>
       <button class="filter-btn" data-mtab="simulator" id="mtab-btn-simulator" onclick="switchMyTeamTab(this)">🔄 Transfer Simulator</button>
-      <button type="button" class="filter-btn" data-mtab="planner" id="mtab-btn-planner" onclick="console.log('[HTML BUTTON] GW Planner clicked'); switchMyTeamTab(this)">📅 GW Planner</button>
+      <button type="button" class="filter-btn" data-mtab="planner" id="mtab-btn-planner" onclick="switchMyTeamTab(this)">📅 GW Planner</button>
       <button class="filter-btn" data-mtab="fixtures" onclick="switchMyTeamTab(this)">📊 Fixture Ticker</button>
     </div>
 
@@ -1447,19 +1464,6 @@ table tr:hover { background:var(--surface2); }
 
     <!-- Tab: GW Planner -->
     <div class="mtab" id="mtab-planner" style="display:none;">
-      <div id="planner-preseason-message" class="planner-preseason-message" style="display:none;">
-        <h3 style="color:#fde047;">⏳ GW Planner will activate after GW1 starts</h3>
-        <p>
-          Your current FPL squad is not available yet because the season
-          has not started. Transfer planning cannot be calculated accurately
-          without your squad.
-        </p>
-        <p>
-          Once GW1 squad data is available, this planner will generate your
-          recommended transfers, chips, and gameweek-by-gameweek plan.
-        </p>
-      </div>
-
       <div class="planner-header">
          <label style="font-size:13px;color:var(--text2);">Planning horizon:</label>
          <select id="planner-horizon" onchange="loadGWPlanner()">
@@ -2602,7 +2606,7 @@ async function loadData() {
           const snap = Object.assign({}, DATA, {__savedAt: Date.now()});
           sessionStorage.setItem('fpl_preds_snapshot_v1', JSON.stringify(snap));
         } catch(e) { /* quota exceeded / private mode: silently skip */ }
-        _clearPhaseTimers();
+        // _clearPhaseTimers();
         if (window.__phaseTimer1) clearTimeout(window.__phaseTimer1);
         if (window.__phaseTimer2) clearTimeout(window.__phaseTimer2);
         if (window._loadingTicker) { clearInterval(window._loadingTicker); window._loadingTicker = null; }
@@ -3213,23 +3217,60 @@ let SIM_CURRENT_GW = null; // Currently selected GW in simulator
 let SIM_FH_GW = null; // GW where Free Hit was applied (squad reverts after)
 
 function switchMyTeamTab(btn) {
-  // debug print
+  const tabName = btn.dataset.mtab;
+
   console.log('[MY TEAM TAB] clicked:', btn);
-  console.log('[MY TEAM TAB] data-mtab:', btn?.dataset?.mtab);
+  console.log('[MY TEAM TAB] data-mtab:', tabName);
 
-  document.querySelectorAll('#page-myteam .mtab').forEach(t => t.style.display = 'none');
-  document.querySelectorAll('#page-myteam [data-mtab]').forEach(b => b.classList.remove('active'));
+  document
+    .querySelectorAll('#page-myteam .mtab')
+    .forEach(t => {
+      t.style.display = 'none';
+      t.classList.remove('active');
+    });
+
+  document
+    .querySelectorAll('#page-myteam [data-mtab]')
+    .forEach(b => {
+      b.classList.remove('active');
+    });
+
   btn.classList.add('active');
-  const tab = document.getElementById('mtab-' + btn.dataset.mtab);
 
-  //debug print 
-  console.log('[MY TEAM TAB] tabName:', tabName);
-  console.log('[MY TEAM TAB] tab element:', tab);
+  const tab = document.getElementById('mtab-' + tabName);
 
-  if (tab) { tab.style.display = 'block'; tab.classList.add('active'); }
-  if (btn.dataset.mtab === 'planner') {loadGWPlanner()};
-  if (btn.dataset.mtab === 'fixtures' && !document.getElementById('planner-ticker').innerHTML) {loadFixtureTicker()};
-  if (btn.dataset.mtab === 'simulator') {initSimulator()};
+  if (!tab) {
+    console.error(
+      '[MY TEAM TAB] Tab not found:',
+      'mtab-' + tabName
+    );
+    return;
+  }
+
+  tab.style.display = 'block';
+  tab.classList.add('active');
+
+  // Only initialise these tabs when actually opened.
+  if (tabName === 'fixtures') {
+    const ticker = document.getElementById('planner-ticker');
+
+    if (ticker && !ticker.innerHTML) {
+      loadFixtureTicker();
+    }
+  }
+
+  if (tabName === 'simulator') {
+    initSimulator();
+  }
+}
+
+function isPreseasonTeam(data) {
+  return (
+    data?.info?.current_event == null &&
+    !data?.starters?.length &&
+    !data?.bench?.length &&
+    data?.info?.gameweek_points == null
+  );
 }
 
 async function loadMyTeam() {
@@ -3245,16 +3286,45 @@ async function loadMyTeam() {
   try {
     const r = await fetch('/api/my-team?id=' + id);
     const data = await r.json();
-    // debug print
-    console.log('[MY TEAM] API response:', data);
 
-    if (data.error) { content.innerHTML = '<div class="card"><p style="color:var(--red);">Error: ' + data.error + '</p></div>'; loadingEl.style.display = 'none'; return; }
+    console.log('[MY TEAM] Team loaded:', data);
+
+    if (data.error) {
+      content.innerHTML =
+        '<div class="card"><p style="color:var(--red);">Error: ' +
+        data.error +
+        '</p></div>';
+
+      loadingEl.style.display = 'none';
+      return;
+    }
 
     MY_TEAM_DATA = data;
-    MY_TEAM_ORIGINAL = JSON.parse(JSON.stringify(data)); // Deep copy for FH revert
+    MY_TEAM_ORIGINAL = JSON.parse(JSON.stringify(data));
+
+    // Detect preseason immediately after team import
+    const preseason = isPreseasonTeam(data);
+
+    console.log('[MY TEAM] Preseason:', preseason);
+
     loadingEl.style.display = 'none';
     content.style.display = 'none';
     loaded.style.display = '';
+
+    // Show preseason message after successful import
+    const preseasonMessage =
+      document.getElementById('myteam-preseason-message');
+
+    if (preseasonMessage) {
+      preseasonMessage.style.display = preseason ? 'block' : 'none';
+    }
+
+    console.log(
+      '[MY TEAM] Preseason message:',
+      preseasonMessage,
+      'display:',
+      preseasonMessage?.style.display
+    );
 
     // Stats
     document.getElementById('myteam-stats').innerHTML = `
@@ -4709,32 +4779,31 @@ async function sendChat(){
 // ── GW Planner ──
 let PLANNER_DATA = null;
 async function loadGWPlanner() {
-  console.log('[GW PLANNER] loadGWPlanner() called');
+  const horizon =
+    document.getElementById('planner-horizon')?.value || '5';
 
-  const horizon = document.getElementById('planner-horizon')?.value || '5';
-  const btn = document.getElementById('planner-btn');
-  const loading = document.getElementById('planner-loading');
-  const preseason = document.getElementById('planner-preseason-message');
+  const btn =
+    document.getElementById('planner-btn');
 
-  console.log('[GW PLANNER] preseason element:', preseason);
-  console.log('[GW PLANNER] preseason display BEFORE:', preseason?.style.display);
+  const loading =
+    document.getElementById('planner-loading');
 
-  // Check if team ID is saved
-  let teamId = document.getElementById('team-id-input')?.value?.trim();
+  let teamId =
+    document.getElementById('team-id-input')?.value?.trim();
 
   if (!teamId) {
     try {
-      const r = await fetch('/api/settings');
+      const r = await fetch('/api/settings', {
+        cache: 'no-store'
+      });
+
       const s = await r.json();
       teamId = s.team_id;
     } catch (e) {
-      console.error('[GW PLANNER] Failed to load settings:', e);
+      console.error('[GW PLANNER] Settings error:', e);
     }
   }
 
-  // IMPORTANT:
-  // Do not require a team ID during preseason.
-  // The backend can tell us that GW1 has not started yet.
   if (!teamId) {
     alert('Import your team first on the My Squad tab.');
     return;
@@ -4750,59 +4819,29 @@ async function loadGWPlanner() {
   }
 
   try {
-    const url = `/api/gw-planner?id=${teamId}&horizon=${horizon}`;
+    const url =
+      `/api/gw-planner` +
+      `?id=${encodeURIComponent(teamId)}` +
+      `&horizon=${encodeURIComponent(horizon)}` +
+      `&_t=${Date.now()}`;
 
     console.log('[GW PLANNER] Fetching:', url);
 
-    const r = await fetch(url);
+    const r = await fetch(url, {
+      cache: 'no-store'
+    });
+
+    if (!r.ok) {
+      throw new Error(`HTTP ${r.status}`);
+    }
+
     const data = await r.json();
 
     console.log('[GW PLANNER] API response:', data);
 
     if (data.error) {
-      console.error('[GW PLANNER] API error:', data.error);
       alert('Error: ' + data.error);
       return;
-    }
-
-    // ── PRESEASON ──
-    if (data.preseason === true &&
-        data.score_status === 'unavailable') {
-
-      console.log('[GW PLANNER] PRESEASON DETECTED');
-
-      if (preseason) {
-        preseason.style.display = 'block';
-
-        console.log(
-          '[GW PLANNER] preseason display AFTER:',
-          preseason.style.display
-        );
-      } else {
-        console.error(
-          '[GW PLANNER] ERROR: #planner-preseason-message NOT FOUND'
-        );
-      }
-
-      // Hide stale planner results
-      const summary = document.getElementById('planner-summary');
-      const timeline = document.getElementById('planner-timeline-wrap');
-      const detail = document.getElementById('planner-detail-wrap');
-
-      if (summary) summary.style.display = 'none';
-      if (timeline) timeline.style.display = 'none';
-      if (detail) detail.style.display = 'none';
-
-      PLANNER_DATA = null;
-
-      return;
-    }
-
-    // ── NORMAL IN-SEASON ──
-    console.log('[GW PLANNER] In-season data received');
-
-    if (preseason) {
-      preseason.style.display = 'none';
     }
 
     PLANNER_DATA = data;
