@@ -102,7 +102,6 @@ def _log_gw_planner_memory(label):
     except Exception as e:
         print(f"[GW PLANNER MEMORY] Failed to read memory: {e}")
 
-
 def upload_prediction_cache(data):
     if not supabase:
         print("[CACHE] Supabase disabled")
@@ -1327,24 +1326,29 @@ def api_run():
 
 def _run_predictions_bg(gw):
     global _prediction_status
-    if not _refresh_lock.acquire(blocking=False):
-        print("[RUN] Already running, skipping.")
+    if not _prediction_run_lock.acquire(blocking=False):
+        print("[RUN] Prediction already running, skipping.")
         return
     try:
         _prediction_status["running"] = True
         _prediction_status["started_at"] = time.time()
         _prediction_status["last_error"] = None
+
         result = _run_predictions(gw)
-        print("[RUN] Prediction generation started")
-        return result 
-        
+
+        print("[RUN] Prediction generation completed")
+        return result
+
     except Exception as e:
         _prediction_status["last_error"] = str(e)
         print("[RUN] Prediction failed:", e)
-
+        traceback.print_exc()
     finally:
         _prediction_status["running"] = False
+        _prediction_status["finished_at"] = time.time()
         _prediction_run_lock.release()
+        print("[RUN] Prediction lock released")
+
 
 @app.route("/api/refresh")
 @limiter.limit("5 per minute")
@@ -1828,23 +1832,31 @@ def api_squad_predictions():
     try:
         gw = request.args.get("gw", 0, type=int)
         ids_str = request.args.get("ids", "")
+
         if not gw or not ids_str:
-            return jsonify({"error": "Need ?gw=X&ids=1,2,3"}), 400
-        player_ids = [int(x) for x in ids_str.split(",") if x.strip()]
-        # Use cached if same GW, otherwise run fresh
-        preds, cached, _ = _cached_predictions()
-        if cached and cached.get("gameweek") == gw:
-            pred_map = {p["player_id"]: p for p in preds}
-        else:
-            from prediction_engine import PredictionEngine
-            engine = PredictionEngine()
-            try:
-                pred_map = {
-                    p["player_id"]: p
-                    for p in engine.predict_all(gw)
-                }
-            finally:
-                del engine
+            return jsonify({
+                "error": "Need ?gw=X&ids=1,2,3"
+            }), 400
+        player_ids = [
+            int(x) for x in ids_str.split(",")
+            if x.strip()
+        ]
+        preds, cached, status = _cached_predictions()
+        if not preds:
+            return jsonify({
+                "error": "Predictions are not ready yet. Please wait for the data refresh."
+            }), 503
+
+        cached_gw = cached.get("gameweek") if cached else None
+        if cached_gw != gw:
+            return jsonify({
+                "error": f"Predictions for GW{gw} are not available yet.",
+                "cached_gameweek": cached_gw
+            }), 503
+        pred_map = {
+            p["player_id"]: p
+            for p in preds
+        }
         results = []
         for pid in player_ids:
             pred = pred_map.get(pid)
@@ -1855,14 +1867,16 @@ def api_squad_predictions():
             else:
                 results.append({"player_id": pid, "name": "?", "predicted_points": 0, "fixtures": []})
         return jsonify({"gameweek": gw, "predictions": results})
-    except Exception as e:
-        import traceback; traceback.print_exc()
+    except Exception:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route("/api/simulate-transfer", methods=["POST"])
 def api_simulate_transfer():
     try:
         data = request.get_json(silent=True) or {}
+
         squad_ids = data.get("squad_ids", [])
         out_id = data.get("out_id")
         in_id = data.get("in_id")
@@ -1873,30 +1887,71 @@ def api_simulate_transfer():
                 "error": "Missing squad_ids, out_id, or in_id"
             }), 400
 
-        preds, _, _ = _cached_predictions()
-        if preds:
-            pred_map = {
-                p["player_id"]: p
-                for p in preds
-            }
-        else:
-            from prediction_engine import PredictionEngine
-            engine = PredictionEngine()
-            try:
-                predictions = engine.predict_all(target_gw)
-                pred_map = {
-                    p["player_id"]: p
-                    for p in predictions
-                }
-            finally:
-                del predictions
-                del engine
+        # ============================================================
+        # CACHE ONLY
+        # Never create PredictionEngine from this request.
+        # ============================================================
+        preds, cached, status = _cached_predictions()
+
+        if not preds:
+            return jsonify({
+                "error": (
+                    "Predictions are not ready yet. "
+                    "Please wait for the data refresh."
+                )
+            }), 503
+
+        cached_gw = cached.get("gameweek")
+
+        # If a specific GW was requested, it must match the cache.
+        if (
+            target_gw is not None
+            and cached_gw is not None
+            and int(target_gw) != int(cached_gw)
+        ):
+            return jsonify({
+                "error": (
+                    f"Predictions for GW{target_gw} are not available yet. "
+                    f"Current cached predictions are for GW{cached_gw}."
+                ),
+                "requested_gameweek": int(target_gw),
+                "cached_gameweek": cached_gw,
+            }), 503
+
+        pred_map = {
+            p["player_id"]: p
+            for p in preds
+            if "player_id" in p
+        }
 
         out_p = pred_map.get(out_id, {})
         in_p = pred_map.get(in_id, {})
 
+        if not out_p:
+            return jsonify({
+                "error": (
+                    f"Player {out_id} is not available "
+                    "in prediction cache."
+                )
+            }), 404
+
+        if not in_p:
+            return jsonify({
+                "error": (
+                    f"Player {in_id} is not available "
+                    "in prediction cache."
+                )
+            }), 404
+
+        # ============================================================
+        # CURRENT XI
+        # ============================================================
         cur = sorted(
-            [pred_map.get(pid, {}) for pid in squad_ids],
+            [
+                pred_map[pid]
+                for pid in squad_ids
+                if pid in pred_map
+            ],
             key=lambda x: x.get("predicted_points", 0),
             reverse=True
         )[:11]
@@ -1906,13 +1961,20 @@ def api_simulate_transfer():
             for p in cur
         )
 
+        # ============================================================
+        # NEW XI AFTER TRANSFER
+        # ============================================================
         new_ids = [
             pid for pid in squad_ids
             if pid != out_id
         ] + [in_id]
 
         new = sorted(
-            [pred_map.get(pid, {}) for pid in new_ids],
+            [
+                pred_map[pid]
+                for pid in new_ids
+                if pid in pred_map
+            ],
             key=lambda x: x.get("predicted_points", 0),
             reverse=True
         )[:11]
@@ -1922,30 +1984,30 @@ def api_simulate_transfer():
             for p in new
         )
 
-        gw = target_gw or engine.next_gw
+        # ============================================================
+        # GAMEWEEK
+        # ============================================================
+        gw = int(target_gw or cached_gw or 1)
 
-        multi_gw = []
+        # ============================================================
+        # MULTI-GW
+        #
+        # Cache contains the current prediction GW only.
+        # Do NOT call PredictionEngine here.
+        # ============================================================
+        inf = in_p.get("predicted_points", 0)
+        outf = out_p.get("predicted_points", 0)
 
-        for fgw in range(gw, min(gw + 4, 39)):
-            if fgw == gw:
-                inf = in_p.get("predicted_points", 0)
-                outf = out_p.get("predicted_points", 0)
-            else:
-                inf = engine.predict_player(
-                    in_id, fgw
-                ).get("predicted_points", 0)
+        multi_gw = [{
+            "gw": gw,
+            "in_xpts": round(inf, 2),
+            "out_xpts": round(outf, 2),
+            "gain": round(inf - outf, 2),
+        }]
 
-                outf = engine.predict_player(
-                    out_id, fgw
-                ).get("predicted_points", 0)
-
-            multi_gw.append({
-                "gw": fgw,
-                "in_xpts": round(inf, 2),
-                "out_xpts": round(outf, 2),
-                "gain": round(inf - outf, 2),
-            })
-
+        # ============================================================
+        # RESPONSE
+        # ============================================================
         return jsonify({
             "gameweek": gw,
 
@@ -1984,9 +2046,19 @@ def api_simulate_transfer():
                     - out_p.get("predicted_points", 0),
                     2
                 ),
-                "xi_xpts_before": round(cur_xpts, 1),
-                "xi_xpts_after": round(new_xpts, 1),
-                "xi_gain": round(new_xpts - cur_xpts, 1),
+
+                "xi_xpts_before": round(
+                    cur_xpts, 1
+                ),
+
+                "xi_xpts_after": round(
+                    new_xpts, 1
+                ),
+
+                "xi_gain": round(
+                    new_xpts - cur_xpts, 1
+                ),
+
                 "price_delta": round(
                     in_p.get("price", 0)
                     - out_p.get("price", 0),
@@ -1995,6 +2067,7 @@ def api_simulate_transfer():
             },
 
             "multi_gw": multi_gw,
+
             "total_multi_gw_gain": round(
                 sum(g["gain"] for g in multi_gw),
                 2
@@ -2004,70 +2077,227 @@ def api_simulate_transfer():
     except Exception:
         import traceback
         traceback.print_exc()
+
         return jsonify({
             "error": "Internal server error"
         }), 500
+    
 
 @app.route("/api/season-chips")
 def api_season_chips():
+    engine = None
+
     try:
         from chip_planner import SeasonChipPlanner
         settings = _load_settings()
+
         squad_ids = None
-        chips_available = ["BB","TC","FH","WC"]
+        chips_available = ["BB", "TC", "FH", "WC"]
         chips_used_list = []
         bank = 0.0
-        HALF_CUTOFF = 20; current_half = 2
-        cmap = {"bboost":"BB","3xc":"TC","freehit":"FH","wildcard":"WC"}
+
+        HALF_CUTOFF = 20
+        current_half = 2
+
+        cmap = {
+            "bboost": "BB",
+            "3xc": "TC",
+            "freehit": "FH",
+            "wildcard": "WC",
+        }
+
         team_id = settings.get("team_id")
+
+        # ============================================================
+        # LOAD USER TEAM
+        # ============================================================
         if team_id:
             try:
                 from my_team import fetch_my_team
                 from data_fetcher import get_current_gameweek
-                td = fetch_my_team(settings["team_id"])
+
+                td = fetch_my_team(team_id)
 
                 if not td.get("error"):
-                    squad_ids = [p.get("element") for p in td.get("picks",[])]
-                    bank = td.get("gw_summary",{}).get("bank",0)
-                    chips_used_list = td.get("chips",[])
-                    # Use bootstrap authoritative current GW, NOT gw_summary.event
-                    # (which is the last-completed GW and caused FH-at-GW33 to be skipped).
-                    try: cgw = get_current_gameweek()
-                    except: cgw = td.get("gw_summary",{}).get("event",1) + 1
-                    current_half = 2 if cgw >= HALF_CUTOFF else 1
+                    squad_ids = [
+                        p.get("element")
+                        for p in td.get("picks", [])
+                        if p.get("element") is not None
+                    ]
+
+                    bank = td.get(
+                        "gw_summary", {}
+                    ).get("bank", 0)
+
+                    chips_used_list = td.get(
+                        "chips", []
+                    )
+
+                    # Bootstrap is authoritative for current GW.
+                    try:
+                        cgw = get_current_gameweek()
+                    except Exception:
+                        cgw = (
+                            td.get(
+                                "gw_summary", {}
+                            ).get("event", 1)
+                            + 1
+                        )
+
+                    current_half = (
+                        2 if cgw >= HALF_CUTOFF else 1
+                    )
+
                     used = set()
-                    # Any chip already activated in this half is permanently consumed.
-                    # Do NOT skip chips just because they match cgw or active_chip.
-                    for c in chips_used_list:
-                        code = cmap.get(c.get("name",""), c.get("name","").upper())
-                        h = 2 if c.get("event",0) >= HALF_CUTOFF else 1
-                        if h == current_half: used.add(code)
-                    chips_available = [c for c in ["BB","TC","FH","WC"] if c not in used]
-            except Exception as e:
-                import traceback
+
+                    for chip in chips_used_list:
+                        code = cmap.get(
+                            chip.get("name", ""),
+                            chip.get(
+                                "name",
+                                ""
+                            ).upper()
+                        )
+
+                        chip_gw = chip.get(
+                            "event",
+                            0
+                        )
+
+                        chip_half = (
+                            2
+                            if chip_gw >= HALF_CUTOFF
+                            else 1
+                        )
+
+                        if chip_half == current_half:
+                            used.add(code)
+
+                    chips_available = [
+                        code
+                        for code in [
+                            "BB",
+                            "TC",
+                            "FH",
+                            "WC",
+                        ]
+                        if code not in used
+                    ]
+
+            except Exception:
                 print("[CHIP] ERROR loading team:")
+                import traceback
                 traceback.print_exc()
-        from prediction_engine import PredictionEngine
-        engine = PredictionEngine()
+
+        # ============================================================
+        # PREVENT THIS REQUEST FROM RUNNING AT THE SAME TIME AS
+        # THE BACKGROUND PREDICTION REFRESH.
+        #
+        # SeasonChipPlanner currently requires PredictionEngine.
+        # Therefore we create it temporarily, use it, then destroy it.
+        # ============================================================
+        if not _prediction_run_lock.acquire(blocking=False):
+            return jsonify({
+                "error": (
+                    "Prediction refresh is currently running. "
+                    "Please try again in a few seconds."
+                )
+            }), 503
+
         try:
-            result = SeasonChipPlanner(engine).analyze_season(
+            from prediction_engine import PredictionEngine
+
+            print("[CHIP] Creating temporary PredictionEngine...")
+
+            engine = PredictionEngine()
+
+            # The chip planner needs the current prediction baseline
+            # for squad/captain/bench scoring.
+            preds, cached, _ = _cached_predictions()
+
+            cached_gw = cached.get("gameweek")
+
+            # Use cached predictions when they match the engine GW.
+            # This avoids running predict_all() a second time.
+            if (
+                preds
+                and cached_gw is not None
+                and int(cached_gw) == int(engine.next_gw)
+            ):
+                engine._baseline_predictions = preds
+                print(
+                    "[CHIP] Using cached baseline predictions:",
+                    len(preds)
+                )
+            else:
+                engine._baseline_predictions = []
+
+            planner = SeasonChipPlanner(engine)
+
+            result = planner.analyze_season(
                 chips_available=chips_available,
                 current_squad_ids=squad_ids,
-                bank=bank
+                bank=bank,
             )
-        finally:
-            del engine
-        result["user_chips_available"] = chips_available
-        result["user_chips_used"] = [{"name":c.get("name"),"code":cmap.get(c.get("name",""),"?"),"gw":c.get("event"),
-                                      "half":2 if c.get("event",0)>=HALF_CUTOFF else 1} for c in chips_used_list]
-        result["current_half"] = current_half if settings.get("team_id") else 2
-        result["half_cutoff"] = HALF_CUTOFF
-        result["all_used"] = len(chips_available) == 0
-        return jsonify(result)
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({"error": "Internal server error"}), 500
 
+            del planner
+
+        finally:
+            if engine is not None:
+                del engine
+
+            import gc
+            gc.collect()
+
+            _prediction_run_lock.release()
+
+            print(
+                "[CHIP] Temporary PredictionEngine released."
+            )
+
+        # ============================================================
+        # USER CHIP STATE
+        # ============================================================
+        result["user_chips_available"] = chips_available
+
+        result["user_chips_used"] = [
+            {
+                "name": c.get("name"),
+                "code": cmap.get(
+                    c.get("name", ""),
+                    "?"
+                ),
+                "gw": c.get("event"),
+                "half": (
+                    2
+                    if c.get("event", 0) >= HALF_CUTOFF
+                    else 1
+                ),
+            }
+            for c in chips_used_list
+        ]
+
+        result["current_half"] = (
+            current_half
+            if settings.get("team_id")
+            else 2
+        )
+
+        result["half_cutoff"] = HALF_CUTOFF
+
+        result["all_used"] = (
+            len(chips_available) == 0
+        )
+
+        return jsonify(result)
+
+    except Exception:
+        import traceback
+        traceback.print_exc()
+
+        return jsonify({
+            "error": "Internal server error"
+        }), 500
 
 # ── Stripe ──
 
