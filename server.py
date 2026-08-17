@@ -1473,6 +1473,9 @@ def api_chip_analysis():
 @app.route("/api/gw-planner")
 @limiter.limit("5 per minute")
 def api_gw_planner():
+    print("========== GW PLANNER REQUEST ==========")
+    print("[GW PLANNER] team_id:", request.args.get("id"))
+    print("[GW PLANNER] horizon:", request.args.get("horizon"))
     team_id = request.args.get("id") or _load_settings().get("team_id")
     if not team_id:
         return jsonify({"error": "No team ID"}), 400
@@ -1488,6 +1491,7 @@ def api_gw_planner():
         # debug print
         print("[GW PLANNER DEBUG] plan keys:", list(plan.keys()))
         print("[GW PLANNER DEBUG] preseason:", plan.get("preseason"))
+        print("[GW PLANNER] score_status:", plan.get("score_status"))
         if plan.get("error"):
             return jsonify(plan), 400
         return jsonify(plan)

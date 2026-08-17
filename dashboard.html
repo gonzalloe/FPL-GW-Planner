@@ -3236,7 +3236,9 @@ async function loadMyTeam() {
   try {
     const r = await fetch('/api/my-team?id=' + id);
     const data = await r.json();
+    // debug print
     console.log('[GW PLANNER] API response:', data);
+
     if (data.error) { content.innerHTML = '<div class="card"><p style="color:var(--red);">Error: ' + data.error + '</p></div>'; loadingEl.style.display = 'none'; return; }
 
     MY_TEAM_DATA = data;
@@ -4703,6 +4705,11 @@ async function loadGWPlanner() {
   const loading = document.getElementById('planner-loading');
   const preseason = document.getElementById('planner-preseason-message');
 
+  // debug prints
+  console.log('[GW PLANNER] preseason element:', preseason);
+  console.log('[GW PLANNER] preseason display BEFORE:', preseason?.style.display);
+  console.log('[GW PLANNER] current URL:', window.location.href);
+
   // Check if team ID is saved
   let teamId = document.getElementById('team-id-input')?.value?.trim();
   if (!teamId) {
@@ -4735,8 +4742,17 @@ async function loadGWPlanner() {
     // ── Preseason ──
     // FPL squad/picks are not available until GW1 starts.
     if (data.preseason && data.score_status === 'unavailable') {
+      // debug log
+      console.log('[GW PLANNER] PRESEASON DETECTED');
       if (preseason) {
-        preseason.style.display = '';
+        console.log(
+          '[GW PLANNER] preseason display AFTER:',
+          preseason.style.display = ''
+        );
+      } else {
+        console.error(
+          '[GW PLANNER] planner-preseason-message NOT FOUND'
+        );
       }
 
       // Hide any stale planner results.
