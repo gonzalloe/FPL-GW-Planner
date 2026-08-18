@@ -1715,35 +1715,28 @@ def api_gw_planner():
 @app.route("/api/fixture-ticker")
 @cached_response(ttl_seconds=120, key_prefix="fixture-ticker")
 def api_fixture_ticker():
-    if not _prediction_run_lock.acquire(blocking=False):
-        return jsonify({
-            "error": "Prediction calculation is currently running. Please try again shortly."
-        }), 503
-
+    p = None
     try:
         horizon = request.args.get("horizon", 6, type=int)
         horizon = max(3, min(horizon, 15))
-
         from gw_planner import GWPlanner
-
         p = GWPlanner(horizon=horizon)
-
         return jsonify({
             "from_gw": p.next_gw,
             "to_gw": p.next_gw + p.horizon - 1,
             "teams": p.build_fixture_ticker()
         })
-
     except Exception:
         import traceback
         traceback.print_exc()
-        return jsonify({"error": "Internal server error"}), 500
-
+        return jsonify({
+            "error": "Internal server error"
+        }), 500
     finally:
-        del p
+        if p is not None:
+            del p
         import gc
         gc.collect()
-        _prediction_run_lock.release()
 
 
 @app.route("/api/top-transfers")
