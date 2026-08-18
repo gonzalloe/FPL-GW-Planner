@@ -1067,6 +1067,102 @@ class PredictionEngine:
             return False
         return team_id in self.promoted_team_ids
 
+    def _current_team_position_competition(self, p: dict) -> dict:
+        """
+        Estimate current selection strength relative to available teammatesat the same position.
+        This is a CURRENT-role adjustment, not a replacement for the player's historical role prior.
+        """
+        team_id = p.get("team")
+        pos_id = p.get("position_id")
+
+        if not team_id or not pos_id:
+            return {
+                "competition_score": 0.0,
+                "available_teammates": 0,
+                "rank": 1,
+            }
+        candidates = []
+        for other in self.players.values():
+            if other.get("team") != team_id:
+                continue
+            if other.get("position_id") != pos_id:
+                continue
+            # Current availability
+            status = other.get("status", "a")
+            chance = other.get("chance_of_playing_next_round")
+            if status in ("i", "u", "s", "n"):
+                continue
+            if chance is not None and chance <= 25:
+                continue
+
+            recent_games = other.get("_recent_games", 0)
+            recent_starts = other.get("_recent_start_rate")
+            recent_mins = other.get("_recent_avg_mins")
+
+            current_mins = int(other.get("minutes", 0) or 0)
+            current_starts = int(other.get("starts", 0) or 0)
+            # Current-season starting evidence
+            if self.current_gw > 1:
+                season_start_rate = (
+                    current_starts /
+                    max(self.current_gw - 1, 1)
+                )
+            else:
+                season_start_rate = 0.0
+
+            # Recent evidence gets priority when available.
+            if recent_games and recent_starts is not None:
+                recent_score = float(recent_starts)
+            else:
+                recent_score = season_start_rate
+            # Minutes are useful as supporting evidence, not the primary signal.
+            mins_score = min(
+                (float(recent_mins) if recent_mins is not None
+                else current_mins / max(self.current_gw - 1, 1))
+                / 90.0,
+                1.0
+            )
+            # Availability confidence
+            availability = (
+                float(chance) / 100.0
+                if chance is not None
+                else 1.0
+            )
+            score = (
+                recent_score * 0.60
+                + season_start_rate * 0.25
+                + mins_score * 0.15
+            )
+            score *= availability
+            candidates.append({
+                "player_id": other.get("id"),
+                "score": score,
+            })
+        if not candidates:
+            return {
+                "competition_score": 0.0,
+                "available_teammates": 0,
+                "rank": 1,
+            }
+        candidates.sort(
+            key=lambda x: x["score"],
+            reverse=True
+        )
+        player_id = p.get("id")
+        own_index = next(
+            (
+                i for i, c in enumerate(candidates)
+                if c["player_id"] == player_id
+            ),
+            0
+        )
+        own_score = candidates[own_index]["score"]
+        return {
+            "competition_score": round(own_score, 3),
+            "available_teammates": max(len(candidates) - 1, 0),
+            "rank": own_index + 1,
+        }
+
 
     def calculate_expected_minutes(self, p: dict, num_fixtures: int = 1, teammates_out: int = 0, out_minutes: int = 0) -> dict:
         """
@@ -1090,10 +1186,17 @@ class PredictionEngine:
         else:
             current_minutes = total_minutes
             current_starts = starts
+
         # PLAYER-SPECIFIC PRIOR
         prior = self.get_player_role_prior(p)
         prior_avg_mins = prior["avg_minutes"]
         prior_start_rate = prior["start_rate"]
+
+        # CURRENT TEAM/POSITION COMPETITION
+        competition = self._current_team_position_competition(p)
+        competition_score = competition["competition_score"]
+        competition_rank = competition["rank"]
+        available_teammates = competition["available_teammates"]
 
         # MINUTES: PRIOR -> CURRENT SEASON
         if current_minutes > 0:
@@ -1127,6 +1230,33 @@ class PredictionEngine:
             season_start_rate = prior_start_rate
 
         season_start_rate = min(max(season_start_rate, 0.0), 1.0)
+
+        # CURRENT ROLE ADJUSTMENT
+        if available_teammates > 0:
+            # Convert current competition score into a modest adjustment.
+            competition_adjustment = 0.0
+
+            if competition_rank == 1:
+                if competition_score >= 0.65:
+                    competition_adjustment = 0.20
+                elif competition_score >= 0.40:
+                    competition_adjustment = 0.12
+                else:
+                    competition_adjustment = 0.05
+
+            elif competition_rank == 2:
+                competition_adjustment = 0.0
+
+            else:
+                competition_adjustment = -0.10
+
+            season_start_rate = min(
+                max(
+                    season_start_rate + competition_adjustment,
+                    0.0
+                ),
+                1.0
+            )
 
         # Recency blend (fixes stale season-average bug: a player benched the
         # last 8 GWs no longer reads as reliable just because of an August hot streak)
