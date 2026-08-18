@@ -4484,13 +4484,37 @@ function renderTransfersTab() {
   `;
 }
 
-// Refresh functions
+let MANUAL_REFRESH_RUNNING = false;
 async function manualRefresh() {
+  if (MANUAL_REFRESH_RUNNING) {
+    console.warn('[REFRESH] Already running.');
+    return;
+  }
+  MANUAL_REFRESH_RUNNING = true;
+  const btn = document.getElementById('refresh-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Refreshing...';
+  }
   try {
-    await fetch('/api/refresh');
+    const r = await fetch('/api/refresh', {
+      cache: 'no-store'
+    });
+    if (!r.ok) {
+      throw new Error(`HTTP ${r.status}`);
+    }
     updateRefreshStatus();
-    setTimeout(() => { location.reload(); }, 3000);
-  } catch(e) {}
+    setTimeout(() => {
+      location.reload();
+    }, 3000);
+  } catch (e) {
+    console.error('[REFRESH] Failed:', e);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Refresh';
+    }
+    MANUAL_REFRESH_RUNNING = false;
+  }
 }
 
 async function updateRefreshStatus() {
@@ -4508,53 +4532,125 @@ async function updateRefreshStatus() {
 setInterval(updateRefreshStatus, 60000);
 
 // ── Season-wide Chip Analysis ──
+let SEASON_CHIPS_LOADING = false;
+let SEASON_CHIPS_COOLDOWN_UNTIL = 0;
+let SEASON_CHIPS_DATA = null;
+
+// ── Season-wide Chip Analysis ──
 async function loadSeasonChips() {
   const btn = document.getElementById('chip-season-btn');
   const seqDiv = document.getElementById('chip-sequence');
+
+  // Prevent duplicate / spam requests
+  if (SEASON_CHIPS_LOADING) {
+    console.warn('[CHIP] Analysis already running — ignoring request.');
+    return;
+  }
+
+  // 30-second client-side cooldown after a request
+  const now = Date.now();
+  if (now < SEASON_CHIPS_COOLDOWN_UNTIL) {
+    const remaining = Math.ceil(
+      (SEASON_CHIPS_COOLDOWN_UNTIL - now) / 1000
+    );
+
+    if (seqDiv) {
+      seqDiv.innerHTML =
+        `<p style="color:var(--text3);">Please wait ${remaining}s before running the chip analysis again.</p>`;
+    }
+
+    return;
+  }
+
+  // If we already have a successful result for this page session,
+  // don't recompute it unless the user explicitly refreshes the page.
+  if (SEASON_CHIPS_DATA) {
+    console.log('[CHIP] Using existing analysis result.');
+    renderSeasonChips(SEASON_CHIPS_DATA);
+    return;
+  }
+
+  SEASON_CHIPS_LOADING = true;
+  SEASON_CHIPS_COOLDOWN_UNTIL = Date.now() + 30000;
+
   if (btn) {
     btn.disabled = true;
     btn.textContent = 'Analyzing...';
   }
-  seqDiv.innerHTML = '<div class="loading">Scanning all remaining GWs...</div>';
+
+  if (seqDiv) {
+    seqDiv.innerHTML =
+      '<div class="loading">Scanning all remaining GWs...</div>';
+  }
+
   try {
     const r = await fetch('/api/season-chips', {
-      headers: authHeaders()
+      headers: authHeaders(),
+      cache: 'no-store'
     });
+
     const data = await r.json();
+
     if (data.error) {
-      seqDiv.innerHTML =
-        '<p style="color:var(--red);">Error: ' + data.error + '</p>';
-      return;
-    }
-    // Preseason: squad data is not available yet.
-    if (data.preseason && data.score_status === 'unavailable') {
-      seqDiv.innerHTML = `
-        <div class="chip-preseason-message">
-          <h3 style="color:#fde047;">⏳ Chip Planner will activate after GW1 starts</h3>
-          <p>
-            Your current FPL squad is not available yet because the season
-            has not started. Chip scores cannot be calculated accurately
-            without your squad.
-          </p>
-          <p>
-            Once GW1 squad data is available, this planner will calculate
-            the recommended gameweek for each chip.
-          </p>
-        </div>
-      `;
-      // Hide heatmap while scores are unavailable.
-      const heatmapCard = document.getElementById('chip-heatmap-card');
-      if (heatmapCard) {
-        heatmapCard.style.display = 'none';
+      if (seqDiv) {
+        seqDiv.innerHTML =
+          '<p style="color:var(--red);">Error: ' +
+          data.error +
+          '</p>';
       }
       return;
     }
+
+    // Cache successful result in browser memory.
+    SEASON_CHIPS_DATA = data;
+
+    // Preseason: squad data is not available yet.
+    if (data.preseason && data.score_status === 'unavailable') {
+      if (seqDiv) {
+        seqDiv.innerHTML = `
+          <div class="chip-preseason-message">
+            <h3 style="color:#fde047;">
+              ⏳ Chip Planner will activate after GW1 starts
+            </h3>
+            <p>
+              Your current FPL squad is not available yet because the season
+              has not started. Chip scores cannot be calculated accurately
+              without your squad.
+            </p>
+            <p>
+              Once GW1 squad data is available, this planner will calculate
+              the recommended gameweek for each chip.
+            </p>
+          </div>
+        `;
+      }
+
+      const heatmapCard =
+        document.getElementById('chip-heatmap-card');
+
+      if (heatmapCard) {
+        heatmapCard.style.display = 'none';
+      }
+
+      return;
+    }
+
     // Normal in-season rendering.
     renderSeasonChips(data);
-  } catch(e) {
-    seqDiv.innerHTML =
-      '<p style="color:var(--red);">Error: ' + e.message + '</p>';
+
+  } catch (e) {
+    console.error('[CHIP] Analysis request failed:', e);
+
+    if (seqDiv) {
+      seqDiv.innerHTML =
+        '<p style="color:var(--red);">Error: ' +
+        escapeHtml(e.message) +
+        '</p>';
+    }
+
   } finally {
+    SEASON_CHIPS_LOADING = false;
+
     if (btn) {
       btn.disabled = false;
       btn.textContent = 'Analyze Season';

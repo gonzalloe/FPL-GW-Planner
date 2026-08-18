@@ -1326,19 +1326,16 @@ def api_run():
 
 def _run_predictions_bg(gw):
     global _prediction_status
-    if not _prediction_run_lock.acquire(blocking=False):
-        print("[RUN] Prediction already running, skipping.")
-        return
+
     try:
         _prediction_status["running"] = True
         _prediction_status["started_at"] = time.time()
         _prediction_status["last_error"] = None
-
         result = _run_predictions(gw)
-
+        if result is None:
+            print("[RUN] Prediction generation skipped — another run is active.")
+            return
         print("[RUN] Prediction generation completed")
-        return result
-
     except Exception as e:
         _prediction_status["last_error"] = str(e)
         print("[RUN] Prediction failed:", e)
@@ -1346,8 +1343,6 @@ def _run_predictions_bg(gw):
     finally:
         _prediction_status["running"] = False
         _prediction_status["finished_at"] = time.time()
-        _prediction_run_lock.release()
-        print("[RUN] Prediction lock released")
 
 
 @app.route("/api/refresh")
@@ -1583,26 +1578,22 @@ def api_gw_planner():
     # ─────────────────────────────────────────────
     # PREVENT CONCURRENT HEAVY CALCULATIONS
     # ─────────────────────────────────────────────
+        if not GW_PLANNER_LOCK.acquire(blocking=False):
+            return jsonify({
+                "error": (
+                    "GW Planner is already calculating. "
+                    "Please wait for the current calculation to finish."
+                )
+            }), 429
 
-    if not GW_PLANNER_LOCK.acquire(blocking=False):
-        print(
-            "[GW PLANNER] Another calculation is already running"
-        )
-
-        return jsonify({
-            "error": (
-                "GW Planner is already calculating. "
-                "Please wait for the current calculation to finish."
-            )
-        }), 429
-
-    try:
-        print(
-            "[GW PLANNER] Lock acquired — "
-            "starting planner calculation"
-        )
-
-        _log_gw_planner_memory("before GWPlanner")
+        if not _prediction_run_lock.acquire(blocking=False):
+            GW_PLANNER_LOCK.release()
+            return jsonify({
+                "error": (
+                    "Prediction refresh is currently running. "
+                    "Please wait for the current calculation to finish."
+                )
+            }), 503
 
         # ─────────────────────────────────────────
         # CREATE PLANNER
@@ -1714,29 +1705,46 @@ def api_gw_planner():
         }), 500
 
     finally:
-        # Always release the lock.
+        _prediction_run_lock.release()
         GW_PLANNER_LOCK.release()
 
-        print(
-            "[GW PLANNER] Lock released"
-        )
+        print("[GW PLANNER] Locks released")
+        _log_gw_planner_memory("request finished")
 
-        _log_gw_planner_memory(
-            "request finished"
-        )
 
 @app.route("/api/fixture-ticker")
 @cached_response(ttl_seconds=120, key_prefix="fixture-ticker")
 def api_fixture_ticker():
+    if not _prediction_run_lock.acquire(blocking=False):
+        return jsonify({
+            "error": "Prediction calculation is currently running. Please try again shortly."
+        }), 503
+
     try:
         horizon = request.args.get("horizon", 6, type=int)
-        horizon = max(3, min(horizon, 15))  # Clamp between 3 and 15
+        horizon = max(3, min(horizon, 15))
+
         from gw_planner import GWPlanner
+
         p = GWPlanner(horizon=horizon)
-        return jsonify({"from_gw": p.next_gw, "to_gw": p.next_gw + p.horizon - 1, "teams": p.build_fixture_ticker()})
-    except Exception as e:
-        import traceback; traceback.print_exc()
+
+        return jsonify({
+            "from_gw": p.next_gw,
+            "to_gw": p.next_gw + p.horizon - 1,
+            "teams": p.build_fixture_ticker()
+        })
+
+    except Exception:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": "Internal server error"}), 500
+
+    finally:
+        del p
+        import gc
+        gc.collect()
+        _prediction_run_lock.release()
+
 
 @app.route("/api/top-transfers")
 @cached_response(ttl_seconds=300, key_prefix="top-transfers")
@@ -1792,17 +1800,37 @@ def api_top_transfers():
         import traceback; traceback.print_exc()
         return jsonify({"error": "Internal server error"}), 500
 
+
 @app.route("/api/fixture-rankings")
 @cached_response(ttl_seconds=120, key_prefix="fixture-rankings")
 def api_fixture_rankings():
+    if not _prediction_run_lock.acquire(blocking=False):
+        return jsonify({
+            "error": "Prediction calculation is currently running. Please try again shortly."
+        }), 503
+
+    p = None
+
     try:
         n = request.args.get("gws", 5, type=int)
+        n = max(3, min(n, 15))
         from gw_planner import GWPlanner
         p = GWPlanner(horizon=n)
-        return jsonify({"from_gw": p.next_gw, "num_gws": n, "rankings": p.rank_teams_by_fixtures(num_gws=n)})
-    except Exception as e:
-        import traceback; traceback.print_exc()
+        return jsonify({
+            "from_gw": p.next_gw,
+            "num_gws": n,
+            "rankings": p.rank_teams_by_fixtures(num_gws=n)
+        })
+    except Exception:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if p is not None:
+            del p
+        import gc
+        gc.collect()
+        _prediction_run_lock.release()
 
 @app.route("/api/search-players")
 def api_search_players():
