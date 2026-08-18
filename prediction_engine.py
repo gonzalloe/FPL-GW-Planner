@@ -1069,12 +1069,11 @@ class PredictionEngine:
 
     def _current_team_position_competition(self, p: dict) -> dict:
         """
-        Estimate current selection strength relative to available teammatesat the same position.
-        This is a CURRENT-role adjustment, not a replacement for the player's historical role prior.
+        Estimate current selection strength relative to available teammates at the same team and position.
+        Historical role is used as the fallback when current-season evidence is limited. Price is deliberately NOT used.
         """
         team_id = p.get("team")
         pos_id = p.get("position_id")
-
         if not team_id or not pos_id:
             return {
                 "competition_score": 0.0,
@@ -1087,56 +1086,99 @@ class PredictionEngine:
                 continue
             if other.get("position_id") != pos_id:
                 continue
-            # Current availability
+
+            # Never treat clearly unavailable players as current competition.
             status = other.get("status", "a")
             chance = other.get("chance_of_playing_next_round")
+
             if status in ("i", "u", "s", "n"):
                 continue
             if chance is not None and chance <= 25:
                 continue
 
-            recent_games = other.get("_recent_games", 0)
-            recent_starts = other.get("_recent_start_rate")
-            recent_mins = other.get("_recent_avg_mins")
+            # ------------------------------------------------------------
+            # Historical role = fallback prior
+            # ------------------------------------------------------------
+            try:
+                role_prior = self.get_player_role_prior(other)
+                prior_start_rate = float(
+                    role_prior.get("start_rate", 0.5)
+                )
+            except Exception:
+                prior_start_rate = 0.5
 
-            current_mins = int(other.get("minutes", 0) or 0)
+            # ------------------------------------------------------------
+            # Current-season evidence
+            # ------------------------------------------------------------
+            current_minutes = int(other.get("minutes", 0) or 0)
             current_starts = int(other.get("starts", 0) or 0)
-            # Current-season starting evidence
+
             if self.current_gw > 1:
-                season_start_rate = (
-                    current_starts /
-                    max(self.current_gw - 1, 1)
+                gws_played = max(self.current_gw - 1, 1)
+
+                season_start_rate = min(
+                    current_starts / gws_played,
+                    1.0
+                )
+                season_avg_mins = min(
+                    current_minutes / gws_played,
+                    90.0
                 )
             else:
-                season_start_rate = 0.0
+                season_start_rate = prior_start_rate
+                season_avg_mins = role_prior.get(
+                    "avg_minutes", 60.0
+                )
 
-            # Recent evidence gets priority when available.
-            if recent_games and recent_starts is not None:
-                recent_score = float(recent_starts)
+            # ------------------------------------------------------------
+            # Recent evidence
+            # ------------------------------------------------------------
+            recent_games = int(other.get("_recent_games", 0) or 0)
+            recent_start_rate = other.get("_recent_start_rate")
+            recent_avg_mins = other.get("_recent_avg_mins")
+            if recent_games >= 2 and recent_start_rate is not None:
+                recent_start_rate = float(recent_start_rate)
+
+                recent_weight = min(
+                    recent_games / 5.0,
+                    1.0
+                ) * 0.70
+
+                current_start_rate = (
+                    recent_weight * recent_start_rate
+                    + (1.0 - recent_weight) * season_start_rate
+                )
             else:
-                recent_score = season_start_rate
-            # Minutes are useful as supporting evidence, not the primary signal.
-            mins_score = min(
-                (float(recent_mins) if recent_mins is not None
-                else current_mins / max(self.current_gw - 1, 1))
-                / 90.0,
+                current_start_rate = season_start_rate
+
+            # ------------------------------------------------------------
+            # Blend historical role with current evidence.
+            #
+            # As current minutes accumulate, current evidence naturally
+            # becomes more important.
+            # ------------------------------------------------------------
+            evidence_minutes = max(current_minutes, (recent_games * 90))
+            current_weight = min(evidence_minutes / 450.0, 1.0)
+            selection_score = (prior_start_rate * (1.0 - current_weight) + current_start_rate * current_weight)
+
+            # Minutes are supporting evidence only.
+            avg_minutes = (
+                float(recent_avg_mins)
+                if recent_avg_mins is not None
+                else float(season_avg_mins)
+            )
+            minutes_score = min(avg_minutes / 90.0, 1.0)
+            selection_score = (selection_score * 0.80 + minutes_score * 0.20)
+            # Availability confidence
+            if chance is not None:
+                selection_score *= float(chance) / 100.0
+            selection_score = min(
+                max(selection_score, 0.0),
                 1.0
             )
-            # Availability confidence
-            availability = (
-                float(chance) / 100.0
-                if chance is not None
-                else 1.0
-            )
-            score = (
-                recent_score * 0.60
-                + season_start_rate * 0.25
-                + mins_score * 0.15
-            )
-            score *= availability
             candidates.append({
                 "player_id": other.get("id"),
-                "score": score,
+                "score": selection_score,
             })
         if not candidates:
             return {
@@ -1151,11 +1193,18 @@ class PredictionEngine:
         player_id = p.get("id")
         own_index = next(
             (
-                i for i, c in enumerate(candidates)
-                if c["player_id"] == player_id
+                i
+                for i, candidate in enumerate(candidates)
+                if candidate["player_id"] == player_id
             ),
-            0
+            None
         )
+        if own_index is None:
+            return {
+                "competition_score": 0.0,
+                "available_teammates": max(len(candidates) - 1, 0),
+                "rank": len(candidates),
+            }
         own_score = candidates[own_index]["score"]
         return {
             "competition_score": round(own_score, 3),
@@ -1233,14 +1282,11 @@ class PredictionEngine:
 
         # CURRENT ROLE ADJUSTMENT
         if available_teammates > 0:
-            # Convert current competition score into a modest adjustment.
-            competition_adjustment = 0.0
-
             if competition_rank == 1:
-                if competition_score >= 0.65:
-                    competition_adjustment = 0.20
-                elif competition_score >= 0.40:
-                    competition_adjustment = 0.12
+                if competition_score >= 0.75:
+                    competition_adjustment = 0.15
+                elif competition_score >= 0.55:
+                    competition_adjustment = 0.10
                 else:
                     competition_adjustment = 0.05
 
@@ -1248,7 +1294,7 @@ class PredictionEngine:
                 competition_adjustment = 0.0
 
             else:
-                competition_adjustment = -0.10
+                competition_adjustment = -0.08
 
             season_start_rate = min(
                 max(

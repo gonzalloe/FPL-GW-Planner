@@ -2105,6 +2105,7 @@ def api_simulate_transfer():
     
 
 @app.route("/api/season-chips")
+@cached_response(ttl_seconds=300, key_prefix="season-chips")
 def api_season_chips():
     engine = None
 
@@ -2211,49 +2212,75 @@ def api_season_chips():
                 traceback.print_exc()
 
         # ============================================================
-        # PREVENT THIS REQUEST FROM RUNNING AT THE SAME TIME AS
-        # THE BACKGROUND PREDICTION REFRESH.
+        # LIGHTWEIGHT CHIP ANALYSIS
         #
-        # SeasonChipPlanner currently requires PredictionEngine.
-        # Therefore we create it temporarily, use it, then destroy it.
+        # IMPORTANT:
+        # Do NOT create PredictionEngine here.
+        #
+        # The prediction cache already contains the expensive prediction
+        # results. SeasonChipPlanner only needs lightweight FPL data
+        # plus those cached predictions.
         # ============================================================
-        if not _prediction_run_lock.acquire(blocking=False):
+
+        preds, cached, cache_status = _cached_predictions()
+
+        if not cached:
             return jsonify({
                 "error": (
-                    "Prediction refresh is currently running. "
-                    "Please try again in a few seconds."
+                    "Prediction cache is not available yet. "
+                    "Please wait for the initial prediction refresh."
                 )
             }), 503
 
         try:
-            from prediction_engine import PredictionEngine
+            from data_fetcher import (
+                fetch_bootstrap,
+                fetch_fixtures,
+                build_player_map,
+                build_team_map,
+                get_next_gameweek,
+            )
 
-            print("[CHIP] Creating temporary PredictionEngine...")
+            print("[CHIP] Using lightweight cached-data context.")
 
-            engine = PredictionEngine()
+            bootstrap = fetch_bootstrap()
+            fixtures = fetch_fixtures()
+            players = build_player_map(bootstrap)
+            teams = build_team_map(bootstrap)
 
-            # The chip planner needs the current prediction baseline
-            # for squad/captain/bench scoring.
-            preds, cached, _ = _cached_predictions()
+            next_gw = get_next_gameweek(bootstrap)
 
             cached_gw = cached.get("gameweek")
 
-            # Use cached predictions when they match the engine GW.
-            # This avoids running predict_all() a second time.
+            # Only use predictions if they belong to the same GW.
+            baseline_predictions = []
+
             if (
                 preds
                 and cached_gw is not None
-                and int(cached_gw) == int(engine.next_gw)
+                and int(cached_gw) == int(next_gw)
             ):
-                engine._baseline_predictions = preds
+                baseline_predictions = preds
                 print(
                     "[CHIP] Using cached baseline predictions:",
-                    len(preds)
+                    len(baseline_predictions)
                 )
             else:
-                engine._baseline_predictions = []
+                print(
+                    "[CHIP] Cached predictions are stale/mismatched:",
+                    cached_gw,
+                    "vs",
+                    next_gw
+                )
 
-            planner = SeasonChipPlanner(engine)
+            planner = SeasonChipPlanner(
+                bootstrap=bootstrap,
+                fixtures=fixtures,
+                teams=teams,
+                players=players,
+                next_gw=next_gw,
+                baseline_predictions=baseline_predictions,
+            )
 
             result = planner.analyze_season(
                 chips_available=chips_available,
@@ -2262,19 +2289,23 @@ def api_season_chips():
             )
 
             del planner
-
-        finally:
-            if engine is not None:
-                del engine
+            del players
+            del teams
+            del fixtures
+            del bootstrap
 
             import gc
             gc.collect()
 
-            _prediction_run_lock.release()
+            print("[CHIP] Lightweight season-chip analysis complete.")
 
-            print(
-                "[CHIP] Temporary PredictionEngine released."
-            )
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+            return jsonify({
+                "error": "Season chip analysis failed."
+            }), 500
 
         # ============================================================
         # USER CHIP STATE

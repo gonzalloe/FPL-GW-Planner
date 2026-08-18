@@ -8,7 +8,7 @@ Preseason behavior:
 - Chip scores are therefore NOT calculated preseason.
 - Scores are returned as None rather than misleading 0/5 values.
 """
-
+from types import SimpleNamespace
 from data_fetcher import (
     get_dgw_teams,
     get_bgw_teams,
@@ -33,18 +33,64 @@ class SeasonChipPlanner:
     - Returns score=None until GW1 squad data exists.
     """
 
-    def __init__(self, engine):
-        self.engine = engine
-        self.bootstrap = engine.bootstrap
-        self.fixtures = engine.fixtures
-        self.teams = engine.teams
-        self.next_gw = engine.next_gw
+    def __init__(
+        self,
+        engine=None,
+        *,
+        bootstrap=None,
+        fixtures=None,
+        teams=None,
+        players=None,
+        next_gw=None,
+        baseline_predictions=None,
+    ):
+        if engine is not None:
+            self.engine = engine
+            self.bootstrap = engine.bootstrap
+            self.fixtures = engine.fixtures
+            self.teams = engine.teams
+            self.next_gw = engine.next_gw
 
-        self._baseline_predictions = getattr(
-            engine,
-            "_baseline_predictions",
-            []
-        )
+            self._baseline_predictions = getattr(
+                engine,
+                "_baseline_predictions",
+                []
+            )
+
+        else:
+            if (
+                bootstrap is None
+                or fixtures is None
+                or teams is None
+                or players is None
+                or next_gw is None
+            ):
+                raise ValueError(
+                    "Lightweight SeasonChipPlanner requires "
+                    "bootstrap, fixtures, teams, players and next_gw."
+                )
+
+            # Small compatibility object.
+            # This is NOT a PredictionEngine.
+            self.engine = SimpleNamespace(
+                bootstrap=bootstrap,
+                fixtures=fixtures,
+                teams=teams,
+                players=players,
+                next_gw=next_gw,
+                _baseline_predictions=(
+                    baseline_predictions or []
+                ),
+            )
+
+            self.bootstrap = bootstrap
+            self.fixtures = fixtures
+            self.teams = teams
+            self.next_gw = next_gw
+
+            self._baseline_predictions = (
+                baseline_predictions or []
+            )
 
     # ------------------------------------------------------------------
     # Fixture helper
