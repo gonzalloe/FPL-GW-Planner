@@ -1023,10 +1023,7 @@ class PredictionEngine:
         if team_id in self.promoted_team_ids:
             champ = p.get("championship_role")
 
-            if (champ 
-                and int(champ.get("minutes", 0) or 0) >= 450 
-                and (not p.get("_is_new_transfer", False) or p.get("_previous_team_id") == team_id)
-                ):
+            if champ and int(champ.get("minutes", 0) or 0) >= 450:
                 return {
                     "start_rate": min(
                         float(champ.get("start_rate", 0.5) or 0.5),
@@ -1169,13 +1166,10 @@ class PredictionEngine:
             evidence_minutes = current_minutes
             current_weight = min(evidence_minutes / 450.0, 1.0)
             if current_weight > 0:
-                selection_score = (
-                    prior_start_rate * (1.0 - current_weight) + current_start_rate * current_weight)
+                selection_score = (prior_start_rate * (1.0 - current_weight) + current_start_rate * current_weight)
             else:
-                # Preseason / GW1:
-                # historical role is useful for established players, but should be heavily discounted for a new transfer.
                 if other.get("_is_new_transfer", False):
-                    selection_score = (prior_start_rate * 0.30 + 0.50 * 0.70)
+                    selection_score = (prior_start_rate * 0.60 + 0.50 * 0.40)
                 else:
                     selection_score = prior_start_rate
 
@@ -1244,8 +1238,11 @@ class PredictionEngine:
             own_score = (own_prior_start_rate * (1.0 - own_current_weight) + own_current_start_rate * own_current_weight)
         else:
             if p.get("_is_new_transfer", False):
-                neutral_prior = POSITION_START_RATE_PRIOR.get(p.get("position_id", 3), 0.5,)
-                own_score = (neutral_prior * 0.75 + own_prior_start_rate * 0.25)
+                own_score = (own_prior_start_rate * 0.60 + POSITION_START_RATE_PRIOR.get(
+                        p.get("position_id", 3),
+                        0.5,
+                    ) * 0.40
+                )
             else:
                 own_score = own_prior_start_rate
         own_minutes_score = min(own_current_avg_mins / 90.0, 1.0)
