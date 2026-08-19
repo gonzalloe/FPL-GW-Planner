@@ -1052,46 +1052,11 @@ class PredictionEngine:
             previous_start_rate = min(previous_starts / previous_games, 1.0,)
             previous_avg_minutes = min(previous_minutes / previous_games, 90.0,)
 
-            # A player's old-club role should remain useful as a weak prior
-            # after a transfer, but must NOT be treated as evidence that he
-            # is first choice at the new club.
-            if p.get("_is_new_transfer", False):
-                previous_start_rate = (
-                    previous_start_rate * 0.25
-                    + POSITION_START_RATE_PRIOR.get(
-                        p.get("position_id", 3),
-                        0.5,
-                    ) * 0.75
-                )
-
-                previous_avg_minutes = (
-                    previous_avg_minutes * 0.25
-                    + POSITION_MINUTES_PRIOR.get(
-                        p.get("position_id", 3),
-                        60,
-                    ) * 0.75
-                )
-
-                return {
-                    "start_rate": previous_start_rate,
-                    "avg_minutes": previous_avg_minutes,
-                    "source": "transfer_adjusted_prior",
-                    "season": p.get(
-                        "_previous_season_name",
-                        "",
-                    ),
-                    "minutes": previous_minutes,
-                    "starts": previous_starts,
-                    "matches": previous_games,
-                }
             return {
                 "start_rate": previous_start_rate,
                 "avg_minutes": previous_avg_minutes,
                 "source": "premier_league",
-                "season": p.get(
-                    "_previous_season_name",
-                    "",
-                ),
+                "season": p.get("_previous_season_name", ""),
                 "minutes": previous_minutes,
                 "starts": previous_starts,
                 "matches": previous_games,
@@ -1202,16 +1167,12 @@ class PredictionEngine:
             current_weight = min(evidence_minutes / 450.0, 1.0)
             if current_weight > 0:
                 selection_score = (
-                    prior_start_rate * (1.0 - current_weight)
-                    + current_start_rate * current_weight
-                )
+                    prior_start_rate * (1.0 - current_weight) + current_start_rate * current_weight)
             else:
-                # No current-season evidence yet.
-                # Historical role is weaker after a transfer because it describes
-                # the player's OLD club, not the current club.
+                # Preseason / GW1:
+                # historical role is useful for established players, but should be heavily discounted for a new transfer.
                 if other.get("_is_new_transfer", False):
-                    neutral_prior = POSITION_START_RATE_PRIOR.get(other.get("position_id", 3), 0.5,)
-                    selection_score = (neutral_prior * 0.75 + prior_start_rate * 0.25)
+                    selection_score = (prior_start_rate * 0.30 + 0.50 * 0.70)
                 else:
                     selection_score = prior_start_rate
 
