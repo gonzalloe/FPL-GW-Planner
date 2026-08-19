@@ -1169,7 +1169,13 @@ class PredictionEngine:
                 selection_score = (prior_start_rate * (1.0 - current_weight) + current_start_rate * current_weight)
             else:
                 if other.get("_is_new_transfer", False):
-                    selection_score = (prior_start_rate * 0.60 + 0.50 * 0.40)
+                    selection_score = (
+                        prior_start_rate * 0.60
+                        + POSITION_START_RATE_PRIOR.get(
+                            other.get("position_id", 3),
+                            0.5,
+                        ) * 0.40
+                    )
                 else:
                     selection_score = prior_start_rate
 
@@ -1237,8 +1243,10 @@ class PredictionEngine:
         if own_current_weight > 0:
             own_score = (own_prior_start_rate * (1.0 - own_current_weight) + own_current_start_rate * own_current_weight)
         else:
-            if p.get("_is_new_transfer", False):
-                own_score = (own_prior_start_rate * 0.60 + POSITION_START_RATE_PRIOR.get(
+            if p.get("_is_new_transfer", False) or p.get("team") in self.promoted_team_ids:
+                own_score = (
+                    own_prior_start_rate * 0.60
+                    + POSITION_START_RATE_PRIOR.get(
                         p.get("position_id", 3),
                         0.5,
                     ) * 0.40
@@ -1347,15 +1355,13 @@ class PredictionEngine:
             )
         else:
             # GW1 / no current-season evidence:
-            if available_teammates > 0:
-                if p.get("_is_new_transfer", False):
-                    # New transfer: current-team competition dominates.
-                    season_start_rate = (competition_score * 0.80 + prior_start_rate * 0.20)
-                else:
-                    # Established player: historical role remains useful.
-                    season_start_rate = (competition_score * 0.60 + prior_start_rate * 0.40)
+            if available_teammates > 0 and (
+                p.get("_is_new_transfer", False)
+                or p.get("team") in self.promoted_team_ids
+            ):
+                season_start_rate = (competition_score * 0.70 + prior_start_rate * 0.30)
             else:
-                # No meaningful competition data.
+                # Established same-club player: trust the player's historical role.
                 season_start_rate = prior_start_rate
 
         season_start_rate = min(max(season_start_rate, 0.0), 1.0)
