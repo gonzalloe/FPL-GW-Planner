@@ -2244,11 +2244,98 @@ def api_season_chips():
             print("[CHIP] Using lightweight cached-data context.")
 
             bootstrap = fetch_bootstrap()
+            next_gw = get_next_gameweek(bootstrap)
+
+            # --------------------------------------------------------
+            # PRESEASON FAST PATH
+            # --------------------------------------------------------
+            # No squad = no meaningful chip score.
+            # Do not load fixtures/player maps or run SeasonChipPlanner.
+            # --------------------------------------------------------
+            if next_gw == 1 and not squad_ids:
+                print(
+                    "[CHIP] PRESEASON — returning lightweight "
+                    "chip state without loading fixtures/player maps."
+                )
+
+                result = {
+                    "from_gw": 1,
+                    "to_gw": 38,
+                    "remaining_gws": 38,
+                    "gw_metadata": {},
+                    "chip_analysis": {
+                        chip: {
+                            "best_gw": None,
+                            "best_score": None,
+                            "best_reason": (
+                                "Preseason — waiting for "
+                                "GW1 squad data"
+                            ),
+                            "top_3": [],
+                            "all_scores": [
+                                {
+                                    "gameweek": gw,
+                                    "score": None,
+                                    "reason": (
+                                        "Preseason — current squad "
+                                        "data unavailable"
+                                    ),
+                                    "is_dgw": False,
+                                    "is_bgw": False,
+                                    "dgw_teams": 0,
+                                    "fixtures": 0,
+                                    "score_available": False,
+                                    "reason_code": "PRESEASON",
+                                }
+                                for gw in range(1, 39)
+                            ],
+                            "score_available": False,
+                            "reason_code": "PRESEASON",
+                        }
+                        for chip in chips_available
+                    },
+                    "recommended_sequence": [],
+                    "chips_available": chips_available,
+                    "preseason": True,
+                    "squad_data_available": False,
+                    "score_status": "unavailable",
+                    "score_status_reason": (
+                        "Chip scores will be calculated once "
+                        "GW1 squad data is available."
+                    ),
+                }
+
+                result["user_chips_available"] = chips_available
+                result["user_chips_used"] = [
+                    {
+                        "name": c.get("name"),
+                        "code": cmap.get(
+                            c.get("name", ""),
+                            "?"
+                        ),
+                        "gw": c.get("event"),
+                        "half": (
+                            2
+                            if c.get("event", 0) >= HALF_CUTOFF
+                            else 1
+                        ),
+                    }
+                    for c in chips_used_list
+                ]
+                result["current_half"] = (
+                    current_half
+                    if settings.get("team_id")
+                    else 2
+                )
+                result["half_cutoff"] = HALF_CUTOFF
+                result["all_used"] = len(chips_available) == 0
+
+                return jsonify(result)
+
+            # Only load these for normal-season analysis.
             fixtures = fetch_fixtures()
             players = build_player_map(bootstrap)
             teams = build_team_map(bootstrap)
-
-            next_gw = get_next_gameweek(bootstrap)
 
             cached_gw = cached.get("gameweek")
 
