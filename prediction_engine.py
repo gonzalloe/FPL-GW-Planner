@@ -1351,16 +1351,31 @@ class PredictionEngine:
             )
         else:
             # GW1 / no current-season evidence:
-            if available_teammates > 0 and (
-                p.get("_is_new_transfer", False)
-                or p.get("team") in self.promoted_team_ids
-            ):
-                # New club / promoted team:
-                # historical role tells us player quality, current-team competition tells us likely hierarchy.
-                season_start_rate = (competition_score * 0.70 + prior_start_rate * 0.30)
+            if p.get("position_id") == 1:  # GKP
+                if available_teammates > 0 and (
+                    p.get("_is_new_transfer", False)
+                    or p.get("team") in self.promoted_team_ids
+                ):
+                    # Goalkeepers: historical role should carry more weight.
+                    season_start_rate = (
+                        competition_score * 0.40
+                        + prior_start_rate * 0.60
+                    )
+                else:
+                    season_start_rate = prior_start_rate
+
             else:
-                # Established same-club player: historical role is the strongest prior.
-                season_start_rate = prior_start_rate
+                # DEF/MID/FWD
+                if available_teammates > 0 and (
+                    p.get("_is_new_transfer", False)
+                    or p.get("team") in self.promoted_team_ids
+                ):
+                    season_start_rate = (
+                        competition_score * 0.70
+                        + prior_start_rate * 0.30
+                    )
+                else:
+                    season_start_rate = prior_start_rate
 
         season_start_rate = min(max(season_start_rate, 0.0), 1.0)
 
@@ -1389,7 +1404,14 @@ class PredictionEngine:
         # Starters: high chance of 60+
         # Bench players: only chance comes from sub appearances
         p_sub_appearance = 0.35
-        p_plays_60 = (p_start * mins_ratio +(1 - p_start) * p_sub_appearance * 0.05)
+        if p.get("position_id") == 1:  # GKP
+            # A starting goalkeeper is overwhelmingly likely to play 60+ minutes.
+            p_plays_60 = p_start * 0.98
+        else:
+            p_plays_60 = (
+                p_start * mins_ratio
+                + (1 - p_start) * p_sub_appearance * 0.05
+            )
         p_plays_60 *= availability
         if total_minutes > 0:
             p_plays_60 *= (1.0 - mins_volatility * 0.3)
