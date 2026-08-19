@@ -1149,7 +1149,7 @@ class PredictionEngine:
                 prior_avg_mins = 60.0
 
             # EVIDENCE WEIGHT
-            evidence_minutes = max(current_minutes, recent_games * 90)
+            evidence_minutes = current_minutes
             current_weight = min(evidence_minutes / 450.0, 1.0)
             selection_score = (prior_start_rate * (1.0 - current_weight) + current_start_rate * current_weight)
 
@@ -1212,7 +1212,7 @@ class PredictionEngine:
             own_current_start_rate = own_season_start_rate
             own_current_avg_mins = own_season_avg_mins
 
-        own_evidence_minutes = max(own_minutes, own_recent_games * 90)
+        own_evidence_minutes = own_minutes
         own_current_weight = min(own_evidence_minutes / 450.0, 1.0)
         own_score = (own_prior_start_rate * (1.0 - own_current_weight) + own_current_start_rate * own_current_weight)
         own_minutes_score = min(own_current_avg_mins / 90.0, 1.0)
