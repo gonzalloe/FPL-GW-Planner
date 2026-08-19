@@ -1166,22 +1166,18 @@ class PredictionEngine:
             evidence_minutes = current_minutes
             current_weight = min(evidence_minutes / 450.0, 1.0)
             if current_weight > 0:
+                # Current-season evidence is the primary competition signal.
                 selection_score = (prior_start_rate * (1.0 - current_weight) + current_start_rate * current_weight)
-            else:
-                if other.get("_is_new_transfer", False):
-                    selection_score = (
-                        prior_start_rate * 0.60
-                        + POSITION_START_RATE_PRIOR.get(
-                            other.get("position_id", 3),
-                            0.5,
-                        ) * 0.40
-                    )
-                else:
-                    selection_score = prior_start_rate
 
-            # Minutes are supporting evidence, not the primary signal.
-            minutes_score = min(current_avg_mins / 90.0, 1.0)
-            selection_score = (selection_score * 0.80 + minutes_score * 0.20)
+            else:
+                # GW1 / no current-season evidence:
+                # competition cannot be inferred from current minutes, so use historical role only as the player's baseline.
+                selection_score = prior_start_rate
+
+            # Minutes are supporting evidence only when current-season minutes actually exist.
+            if current_minutes > 0:
+                minutes_score = min(current_avg_mins / 90.0, 1.0)
+                selection_score = (selection_score * 0.80 + minutes_score * 0.20)
 
             # Availability
             if chance is not None:
@@ -1359,9 +1355,11 @@ class PredictionEngine:
                 p.get("_is_new_transfer", False)
                 or p.get("team") in self.promoted_team_ids
             ):
+                # New club / promoted team:
+                # historical role tells us player quality, current-team competition tells us likely hierarchy.
                 season_start_rate = (competition_score * 0.70 + prior_start_rate * 0.30)
             else:
-                # Established same-club player: trust the player's historical role.
+                # Established same-club player: historical role is the strongest prior.
                 season_start_rate = prior_start_rate
 
         season_start_rate = min(max(season_start_rate, 0.0), 1.0)

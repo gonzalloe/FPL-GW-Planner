@@ -228,6 +228,14 @@ def get_last_season_rates(player_id: int) -> dict:
         return {}
 
     history_past = detail.get("history_past", []) if isinstance(detail, dict) else []
+
+    # debug print
+    DEBUG_PLAYERS = { "Meslier", "Trafford", "Kinsky", "Arrizabalaga" }
+    player_name = detail.get("first_name", "") + " " + detail.get("second_name", "")
+    if player_name in DEBUG_PLAYERS:
+        print(f"\nDEBUG {player_name} (ID {player_id}):")
+        print(history_past[-1] if history_past else "EMPTY")
+
     if not history_past:
         return {}
 
@@ -240,7 +248,9 @@ def get_last_season_rates(player_id: int) -> dict:
         if starts <= 0:
             # Older FPL seasons don't always report `starts` - approximate
             starts = max(round(mins / 75), 1)
-        games = 38
+        games = int(season.get("appearances", 0) or 0)
+        if games <= 0:
+            games = max(round(mins / 75), starts, 1,)
         xg = float(season.get("expected_goals", 0) or 0)
         xa = float(season.get("expected_assists", 0) or 0)
         bonus = int(season.get("bonus", 0) or 0)
