@@ -177,6 +177,44 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
     return priors
     
 
+def get_previous_season_player_team(player_code: int) -> int | None:
+    """
+    Return the player's previous-season FPL team ID.
+    FPL element-summary history_past does not expose historical team,
+    so use the Vaastav players_raw snapshot. `code` is persistent across
+    seasons while FPL `id` can change.
+    """
+    try:
+        # Current 2026/27 season -> previous 2025/26 season.
+        # Keep this derived from the current calendar/bootstrap if you
+        # later want to make it fully dynamic.
+        season = "2025-26"
+        url = (
+            "https://raw.githubusercontent.com/"
+            "vaastav/Fantasy-Premier-League/master/"
+            f"data/{season}/players_raw.csv"
+        )
+        rows = _fetch_csv(
+            url,
+            f"previous_players_{season}",
+            cache_ttl=86400,
+        )
+        code = int(player_code)
+        for row in rows:
+            try:
+                if int(row.get("code", 0) or 0) == code:
+                    team = row.get("team")
+                    return int(team) if team not in (None, "") else None
+            except (TypeError, ValueError):
+                continue
+    except Exception as e:
+        print(
+            f"[PRIOR] Failed to find previous team "
+            f"for player code {player_code}: {e}"
+        )
+    return None
+
+
 def get_last_season_rates(player_id: int) -> dict:
     """
     Per-90 xG/xA/bonus rate from the player's most recent completed
@@ -207,14 +245,25 @@ def get_last_season_rates(player_id: int) -> dict:
         xa = float(season.get("expected_assists", 0) or 0)
         bonus = int(season.get("bonus", 0) or 0)
         per90 = mins / 90.0
+        player_code = None
+        try:
+            player_code = int(season.get("element_code"))
+        except (TypeError, ValueError):
+            pass
+        previous_team_id = (
+            get_previous_season_player_team(player_code)
+            if player_code is not None
+            else None
+        )
         return {
             "xg_per90": xg / per90 if per90 > 0 else 0.0,
             "xa_per90": xa / per90 if per90 > 0 else 0.0,
-            "bonus_per_start": ( bonus / starts if starts > 0 else 0.0 ),
+            "bonus_per_start": (bonus / starts if starts > 0 else 0.0),
             "season_name": season.get("season_name", ""),
             "minutes": mins,
             "starts": starts,
             "games": games,
+            "previous_team_id": previous_team_id,
         }
     return {}
 

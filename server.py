@@ -2181,11 +2181,7 @@ def api_season_chips():
                             ).upper()
                         )
 
-                        chip_gw = chip.get(
-                            "event",
-                            0
-                        )
-
+                        chip_gw = chip.get("event", 0)
                         chip_half = (
                             2
                             if chip_gw >= HALF_CUTOFF

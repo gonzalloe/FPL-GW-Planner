@@ -542,16 +542,27 @@ class PredictionEngine:
                 except Exception:
                     rates = {}     
                 if rates:
-                    p["previous_minutes"] = int(rates.get("minutes", 0) or 0) 
-                    p["previous_starts"] = int(rates.get("starts", 0) or 0) 
-                    # get_last_season_rates currently does not return games. Use 38 only as a fallback for role-rate calculation.
-                    p["previous_games"] = int(rates.get("games", 38) or 38) 
+                    p["previous_minutes"] = int(rates.get("minutes", 0) or 0)
+                    p["previous_starts"] = int(rates.get("starts", 0) or 0)
+                    p["previous_games"] = int(rates.get("games", 38) or 38)
                     p["_previous_season_name"] = rates.get("season_name", "")
-                else: 
-                    p["previous_minutes"] = 0 
-                    p["previous_starts"] = 0 
-                    p["previous_games"] = 38 
+                    p["_previous_team_id"] = rates.get("previous_team_id")
+                
+                    # NEW: current club differs from previous club                        
+                    current_team_id = p.get("team")
+                    previous_team_id = p.get("_previous_team_id")
+                    p["_is_new_transfer"] = (
+                        previous_team_id is not None
+                        and current_team_id is not None
+                        and int(previous_team_id) != int(current_team_id)
+                    )
+                else:
+                    p["previous_minutes"] = 0
+                    p["previous_starts"] = 0
+                    p["previous_games"] = 38
                     p["_previous_season_name"] = ""
+                    p["_previous_team_id"] = None
+                    p["_is_new_transfer"] = False
             
                 # Store attacking priors too 
                 if rates: 
@@ -1038,11 +1049,49 @@ class PredictionEngine:
         )
 
         if previous_minutes >= 450:
+            previous_start_rate = min(previous_starts / previous_games, 1.0,)
+            previous_avg_minutes = min(previous_minutes / previous_games, 90.0,)
+
+            # A player's old-club role should remain useful as a weak prior
+            # after a transfer, but must NOT be treated as evidence that he
+            # is first choice at the new club.
+            if p.get("_is_new_transfer", False):
+                previous_start_rate = (
+                    previous_start_rate * 0.25
+                    + POSITION_START_RATE_PRIOR.get(
+                        p.get("position_id", 3),
+                        0.5,
+                    ) * 0.75
+                )
+
+                previous_avg_minutes = (
+                    previous_avg_minutes * 0.25
+                    + POSITION_MINUTES_PRIOR.get(
+                        p.get("position_id", 3),
+                        60,
+                    ) * 0.75
+                )
+
+                return {
+                    "start_rate": previous_start_rate,
+                    "avg_minutes": previous_avg_minutes,
+                    "source": "transfer_adjusted_prior",
+                    "season": p.get(
+                        "_previous_season_name",
+                        "",
+                    ),
+                    "minutes": previous_minutes,
+                    "starts": previous_starts,
+                    "matches": previous_games,
+                }
             return {
-                "start_rate": min(previous_starts / previous_games, 1.0),
-                "avg_minutes": min(previous_minutes / previous_games, 90.0),
+                "start_rate": previous_start_rate,
+                "avg_minutes": previous_avg_minutes,
                 "source": "premier_league",
-                "season": p.get("_previous_season_name", ""),
+                "season": p.get(
+                    "_previous_season_name",
+                    "",
+                ),
                 "minutes": previous_minutes,
                 "starts": previous_starts,
                 "matches": previous_games,
@@ -1151,7 +1200,20 @@ class PredictionEngine:
             # EVIDENCE WEIGHT
             evidence_minutes = current_minutes
             current_weight = min(evidence_minutes / 450.0, 1.0)
-            selection_score = (prior_start_rate * (1.0 - current_weight) + current_start_rate * current_weight)
+            if current_weight > 0:
+                selection_score = (
+                    prior_start_rate * (1.0 - current_weight)
+                    + current_start_rate * current_weight
+                )
+            else:
+                # No current-season evidence yet.
+                # Historical role is weaker after a transfer because it describes
+                # the player's OLD club, not the current club.
+                if other.get("_is_new_transfer", False):
+                    neutral_prior = POSITION_START_RATE_PRIOR.get(other.get("position_id", 3), 0.5,)
+                    selection_score = (neutral_prior * 0.75 + prior_start_rate * 0.25)
+                else:
+                    selection_score = prior_start_rate
 
             # Minutes are supporting evidence, not the primary signal.
             minutes_score = min(current_avg_mins / 90.0, 1.0)
@@ -1214,7 +1276,14 @@ class PredictionEngine:
 
         own_evidence_minutes = own_minutes
         own_current_weight = min(own_evidence_minutes / 450.0, 1.0)
-        own_score = (own_prior_start_rate * (1.0 - own_current_weight) + own_current_start_rate * own_current_weight)
+        if own_current_weight > 0:
+            own_score = (own_prior_start_rate * (1.0 - own_current_weight) + own_current_start_rate * own_current_weight)
+        else:
+            if p.get("_is_new_transfer", False):
+                neutral_prior = POSITION_START_RATE_PRIOR.get(p.get("position_id", 3), 0.5,)
+                own_score = (neutral_prior * 0.75 + own_prior_start_rate * 0.25)
+            else:
+                own_score = own_prior_start_rate
         own_minutes_score = min(own_current_avg_mins / 90.0, 1.0)
         own_score = (own_score * 0.80 + own_minutes_score * 0.20)
         own_chance = p.get("chance_of_playing_next_round")
@@ -1317,8 +1386,16 @@ class PredictionEngine:
             )
         else:
             # GW1 / no current-season evidence:
-            # use the player's own prior role.
-            season_start_rate = prior_start_rate
+            if available_teammates > 0:
+                if p.get("_is_new_transfer", False):
+                    # New transfer: current-team competition dominates.
+                    season_start_rate = (competition_score * 0.80 + prior_start_rate * 0.20)
+                else:
+                    # Established player: historical role remains useful.
+                    season_start_rate = (competition_score * 0.60 + prior_start_rate * 0.40)
+            else:
+                # No meaningful competition data.
+                season_start_rate = prior_start_rate
 
         season_start_rate = min(max(season_start_rate, 0.0), 1.0)
 
