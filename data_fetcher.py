@@ -263,7 +263,7 @@ def get_last_season_rates(player_id: int) -> dict:
             "minutes": mins,
             "starts": starts,
             "games": games,
-            "previous_team_id": previous_team_id,
+            "previous_team_id": season.get("team"),
         }
     return {}
 

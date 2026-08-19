@@ -1023,7 +1023,10 @@ class PredictionEngine:
         if team_id in self.promoted_team_ids:
             champ = p.get("championship_role")
 
-            if champ and int(champ.get("minutes", 0) or 0) >= 450:
+            if (champ 
+                and int(champ.get("minutes", 0) or 0) >= 450 
+                and (not p.get("_is_new_transfer", False) or p.get("_previous_team_id") == team_id)
+                ):
                 return {
                     "start_rate": min(
                         float(champ.get("start_rate", 0.5) or 0.5),
