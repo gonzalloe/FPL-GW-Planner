@@ -239,7 +239,7 @@ def get_last_season_rates(player_id: int) -> dict:
     if player_name in DEBUG_PLAYERS:
         print(f"\n========== DEBUG {player_name} (ID {player_id}) ==========")
         print("history_past:")
-        print(detail.get("history_past", [])))
+        print(detail.get("history_past", []))
 
     if not history_past:
         return {}
