@@ -24,7 +24,7 @@ SCORING = {
     "minutes_1_59": 1,
     "minutes_60_plus": 2,
     # Goals scored by position (1=GKP, 2=DEF, 3=MID, 4=FWD)
-    "goals": {1: 10, 2: 6, 3: 5, 4: 4},
+    "goals": {1: 6, 2: 6, 3: 5, 4: 4},
     # Assists
     "assist": 3,
     # Clean sheets by position

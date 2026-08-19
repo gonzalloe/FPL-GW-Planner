@@ -229,17 +229,17 @@ def get_last_season_rates(player_id: int) -> dict:
 
     history_past = detail.get("history_past", []) if isinstance(detail, dict) else []
 
-    # debug print
-    DEBUG_PLAYERS = { "Meslier", "Trafford", "Kinsky", "Arrizabalaga" }
-    try:
-        detail = fetch_player_detail(player_id)
-    except Exception:
-        return {}
-    player_name = ( detail.get("first_name", "") + " " + detail.get("second_name", "")).strip()
+    # TEMP DEBUG
+    DEBUG_PLAYERS = {"Meslier", "Trafford", "Kinsky", "Arrizabalaga"}
+    player_name = (
+        f"{detail.get('first_name', '')} "
+        f"{detail.get('second_name', '')}"
+    ).strip()
     if player_name in DEBUG_PLAYERS:
-        print(f"\n========== DEBUG {player_name} (ID {player_id}) ==========")
-        print("history_past:")
-        print(detail.get("history_past", []))
+        print(f"\n========== DEBUG {player_name} ID={player_id} ==========")
+        print(f"history_past seasons: {len(history_past)}")
+        print(history_past[-1] if history_past else "EMPTY")
+        print("============================================\n")
 
     if not history_past:
         return {}
