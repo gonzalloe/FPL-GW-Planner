@@ -1408,17 +1408,15 @@ class PredictionEngine:
             # ------------------------------------------------------------
             # NO CURRENT-SEASON EVIDENCE
             #
-            # For new transfers / promoted teams, historical role tells us
-            # how established the player was, but CURRENT-CLUB competition
-            # tells us whether the new manager is likely to select him.
+            # Historical role describes what the player USED TO be.
+            # Current-club competition describes the situation he is NOW in.
+            #
+            # This is important for:
+            #   - preseason transfers
+            #   - promoted teams
+            #   - players whose manager/role has changed
             # ------------------------------------------------------------
-            is_new_environment = (
-                p.get("_is_new_transfer", False)
-                or p.get("team") in self.promoted_team_ids
-            )
-            if is_new_environment and available_teammates > 0:
-                # Current-club selection is the primary signal.
-                # Historical role remains a prior.
+            if available_teammates > 0:
                 competition_weight = 0.65
                 prior_weight = 0.35
                 season_start_rate = (competition_score * competition_weight + prior_start_rate * prior_weight)
