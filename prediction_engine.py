@@ -1015,15 +1015,18 @@ class PredictionEngine:
         other_ev += bonus_ev                   
 
         # ── 7. Saves (GKP) ──
+        save_points_ev = 0.0
+        expected_saves = 0.0
         if pos == 1:
             saves_season = int(p.get("saves", 0) or 0)
             if mins_played > 0:
                 saves_per90 = saves_season / max(mins_played / 90.0, 1.0)
             else:
                 saves_per90 = 3.0
-            conceding_context = min(max(team_xgc / 1.35, 0.5), 1.6)
+            conceding_context = min(max(team_xgc / 1.35, 0.5), 1.6,)
             expected_saves = (saves_per90 * mins_fraction * conceding_context)
-            other_ev += (expected_saves / 3.0) * SCORING["saves_per_3"]
+            save_points_ev = (expected_saves / 3.0) * SCORING["saves_per_3"]
+            other_ev += save_points_ev
 
         # ── 8. Negative events ──
         yellows = int(p.get("yellow_cards", 0))
@@ -1050,22 +1053,12 @@ class PredictionEngine:
             other_ev += (expected_dc / 3.0) * 1.0 * 0.35
 
         #debug print
-        save_points_ev = ((expected_saves / 3.0) * SCORING["saves_per_3"])
-        other_ev += save_points_ev
-        bonus_ev = self._predict_bonus(
-            p,
-            effective_xg,
-            effective_xa,
-            blended_cs,
-            fdr_mod,
-            mins_fraction,
-        )
-        print(
-            f"""
+        if pos == 1:
+            print(
+                f"""
         [GKP EV DEBUG] {p.get('web_name')}
         xmins={xmins:.2f}
         p_plays_60={p_plays_60:.3f}
-
         appearance={appearance_pts:.3f}
         goal={poisson_ev_goals(effective_xg, goal_pts):.3f}
         assist={poisson_ev_assists(effective_xa):.3f}
@@ -1075,8 +1068,8 @@ class PredictionEngine:
         saves={save_points_ev:.3f}
         TOTAL_OTHER={other_ev:.3f}
         """,
-            flush=True,
-        )
+                flush=True,
+            )
         
         return {"appearance": appearance_pts, "other": max(other_ev, 0.0)}
 
