@@ -218,28 +218,18 @@ def get_previous_season_player_team(player_code: int) -> int | None:
 def get_last_season_rates(player_id: int) -> dict:
     """
     Per-90 xG/xA/bonus rate from the player's most recent completed
-    PL season with a meaningful sample (>=450 mins, ~5 full games).
-    Used as a cold-start prior before this season's minutes accumulate.
-    Returns {} if no qualifying prior season is found.
+    PL season with a meaningful sample (>=450 mins).
     """
     try:
         detail = fetch_player_detail(player_id)
     except Exception:
         return {}
 
-    history_past = detail.get("history_past", []) if isinstance(detail, dict) else []
-
-    # TEMP DEBUG
-    DEBUG_PLAYERS = {"Meslier", "Trafford", "Kinsky", "Arrizabalaga"}
-    player_name = (
-        f"{detail.get('first_name', '')} "
-        f"{detail.get('second_name', '')}"
-    ).strip()
-    if player_name in DEBUG_PLAYERS:
-        print(f"\n========== DEBUG {player_name} ID={player_id} ==========")
-        print(f"history_past seasons: {len(history_past)}")
-        print(history_past[-1] if history_past else "EMPTY")
-        print("============================================\n")
+    history_past = (
+        detail.get("history_past", [])
+        if isinstance(detail, dict)
+        else []
+    )
 
     if not history_past:
         return {}

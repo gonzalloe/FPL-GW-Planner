@@ -617,6 +617,32 @@ class PredictionEngine:
 
         # ── Starter quality (DGW-aware, injury-aware) ──
         profile = self.calculate_expected_minutes(p, num_fixtures, teammates_out, out_minutes)
+
+        #debug print
+        DEBUG_PLAYERS = {
+            "Meslier",
+            "Trafford",
+            "Kinsky",
+            "Arrizabalaga",
+        }
+        if p.get("web_name") in DEBUG_PLAYERS:
+            print(
+                f"\n========== GKP PREDICTION DEBUG ==========",
+                flush=True,
+            )
+            print(f"Player: {p.get('web_name')}", flush=True)
+            print(f"ID: {p.get('id')}", flush=True)
+            print(f"Position: {p.get('position_id')}", flush=True)
+            print(f"Current minutes: {p.get('minutes')}", flush=True)
+            print(f"Current starts: {p.get('starts')}", flush=True)
+            print(f"Previous minutes: {p.get('previous_minutes')}", flush=True)
+            print(f"Previous starts: {p.get('previous_starts')}", flush=True)
+            print(f"Previous games: {p.get('previous_games')}", flush=True)
+            print(f"Prior role: {self.get_player_role_prior(p)}", flush=True)
+            print(f"Competition: {self._current_team_position_competition(p)}", flush=True)
+            print(f"Profile: {profile}", flush=True)
+            print(f"===========================================\n", flush=True)
+            
         p["starter_quality"] = {**profile, "tier": self._derive_tier_label(profile)}
 
         # ── Per-fixture xPts ──
@@ -902,8 +928,23 @@ class PredictionEngine:
             p_plays_60 = min(p_plays_60, 1.0)
         mins_fraction = xmins / 90.0
 
+        # ── GKP playing-time model ───────────────────────────────
+        # A goalkeeper who starts is overwhelmingly likely to play 60+.
+        # Do not mix the GKP start probability with the outfield
+        # substitute/xMins model for scoring.
+        if pos == 1:
+            gkp_play_prob = min(max(p_plays_60 / 0.98, 0.0), 1.0)
+            gkp_60_prob = p_plays_60
+            mins_fraction = gkp_play_prob
+        else:
+            gkp_play_prob = None
+            gkp_60_prob = None
+
         # ── 1. Appearance points ──
-        appearance_pts = p_plays_60 * 2.0 + (p_plays - p_plays_60) * 1.0
+        if pos == 1:
+            appearance_pts = p_plays_60 * 2.0
+        else:
+            appearance_pts = (p_plays_60 * 2.0 + (p_plays - p_plays_60) * 1.0)
         other_ev = 0.0
 
         # ── Cold-start blend weight (shared by goals + assists) ──
@@ -967,24 +1008,21 @@ class PredictionEngine:
         # ── 5. Goals conceded penalty (DEF/GKP) ──
         if pos in (1, 2):
             gc_ev = poisson_goals_conceded_ev(team_xgc)
-            other_ev += gc_ev * p_plays_60 * 0.5
+            other_ev += gc_ev * p_plays_60 
 
         # ── 6. Bonus points (persistence + position + fixture) ──
         other_ev += self._predict_bonus(p, effective_xg, effective_xa, blended_cs, fdr_mod, mins_fraction)                       
 
         # ── 7. Saves (GKP) ──
         if pos == 1:
-            saves_season = int(p.get("saves", 0))
-            saves_per90 = saves_season / max(mins_played / 90.0, 1.0) if mins_played > 0 else 3.0
-            # More saves expected vs stronger opponents (higher xGC = more shots)
-            conceding_context = min(team_xgc / 1.35, 1.6)
-            expected_saves = saves_per90 * mins_fraction * conceding_context
+            saves_season = int(p.get("saves", 0) or 0)
+            if mins_played > 0:
+                saves_per90 = saves_season / max(mins_played / 90.0, 1.0)
+            else:
+                saves_per90 = 3.0
+            conceding_context = min(max(team_xgc / 1.35, 0.5), 1.6)
+            expected_saves = (saves_per90 * mins_fraction * conceding_context)
             other_ev += (expected_saves / 3.0) * SCORING["saves_per_3"]
-            # Penalty save (small probability based on history)
-            pen_saved = int(p.get("penalties_saved", 0))
-            if pen_saved > 0:
-                pen_save_rate = pen_saved / max(starts, 1)
-                other_ev += pen_save_rate * SCORING["penalty_save"] * 0.3
 
         # ── 8. Negative events ──
         yellows = int(p.get("yellow_cards", 0))
