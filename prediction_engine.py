@@ -1225,9 +1225,10 @@ class PredictionEngine:
                 selection_score = (prior_start_rate * (1.0 - current_weight) + current_start_rate * current_weight)
 
             else:
-                # GW1 / no current-season evidence:
-                # competition cannot be inferred from current minutes, so use historical role only as the player's baseline.
-                selection_score = prior_start_rate
+                # No current-club evidence.
+                # Historical role is useful, but do not treat it as certainty.
+                positional_prior = POSITION_START_RATE_PRIOR.get(other.get("position_id", 3), 0.5,)
+                selection_score = (prior_start_rate * 0.70 + positional_prior * 0.30)
 
             # Minutes are supporting evidence only when current-season minutes actually exist.
             if current_minutes > 0:
@@ -1294,16 +1295,8 @@ class PredictionEngine:
         if own_current_weight > 0:
             own_score = (own_prior_start_rate * (1.0 - own_current_weight) + own_current_start_rate * own_current_weight)
         else:
-            if p.get("_is_new_transfer", False) or p.get("team") in self.promoted_team_ids:
-                own_score = (
-                    own_prior_start_rate * 0.60
-                    + POSITION_START_RATE_PRIOR.get(
-                        p.get("position_id", 3),
-                        0.5,
-                    ) * 0.40
-                )
-            else:
-                own_score = own_prior_start_rate
+            own_pos_prior = POSITION_START_RATE_PRIOR.get(p.get("position_id", 3), 0.5,)
+            own_score = (own_prior_start_rate * 0.70 + own_pos_prior * 0.30)
         own_minutes_score = min(own_current_avg_mins / 90.0, 1.0)
         own_score = (own_score * 0.80 + own_minutes_score * 0.20)
         own_chance = p.get("chance_of_playing_next_round")
@@ -1405,27 +1398,25 @@ class PredictionEngine:
                 + raw_start_rate * current_weight
             )
         else:
-            # GW1 / no current-season evidence:
-            if p.get("position_id") == 1:
-                if p.get("_is_new_transfer", False):
-                    season_start_rate = (prior_start_rate * 0.25 + POSITION_START_RATE_PRIOR[1] * 0.75)
-                elif available_teammates > 0:
-                    season_start_rate = (competition_score * 0.40 + prior_start_rate * 0.60)
-                else:
-                    season_start_rate = prior_start_rate
-
+            # ------------------------------------------------------------
+            # NO CURRENT-SEASON EVIDENCE
+            #
+            # For new transfers / promoted teams, historical role tells us
+            # how established the player was, but CURRENT-CLUB competition
+            # tells us whether the new manager is likely to select him.
+            # ------------------------------------------------------------
+            is_new_environment = (
+                p.get("_is_new_transfer", False)
+                or p.get("team") in self.promoted_team_ids
+            )
+            if is_new_environment and available_teammates > 0:
+                # Current-club selection is the primary signal.
+                # Historical role remains a prior.
+                competition_weight = 0.65
+                prior_weight = 0.35
+                season_start_rate = (competition_score * competition_weight + prior_start_rate * prior_weight)
             else:
-                # DEF/MID/FWD
-                if available_teammates > 0 and (
-                    p.get("_is_new_transfer", False)
-                    or p.get("team") in self.promoted_team_ids
-                ):
-                    season_start_rate = (
-                        competition_score * 0.70
-                        + prior_start_rate * 0.30
-                    )
-                else:
-                    season_start_rate = prior_start_rate
+                season_start_rate = prior_start_rate
 
         season_start_rate = min(max(season_start_rate, 0.0), 1.0)
 
@@ -1497,6 +1488,23 @@ class PredictionEngine:
         else:
             dgw_both_prob = None
             dgw_effective = 1.0
+
+        # debug print
+        DEBUG_PLAYERS = {
+                    "Meslier",
+                    "Trafford",
+                    "Kinsky",
+                    "Arrizabalaga",
+                }
+        if p.get("web_name") in DEBUG_PLAYERS:
+            print(
+                "ROLE DEBUG:",
+                p.get("web_name") or p.get("name"),
+                "new_transfer=", p.get("_is_new_transfer"),
+                "competition=", competition_score,
+                "prior=", prior_start_rate,
+                "minutes=", current_minutes,
+            )
         
         return {
             "p_start": round(p_start, 3),
