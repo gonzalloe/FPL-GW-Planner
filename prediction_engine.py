@@ -1053,7 +1053,14 @@ class PredictionEngine:
             other_ev += (expected_dc / 3.0) * 1.0 * 0.35
 
         #debug print
-        if pos == 1:
+        DEBUG_GK_PLAYERS = {
+            "Meslier",
+            "Kinsky",
+            "Arrizabalaga",
+            "Raya",
+            "Trafford"
+        }
+        if pos == 1 and p.get("web_name") in DEBUG_GK_PLAYERS:
             print(
                 f"""
         [GKP EV DEBUG] {p.get('web_name')}
@@ -1157,10 +1164,11 @@ class PredictionEngine:
         pos_id = p.get("position_id")
         if not team_id or not pos_id:
             return {
-                "competition_score": 0.0,
+                "competition_score": None,
                 "available_teammates": 0,
-                "rank": 1,
-            }
+                "rank": None,
+                "has_evidence": False,
+            }   
         candidates = []
         for other in self.players.values():
             if other.get("id") == p.get("id"):
@@ -1333,14 +1341,13 @@ class PredictionEngine:
                 "competition_score": round(own_score, 3),
                 "available_teammates": max(len(candidates) - 1, 0),
                 "rank": len(candidates),
+                "has_evidence": len(candidates) >= 2,
             }
         return {
-            "competition_score": round(
-                candidates[own_index]["score"],
-                3
-            ),
+            "competition_score": round(candidates[own_index]["score"], 3),
             "available_teammates": max(len(candidates) - 1, 0),
             "rank": own_index + 1,
+            "has_evidence": len(candidates) >= 2,
         }
 
 
@@ -1404,23 +1411,48 @@ class PredictionEngine:
                 prior_start_rate * prior_weight
                 + raw_start_rate * current_weight
             )
+            
+            #debug print
+            if p.get("web_name") == "Kinsky":
+                print(
+                    "\n========== KINSKY START TRACE ==========",
+                    f"\ncurrent_gw: {self.current_gw}",
+                    f"\ngws_played: {gws_played}",
+                    f"\ncurrent_minutes: {current_minutes}",
+                    f"\ncurrent_starts: {current_starts}",
+                    f"\nprior_start_rate: {prior_start_rate:.3f}",
+                    f"\nraw_start_rate: {raw_start_rate:.3f}",
+                    f"\ncurrent_weight: {current_weight:.3f}",
+                    f"\nprior_weight: {prior_weight:.3f}",
+                    f"\nseason_start_rate: {season_start_rate:.3f}",
+                    f"\navailability: {availability:.3f}",
+                    f"\np_start BEFORE injury boost: {season_start_rate * availability:.3f}",
+                    f"\n========================================",
+                    flush=True,
+                )
         else:
-            # ------------------------------------------------------------
-            # NO CURRENT-SEASON EVIDENCE
-            #
-            # Historical role describes what the player USED TO be.
-            # Current-club competition describes the situation he is NOW in.
-            #
-            # This is important for:
-            #   - preseason transfers
-            #   - promoted teams
-            #   - players whose manager/role has changed
-            # ------------------------------------------------------------
-            if available_teammates > 0:
-                competition_weight = 0.65
-                prior_weight = 0.35
+            if available_teammates > 0 and competition.get("has_evidence", False):
+                is_new_environment = (
+                    bool(p.get("_is_new_transfer", False))
+                    or p.get("team") in self.promoted_team_ids
+                )
+
+                if is_new_environment:
+                    # Historical role is evidence of ability/experience,
+                    # but it does NOT establish the player's new-club starting role.
+                    #
+                    # Current-club competition gets the stronger weight.
+                    competition_weight = 0.75
+                    prior_weight = 0.25
+                else:
+                    # Same-club player with no current-season minutes:
+                    # historical role remains more trustworthy.
+                    competition_weight = 0.50
+                    prior_weight = 0.50
+
                 season_start_rate = (competition_score * competition_weight + prior_start_rate * prior_weight)
             else:
+                # No reliable current-club competition evidence.
                 season_start_rate = prior_start_rate
 
         season_start_rate = min(max(season_start_rate, 0.0), 1.0)
@@ -1479,12 +1511,19 @@ class PredictionEngine:
             p_plays_60 = min(p_plays_60 + boost * 0.8, 1.0)
 
         # Probability of any appearance as sub
-        p_sub = (1 - p_start) * 0.35
+        if p.get("position_id") == 1:
+            p_sub = 0.0
+            sub_minutes = 0.0
+        else:
+            p_sub = (1 - p_start) * 0.35
+            sub_minutes = 20.0
         # Expected minutes
-        starter_minutes = min(avg_mins, 90)
-        sub_minutes = 20  # average late sub appearance
-        xmins = (p_start * starter_minutes + p_sub * sub_minutes)
-        xmins = min(xmins, 90)
+        starter_minutes = min(avg_mins, 90.0)
+        xmins = (
+            p_start * starter_minutes
+            + p_sub * sub_minutes
+        )
+        xmins = min(xmins, 90.0)
 
         # DGW: expected effective matches, scaled continuously by p_start (no tier lookup)
         if num_fixtures >= 2:
