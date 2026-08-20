@@ -1011,7 +1011,8 @@ class PredictionEngine:
             other_ev += gc_ev * p_plays_60 
 
         # ── 6. Bonus points (persistence + position + fixture) ──
-        other_ev += self._predict_bonus(p, effective_xg, effective_xa, blended_cs, fdr_mod, mins_fraction)                       
+        bonus_ev = self._predict_bonus(p, effective_xg, effective_xa, blended_cs, fdr_mod, mins_fraction)
+        other_ev += bonus_ev                   
 
         # ── 7. Saves (GKP) ──
         if pos == 1:
@@ -1049,20 +1050,33 @@ class PredictionEngine:
             other_ev += (expected_dc / 3.0) * 1.0 * 0.35
 
         #debug print
-        print(f"""
-            [GKP EV DEBUG] {p.get("web_name")}
-            xmins={xmins:.2f}
-            p_plays_60={p_plays_60:.3f}
+        save_points_ev = ((expected_saves / 3.0) * SCORING["saves_per_3"])
+        other_ev += save_points_ev
+        bonus_ev = self._predict_bonus(
+            p,
+            effective_xg,
+            effective_xa,
+            blended_cs,
+            fdr_mod,
+            mins_fraction,
+        )
+        print(
+            f"""
+        [GKP EV DEBUG] {p.get('web_name')}
+        xmins={xmins:.2f}
+        p_plays_60={p_plays_60:.3f}
 
-            appearance={appearance_pts:.3f}
-            goal={poisson_ev_goals(effective_xg, goal_pts):.3f}
-            assist={poisson_ev_assists(effective_xa):.3f}
-            clean_sheet={blended_cs * cs_pts * p_plays_60:.3f}
-            goals_conceded={gc_ev * p_plays_60:.3f}
-            bonus={self._predict_bonus(p, effective_xg, effective_xa, blended_cs, fdr_mod, mins_fraction):.3f}
-            saves={((expected_saves / 3.0) * SCORING["saves_per_3"]):.3f}
-            TOTAL_OTHER={other_ev:.3f}
-            """, flush=True)
+        appearance={appearance_pts:.3f}
+        goal={poisson_ev_goals(effective_xg, goal_pts):.3f}
+        assist={poisson_ev_assists(effective_xa):.3f}
+        clean_sheet={blended_cs * cs_pts * p_plays_60:.3f}
+        goals_conceded={gc_ev * p_plays_60:.3f}
+        bonus={bonus_ev:.3f}
+        saves={save_points_ev:.3f}
+        TOTAL_OTHER={other_ev:.3f}
+        """,
+            flush=True,
+        )
         
         return {"appearance": appearance_pts, "other": max(other_ev, 0.0)}
 
