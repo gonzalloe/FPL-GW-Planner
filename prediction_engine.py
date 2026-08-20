@@ -1047,6 +1047,23 @@ class PredictionEngine:
             dc_fixture_mod = 1.0 + (fdr - 3) * 0.06
             expected_dc = base_dc_rate * mins_fraction * dc_fixture_mod
             other_ev += (expected_dc / 3.0) * 1.0 * 0.35
+
+        #debug print
+        print(f"""
+            [GKP EV DEBUG] {p.get("web_name")}
+            xmins={xmins:.2f}
+            p_plays_60={p_plays_60:.3f}
+
+            appearance={appearance_pts:.3f}
+            goal={poisson_ev_goals(effective_xg, goal_pts):.3f}
+            assist={poisson_ev_assists(effective_xa):.3f}
+            clean_sheet={blended_cs * cs_pts * p_plays_60:.3f}
+            goals_conceded={gc_ev * p_plays_60:.3f}
+            bonus={self._predict_bonus(p, effective_xg, effective_xa, blended_cs, fdr_mod, mins_fraction):.3f}
+            saves={((expected_saves / 3.0) * SCORING["saves_per_3"]):.3f}
+            TOTAL_OTHER={other_ev:.3f}
+            """, flush=True)
+        
         return {"appearance": appearance_pts, "other": max(other_ev, 0.0)}
 
 
@@ -1389,16 +1406,11 @@ class PredictionEngine:
             )
         else:
             # GW1 / no current-season evidence:
-            if p.get("position_id") == 1:  # GKP
-                if available_teammates > 0 and (
-                    p.get("_is_new_transfer", False)
-                    or p.get("team") in self.promoted_team_ids
-                ):
-                    # Goalkeepers: historical role should carry more weight.
-                    season_start_rate = (
-                        competition_score * 0.40
-                        + prior_start_rate * 0.60
-                    )
+            if p.get("position_id") == 1:
+                if p.get("_is_new_transfer", False):
+                    season_start_rate = (prior_start_rate * 0.25 + POSITION_START_RATE_PRIOR[1] * 0.75)
+                elif available_teammates > 0:
+                    season_start_rate = (competition_score * 0.40 + prior_start_rate * 0.60)
                 else:
                     season_start_rate = prior_start_rate
 
@@ -1450,7 +1462,6 @@ class PredictionEngine:
                 p_start * mins_ratio
                 + (1 - p_start) * p_sub_appearance * 0.05
             )
-        p_plays_60 *= availability
         if total_minutes > 0:
             p_plays_60 *= (1.0 - mins_volatility * 0.3)
         p_plays_60 = min(max(p_plays_60, 0.0), 1.0)
@@ -1477,7 +1488,6 @@ class PredictionEngine:
         starter_minutes = min(avg_mins, 90)
         sub_minutes = 20  # average late sub appearance
         xmins = (p_start * starter_minutes + p_sub * sub_minutes)
-        xmins *= availability
         xmins = min(xmins, 90)
 
         # DGW: expected effective matches, scaled continuously by p_start (no tier lookup)
