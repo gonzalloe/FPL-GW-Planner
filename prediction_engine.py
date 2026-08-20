@@ -1152,197 +1152,214 @@ class PredictionEngine:
 
     def _current_team_position_competition(self, p: dict) -> dict:
         """
-        Estimate current selection strength relative to available teammates
-        at the same team and position.
-        Priority:
-        1. Recent/current-season starts
-        2. Current-season minutes
-        3. Historical role prior only when current evidence is limited
-        Price is deliberately NOT used.
+        Estimate current-club selection strength relative to available
+        same-position teammates.
+
+        Important:
+        - Current-season evidence is strongest.
+        - For established players, previous-club role is useful because it
+        represents the same club's historical selection preference.
+        - For new transfers, old-club role is weaker evidence.
+        - Do NOT let a new transfer's old-club starter history masquerade
+        as current-club selection evidence.
         """
+
         team_id = p.get("team")
         pos_id = p.get("position_id")
+
         if not team_id or not pos_id:
             return {
                 "competition_score": None,
                 "available_teammates": 0,
                 "rank": None,
                 "has_evidence": False,
-            }   
+            }
+
         candidates = []
-        for other in self.players.values():
-            if other.get("id") == p.get("id"):
-                continue
-            if other.get("team") != team_id:
-                continue
-            if other.get("position_id") != pos_id:
-                continue
-            # Unavailable players should not compete for the starting position.
-            status = other.get("status", "a")
-            chance = other.get("chance_of_playing_next_round")
-            if status in ("i", "u", "s", "n"):
-                continue
-            if chance is not None and chance <= 25:
-                continue
-            current_minutes = int(other.get("minutes", 0) or 0)
-            current_starts = int(other.get("starts", 0) or 0)
-            recent_games = int(other.get("_recent_games", 0) or 0)
-            recent_start_rate = other.get("_recent_start_rate")
-            recent_avg_mins = other.get("_recent_avg_mins")
+
+        def role_prior(player):
+            try:
+                prior = self.get_player_role_prior(player)
+                return (
+                    float(prior.get("start_rate", 0.5)),
+                    float(prior.get("avg_minutes", 60.0)),
+                )
+            except Exception:
+                return 0.5, 60.0
+
+        def player_score(player):
+            minutes = int(player.get("minutes", 0) or 0)
+            starts = int(player.get("starts", 0) or 0)
+
+            recent_games = int(player.get("_recent_games", 0) or 0)
+            recent_start_rate = player.get("_recent_start_rate")
+            recent_avg_mins = player.get("_recent_avg_mins")
+
+            prior_start_rate, prior_avg_mins = role_prior(player)
+
+            is_new_transfer = bool(player.get("_is_new_transfer", False))
 
             # ------------------------------------------------------------
-            # CURRENT EVIDENCE
+            # CURRENT-SEASON EVIDENCE
             # ------------------------------------------------------------
-            if self.current_gw > 1:
+            if self.current_gw > 1 and minutes > 0:
                 gws_played = max(self.current_gw - 1, 1)
-                season_start_rate = min(current_starts / gws_played, 1.0)
-                season_avg_mins = min(current_minutes / gws_played, 90.0)
-            else:
-                season_start_rate = 0.0
-                season_avg_mins = 0.0
-            # Recent matches are stronger evidence than an old season average.
-            if (
-                recent_games >= 2
-                and recent_start_rate is not None
-            ):
-                recent_weight = min(recent_games / 5.0, 1.0) * 0.70
-                current_start_rate = (
-                    recent_weight * float(recent_start_rate)
-                    + (1.0 - recent_weight) * season_start_rate
+
+                season_start_rate = min(
+                    starts / gws_played,
+                    1.0,
                 )
-                if recent_avg_mins is not None:
-                    current_avg_mins = (
-                        recent_weight * float(recent_avg_mins)
-                        + (1.0 - recent_weight) * season_avg_mins
+
+                season_avg_mins = min(
+                    minutes / gws_played,
+                    90.0,
+                )
+
+                # Current-season evidence becomes dominant quickly.
+                current_weight = min(minutes / 450.0, 1.0)
+
+                start_score = (
+                    prior_start_rate * (1.0 - current_weight)
+                    + season_start_rate * current_weight
+                )
+
+                mins_score = season_avg_mins / 90.0
+
+                score = (
+                    start_score * 0.80
+                    + mins_score * 0.20
+                )
+
+                # Recent role can override stale season evidence.
+                if recent_games >= 2 and recent_start_rate is not None:
+                    recent_weight = min(recent_games / 5.0, 1.0) * 0.70
+
+                    score = (
+                        score * (1.0 - recent_weight)
+                        + float(recent_start_rate) * recent_weight
+                    )
+
+            else:
+                # --------------------------------------------------------
+                # NO CURRENT-SEASON EVIDENCE
+                #
+                # This is the preseason/new-transfer case.
+                #
+                # Established player:
+                #   previous role is meaningful because it was at the
+                #   current club.
+                #
+                # New transfer:
+                #   previous role came from another club, so downgrade it.
+                # --------------------------------------------------------
+
+                if is_new_transfer:
+                    # Old-club role is only weak evidence about the
+                    # new manager's selection decision.
+                    score = (
+                        prior_start_rate * 0.35
+                        + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.65
                     )
                 else:
-                    current_avg_mins = season_avg_mins
-            else:
-                current_start_rate = season_start_rate
-                current_avg_mins = season_avg_mins
+                    # Established current-club player.
+                    score = (
+                        prior_start_rate * 0.75
+                        + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.25
+                    )
 
             # ------------------------------------------------------------
-            # HISTORICAL PRIOR
+            # AVAILABILITY
             # ------------------------------------------------------------
-            try:
-                role_prior = self.get_player_role_prior(other)
-                prior_start_rate = float(role_prior.get("start_rate", 0.5))
-                prior_avg_mins = float(role_prior.get("avg_minutes", 60.0))
-            except Exception:
-                prior_start_rate = 0.5
-                prior_avg_mins = 60.0
+            chance = player.get("chance_of_playing_next_round")
 
-            # EVIDENCE WEIGHT
-            evidence_minutes = current_minutes
-            current_weight = min(evidence_minutes / 450.0, 1.0)
-            if current_weight > 0:
-                # Current-season evidence is the primary competition signal.
-                selection_score = (prior_start_rate * (1.0 - current_weight) + current_start_rate * current_weight)
-
-            else:
-                # No current-club evidence.
-                # Historical role is useful, but do not treat it as certainty.
-                positional_prior = POSITION_START_RATE_PRIOR.get(other.get("position_id", 3), 0.5,)
-                selection_score = (prior_start_rate * 0.70 + positional_prior * 0.30)
-
-            # Minutes are supporting evidence only when current-season minutes actually exist.
-            if current_minutes > 0:
-                minutes_score = min(current_avg_mins / 90.0, 1.0)
-                selection_score = (selection_score * 0.80 + minutes_score * 0.20)
-
-            # Availability
             if chance is not None:
-                selection_score *= float(chance) / 100.0
-            selection_score = min(max(selection_score, 0.0), 1.0)
+                score *= float(chance) / 100.0
+
+            return min(max(score, 0.0), 1.0)
+
+        # ------------------------------------------------------------
+        # Teammates
+        # ------------------------------------------------------------
+        for other in self.players.values():
+
+            if other.get("id") == p.get("id"):
+                continue
+
+            if other.get("team") != team_id:
+                continue
+
+            if other.get("position_id") != pos_id:
+                continue
+
+            status = other.get("status", "a")
+            chance = other.get("chance_of_playing_next_round")
+
+            # Unavailable players are not competition.
+            if status in ("i", "u", "s", "n"):
+                continue
+
+            if chance is not None and chance <= 25:
+                continue
+
             candidates.append({
                 "player_id": other.get("id"),
-                "score": selection_score,
+                "score": player_score(other),
+                "current_minutes": int(other.get("minutes", 0) or 0),
+                "current_starts": int(other.get("starts", 0) or 0),
             })
 
         # ------------------------------------------------------------
-        # Include the player himself
+        # Own player
         # ------------------------------------------------------------
-        try:
-            own_prior = self.get_player_role_prior(p)
-            own_prior_start_rate = float(
-                own_prior.get("start_rate", 0.5)
-            )
-            own_prior_avg_mins = float(
-                own_prior.get("avg_minutes", 60.0)
-            )
-        except Exception:
-            own_prior_start_rate = 0.5
-            own_prior_avg_mins = 60.0
-        own_minutes = int(p.get("minutes", 0) or 0)
-        own_starts = int(p.get("starts", 0) or 0)
-        if self.current_gw > 1:
-            gws_played = max(self.current_gw - 1, 1)
-            own_season_start_rate = min(own_starts / gws_played, 1.0)
-            own_season_avg_mins = min(own_minutes / gws_played, 90.0)
-        else:
-            own_season_start_rate = 0.0
-            own_season_avg_mins = 0.0
-        own_recent_games = int(p.get("_recent_games", 0) or 0)
-        own_recent_start_rate = p.get("_recent_start_rate")
-        own_recent_avg_mins = p.get("_recent_avg_mins")
-        if (
-            own_recent_games >= 2
-            and own_recent_start_rate is not None
-        ):
-            recent_weight = min(own_recent_games / 5.0, 1.0) * 0.70
-            own_current_start_rate = (
-                recent_weight * float(own_recent_start_rate)
-                + (1.0 - recent_weight) * own_season_start_rate
-            )
-            if own_recent_avg_mins is not None:
-                own_current_avg_mins = (
-                    recent_weight * float(own_recent_avg_mins)
-                    + (1.0 - recent_weight) * own_season_avg_mins
-                )
-            else:
-                own_current_avg_mins = own_season_avg_mins
-        else:
-            own_current_start_rate = own_season_start_rate
-            own_current_avg_mins = own_season_avg_mins
+        own_score = player_score(p)
 
-        own_evidence_minutes = own_minutes
-        own_current_weight = min(own_evidence_minutes / 450.0, 1.0)
-        if own_current_weight > 0:
-            own_score = (own_prior_start_rate * (1.0 - own_current_weight) + own_current_start_rate * own_current_weight)
-        else:
-            own_pos_prior = POSITION_START_RATE_PRIOR.get(p.get("position_id", 3), 0.5,)
-            own_score = (own_prior_start_rate * 0.70 + own_pos_prior * 0.30)
-        own_minutes_score = min(own_current_avg_mins / 90.0, 1.0)
-        own_score = (own_score * 0.80 + own_minutes_score * 0.20)
-        own_chance = p.get("chance_of_playing_next_round")
-        if own_chance is not None:
-            own_score *= float(own_chance) / 100.0
-        own_score = min(max(own_score, 0.0), 1.0)
         candidates.append({
             "player_id": p.get("id"),
             "score": own_score,
+            "current_minutes": int(p.get("minutes", 0) or 0),
+            "current_starts": int(p.get("starts", 0) or 0),
         })
 
         # ------------------------------------------------------------
-        # Rank player against actual same-position teammates.
+        # Rank
         # ------------------------------------------------------------
-        candidates.sort(key=lambda x: x["score"], reverse=True)
+        candidates.sort(
+            key=lambda x: (
+                x["score"],
+                x["current_starts"],
+                x["current_minutes"],
+            ),
+            reverse=True,
+        )
+
         player_id = p.get("id")
+
         own_index = next(
             (
                 i
                 for i, candidate in enumerate(candidates)
                 if candidate["player_id"] == player_id
             ),
-            None
+            None,
         )
+
         if own_index is None:
             return {
                 "competition_score": round(own_score, 3),
                 "available_teammates": max(len(candidates) - 1, 0),
-                "rank": len(candidates),
-                "has_evidence": len(candidates) >= 2,
+                "rank": None,
+                "has_evidence": False,
             }
+
+        # ------------------------------------------------------------
+        # IMPORTANT:
+        #
+        # competition_score is an absolute selection-strength estimate,
+        # not a probability that the player starts.
+        #
+        # calculate_expected_minutes() combines this with the player's
+        # own historical role.
+        # ------------------------------------------------------------
         return {
             "competition_score": round(candidates[own_index]["score"], 3),
             "available_teammates": max(len(candidates) - 1, 0),
@@ -1351,22 +1368,59 @@ class PredictionEngine:
         }
 
 
-    def calculate_expected_minutes(self, p: dict, num_fixtures: int = 1, teammates_out: int = 0, out_minutes: int = 0) -> dict:
+    def calculate_expected_minutes(
+        self,
+        p: dict,
+        num_fixtures: int = 1,
+        teammates_out: int = 0,
+        out_minutes: int = 0,
+    ) -> dict:
         """
-        Continuous expected-minutes model. This is the ONLY source of playing-time
-        signal used in xPts math (_fixture_ev). Tier labels are derived from this
-        output afterward for display and are never read back into this function
-        or into any prediction calculation.
-        """
-        total_minutes = int(p.get("minutes", 0))
-        starts = int(p.get("starts", 0))
-        gws_played = max(self.current_gw - 1, 1)
-        if self.current_gw <= 1:
-            raw_avg_mins = 0.0
-        else:
-            raw_avg_mins = min(total_minutes / gws_played, 90.0)
+        Unified probabilistic playing-time model.
 
-        # CURRENT-SEASON EVIDENCE
+        Signal hierarchy:
+        1. Current-season evidence, when available
+        2. Current-club competition, especially for new transfers/promoted players
+        3. Historical role prior
+        4. Recent role evidence when a meaningful sample exists
+
+        GKP is NOT a separate minutes model.
+        The only GKP-specific difference is the 60-minute probability:
+            P(60+) ~= P(start) * 0.98
+
+        xmins is the expected minutes used by _fixture_ev().
+        """
+
+        total_minutes = int(p.get("minutes", 0) or 0)
+        starts = int(p.get("starts", 0) or 0)
+
+        gws_played = max(self.current_gw - 1, 1)
+
+        # ============================================================
+        # 1. PLAYER HISTORICAL ROLE PRIOR
+        # ============================================================
+
+        prior = self.get_player_role_prior(p)
+
+        prior_start_rate = float(
+            prior.get("start_rate", POSITION_START_RATE_PRIOR.get(
+                p.get("position_id", 3), 0.5
+            ))
+        )
+
+        prior_avg_mins = float(
+            prior.get("avg_minutes", POSITION_MINUTES_PRIOR.get(
+                p.get("position_id", 3), 60.0
+            ))
+        )
+
+        prior_start_rate = min(max(prior_start_rate, 0.0), 1.0)
+        prior_avg_mins = min(max(prior_avg_mins, 0.0), 90.0)
+
+        # ============================================================
+        # 2. CURRENT-SEASON EVIDENCE
+        # ============================================================
+
         if self.current_gw <= 1:
             current_minutes = 0
             current_starts = 0
@@ -1374,190 +1428,393 @@ class PredictionEngine:
             current_minutes = total_minutes
             current_starts = starts
 
-        # PLAYER-SPECIFIC PRIOR
-        prior = self.get_player_role_prior(p)
-        prior_avg_mins = prior["avg_minutes"]
-        prior_start_rate = prior["start_rate"]
-
-        # CURRENT TEAM/POSITION COMPETITION
-        competition = self._current_team_position_competition(p)
-        competition_score = competition["competition_score"]
-        competition_rank = competition["rank"]
-        available_teammates = competition["available_teammates"]
-
-        # MINUTES: PRIOR -> CURRENT SEASON
         if current_minutes > 0:
-            raw_avg_mins = min(current_minutes / gws_played, 90.0)
-            # 0 mins   = 100% prior
-            # 450 mins = 50% prior / 50% current
-            # 900 mins = 100% current
-            current_weight = min(current_minutes / 900.0, 1.0)
-            prior_weight = 1.0 - current_weight
-            season_avg_mins = (prior_avg_mins * prior_weight + raw_avg_mins * current_weight)
-        else:
-            # GW1 / no current-season evidence:
-            # use the player's own prior role.
-            season_avg_mins = prior_avg_mins
-
-        # START RATE: PRIOR -> CURRENT SEASON
-        if current_minutes > 0:
-            raw_start_rate = (
-                current_starts / max(current_minutes / 90.0, 1.0)
+            current_start_rate = min(
+                current_starts / max(current_minutes / 90.0, 1.0),
+                1.0,
             )
-            raw_start_rate = min(max(raw_start_rate, 0.0), 1.0)
 
-            # Same confidence progression as minutes.
-            season_start_rate = (
-                prior_start_rate * prior_weight
-                + raw_start_rate * current_weight
+            current_avg_mins = min(
+                current_minutes / gws_played,
+                90.0,
             )
-            
-            #debug print
-            if p.get("web_name") == "Kinsky":
-                print(
-                    "\n========== KINSKY START TRACE ==========",
-                    f"\ncurrent_gw: {self.current_gw}",
-                    f"\ngws_played: {gws_played}",
-                    f"\ncurrent_minutes: {current_minutes}",
-                    f"\ncurrent_starts: {current_starts}",
-                    f"\nprior_start_rate: {prior_start_rate:.3f}",
-                    f"\nraw_start_rate: {raw_start_rate:.3f}",
-                    f"\ncurrent_weight: {current_weight:.3f}",
-                    f"\nprior_weight: {prior_weight:.3f}",
-                    f"\nseason_start_rate: {season_start_rate:.3f}",
-                    f"\navailability: {availability:.3f}",
-                    f"\np_start BEFORE injury boost: {season_start_rate * availability:.3f}",
-                    f"\n========================================",
-                    flush=True,
-                )
         else:
-            if available_teammates > 0 and competition.get("has_evidence", False):
-                is_new_environment = (
-                    bool(p.get("_is_new_transfer", False))
-                    or p.get("team") in self.promoted_team_ids
+            current_start_rate = None
+            current_avg_mins = None
+
+        # ============================================================
+        # 3. RECENT ROLE EVIDENCE
+        # ============================================================
+
+        recent_games = int(p.get("_recent_games", 0) or 0)
+        recent_start_rate = p.get("_recent_start_rate")
+        recent_avg_mins = p.get("_recent_avg_mins")
+
+        if (
+            recent_games >= 2
+            and recent_start_rate is not None
+        ):
+            recent_start_rate = min(
+                max(float(recent_start_rate), 0.0),
+                1.0,
+            )
+
+            if recent_avg_mins is not None:
+                recent_avg_mins = min(
+                    max(float(recent_avg_mins), 0.0),
+                    90.0,
                 )
 
-                if is_new_environment:
-                    # Historical role is evidence of ability/experience,
-                    # but it does NOT establish the player's new-club starting role.
-                    #
-                    # Current-club competition gets the stronger weight.
-                    competition_weight = 0.75
-                    prior_weight = 0.25
-                else:
-                    # Same-club player with no current-season minutes:
-                    # historical role remains more trustworthy.
-                    competition_weight = 0.50
-                    prior_weight = 0.50
+            # Recent evidence gets progressively stronger up to 70%.
+            recent_weight = min(recent_games / 5.0, 1.0) * 0.70
 
-                season_start_rate = (competition_score * competition_weight + prior_start_rate * prior_weight)
+            if current_start_rate is not None:
+                observed_start_rate = (
+                    recent_weight * recent_start_rate
+                    + (1.0 - recent_weight) * current_start_rate
+                )
             else:
-                # No reliable current-club competition evidence.
-                season_start_rate = prior_start_rate
+                observed_start_rate = recent_start_rate
 
-        season_start_rate = min(max(season_start_rate, 0.0), 1.0)
-
-        # Recency blend (fixes stale season-average bug: a player benched the last 8 GWs no longer reads as reliable just because of an August hot streak)
-        recent_games = p.get("_recent_games", 0)
-        if recent_games >= 4 and total_minutes >= 270:
-            recent_start_rate = p.get("_recent_start_rate", season_start_rate)
-            recent_avg_mins = p.get("_recent_avg_mins", season_avg_mins)
-            w_recent = min(recent_games / 5.0, 1.0) * 0.70
-            start_rate = w_recent * recent_start_rate + (1 - w_recent) * season_start_rate
-            start_rate = min(max(start_rate, 0.0), 1.0)
-            avg_mins = w_recent * recent_avg_mins + (1 - w_recent) * season_avg_mins
+            if current_avg_mins is not None:
+                observed_avg_mins = (
+                    recent_weight * recent_avg_mins
+                    + (1.0 - recent_weight) * current_avg_mins
+                )
+            else:
+                observed_avg_mins = recent_avg_mins
         else:
-            start_rate = season_start_rate
-            avg_mins = season_avg_mins
-        mins_volatility = self._calc_minutes_volatility(p)
-        availability = float(
-            p.get("chance_of_playing_next_round")
-            if p.get("chance_of_playing_next_round") is not None
-            else 100
-        ) / 100.0
+            observed_start_rate = current_start_rate
+            observed_avg_mins = current_avg_mins
+
+        # ============================================================
+        # 4. CURRENT-CLUB COMPETITION
+        # ============================================================
+
+        competition = self._current_team_position_competition(p)
+
+        competition_score = competition.get("competition_score")
+        competition_rank = competition.get("rank")
+        available_teammates = competition.get("available_teammates", 0)
+        has_competition_evidence = competition.get("has_evidence", False)
+
+        if competition_score is not None:
+            competition_score = min(
+                max(float(competition_score), 0.0),
+                1.0,
+            )
+
+        is_new_environment = (
+            bool(p.get("_is_new_transfer", False))
+            or p.get("team") in getattr(self, "promoted_team_ids", set())
+        )
+
+        # ============================================================
+        # 5. START PROBABILITY
+        #
+        # IMPORTANT:
+        # Do NOT simply do:
+        #
+        #   prior * 25% + competition * 75%
+        #
+        # for everyone.
+        #
+        # Current-season starts are actual evidence.
+        # Competition is most useful BEFORE the player has current-club
+        # evidence.
+        # ============================================================
+
+        if observed_start_rate is not None and current_minutes > 0:
+
+            # Current-season evidence dominates historical prior progressively.
+            #
+            # 90 mins  -> 10% current evidence
+            # 450 mins -> 50%
+            # 900 mins -> 100%
+            current_weight = min(current_minutes / 900.0, 1.0)
+
+            start_rate = (
+                prior_start_rate * (1.0 - current_weight)
+                + observed_start_rate * current_weight
+            )
+
+        elif (
+            is_new_environment
+            and
+            competition_score is not None
+            and
+            has_competition_evidence
+        ):
+            # PRESEASON / NEW CLUB
+            #
+            # This is the critical Kinsky/Meslier path.
+            #
+            # Historical role tells us what the player has previously been.
+            # Current-club competition tells us whether the NEW manager
+            # appears likely to select him.
+            #
+            # Competition dominates, but historical role remains a prior.
+            competition_weight = 0.75
+            prior_weight = 0.25
+
+            start_rate = (
+                competition_score * competition_weight
+                + prior_start_rate * prior_weight
+            )
+
+        elif (
+            competition_score is not None
+            and
+            has_competition_evidence
+        ):
+            # Established player at same club with no current minutes.
+            # Historical role gets equal weight with competition.
+            start_rate = (
+                0.50 * prior_start_rate
+                + 0.50 * competition_score
+            )
+
+        else:
+            # No useful competition information.
+            start_rate = prior_start_rate
+
+        start_rate = min(max(start_rate, 0.0), 1.0)
+
+        # ============================================================
+        # 6. MINUTES EXPECTATION
+        # ============================================================
+
+        if observed_avg_mins is not None and current_minutes > 0:
+
+            current_weight = min(current_minutes / 900.0, 1.0)
+
+            avg_mins = (
+                prior_avg_mins * (1.0 - current_weight)
+                + observed_avg_mins * current_weight
+            )
+
+        elif is_new_environment and competition_score is not None:
+            # New club:
+            # do NOT let old-club minutes become the expected minutes.
+            #
+            # If selected, GKP normally plays ~90.
+            # Competition determines how likely selection is.
+            #
+            # For outfielders this still preserves their historical minutes
+            # profile, but selection probability remains the dominant factor.
+            if p.get("position_id") == 1:
+                avg_mins = 90.0
+            else:
+                avg_mins = prior_avg_mins
+
+        else:
+            avg_mins = prior_avg_mins
+
+        avg_mins = min(max(avg_mins, 0.0), 90.0)
+
+        # ============================================================
+        # 7. AVAILABILITY
+        # ============================================================
+
+        availability = (
+            float(
+                p.get("chance_of_playing_next_round")
+                if p.get("chance_of_playing_next_round") is not None
+                else 100
+            )
+            / 100.0
+        )
+
+        availability = min(max(availability, 0.0), 1.0)
 
         p_start = min(start_rate * availability, 1.0)
-        mins_ratio = min(avg_mins / 90.0, 1.0)
-        # Probability of playing 60+ minutes must depend on starting probability
-        # Starters: high chance of 60+
-        # Bench players: only chance comes from sub appearances
-        p_sub_appearance = 0.35
-        if p.get("position_id") == 1:  # GKP
-            # A starting goalkeeper is overwhelmingly likely to play 60+ minutes.
+
+        # ============================================================
+        # 8. MINUTES VOLATILITY
+        # ============================================================
+
+        mins_volatility = self._calc_minutes_volatility(p)
+
+        # ============================================================
+        # 9. P(60+)
+        # ============================================================
+
+        if p.get("position_id") == 1:
+
+            # GKP:
+            # if they start, they almost always reach 60 minutes.
             p_plays_60 = p_start * 0.98
+
         else:
+
+            mins_ratio = min(avg_mins / 90.0, 1.0)
+
+            p_sub_appearance = 0.35
+
             p_plays_60 = (
                 p_start * mins_ratio
-                + (1 - p_start) * p_sub_appearance * 0.05
+                +
+                (1.0 - p_start)
+                * p_sub_appearance
+                * 0.05
             )
+
+        # Volatility only matters once there is actual evidence.
         if total_minutes > 0:
-            p_plays_60 *= (1.0 - mins_volatility * 0.3)
+            p_plays_60 *= (
+                1.0 - mins_volatility * 0.30
+            )
+
         p_plays_60 = min(max(p_plays_60, 0.0), 1.0)
 
-        # Rotation risk: ambiguous start rate (mid-range) is the actual risk signal,
-        # not "low tier" — a 5%-start benchwarmer isn't a rotation risk, they're just not playing.
-        rotation_risk = max(0.0, min(1.0 - abs(p_start - 0.5) * 2.0, 1.0))
-        # Only use volatility as a floor when we have meaningful current-season minutes evidence.
-        if total_minutes > 0:
-            rotation_risk = max(rotation_risk, mins_volatility * 0.5)
+        # ============================================================
+        # 10. INJURY / TEAM ROLE BOOST
+        # ============================================================
 
-        # Injury boost applied directly to probabilities, not via tier-jump lookup
         if teammates_out >= 1:
-            injured_was_starter = out_minutes > gws_played * 30
+
+            injured_was_starter = (
+                out_minutes > gws_played * 30
+            )
+
             boost = 0.0
+
             if injured_was_starter:
-                boost = 0.15 if teammates_out == 1 else 0.25
-            p_start = min(p_start + boost, 1.0)
-            p_plays_60 = min(p_plays_60 + boost * 0.8, 1.0)
+                boost = (
+                    0.15
+                    if teammates_out == 1
+                    else 0.25
+                )
 
-        # Probability of any appearance as sub
-        if p.get("position_id") == 1:
-            p_sub = 0.0
-            sub_minutes = 0.0
-        else:
-            p_sub = (1 - p_start) * 0.35
-            sub_minutes = 20.0
-        # Expected minutes
-        starter_minutes = min(avg_mins, 90.0)
-        xmins = (
-            p_start * starter_minutes
-            + p_sub * sub_minutes
+            p_start = min(
+                p_start + boost,
+                1.0,
+            )
+
+            p_plays_60 = min(
+                p_plays_60 + boost * 0.8,
+                1.0,
+            )
+
+        # ============================================================
+        # 11. ROTATION RISK
+        # ============================================================
+
+        rotation_risk = max(
+            0.0,
+            min(
+                1.0 - abs(p_start - 0.5) * 2.0,
+                1.0,
+            ),
         )
-        xmins = min(xmins, 90.0)
 
-        # DGW: expected effective matches, scaled continuously by p_start (no tier lookup)
-        if num_fixtures >= 2:
-            dgw_both_prob = p_start * (0.9 - rotation_risk * 0.5)
-            dgw_effective = 1.0 + dgw_both_prob
+        if total_minutes > 0:
+            rotation_risk = max(
+                rotation_risk,
+                mins_volatility * 0.5,
+            )
+
+        # ============================================================
+        # 12. EXPECTED MINUTES
+        # ============================================================
+
+        if p.get("position_id") == 1:
+
+            # A GKP does not normally enter as a late substitute.
+            # Expected minutes are therefore approximately:
+            #
+            #   P(start) × expected starter minutes
+            #
+            xmins = p_start * avg_mins
+
         else:
+
+            p_sub = (1.0 - p_start) * 0.35
+            sub_minutes = 20.0
+
+            xmins = (
+                p_start * avg_mins
+                +
+                p_sub * sub_minutes
+            )
+
+        xmins = min(
+            max(xmins, 0.0),
+            90.0,
+        )
+
+        # ============================================================
+        # 13. DGW
+        # ============================================================
+
+        if num_fixtures >= 2:
+
+            dgw_both_prob = (
+                p_start
+                * (0.90 - rotation_risk * 0.50)
+            )
+
+            dgw_both_prob = min(
+                max(dgw_both_prob, 0.0),
+                1.0,
+            )
+
+            dgw_effective = 1.0 + dgw_both_prob
+
+        else:
+
             dgw_both_prob = None
             dgw_effective = 1.0
 
-        # debug print
+        # ============================================================
+        # DEBUG — ONLY IMPORTANT GKPs
+        # ============================================================
+
         DEBUG_PLAYERS = {
-                    "Meslier",
-                    "Trafford",
-                    "Kinsky",
-                    "Arrizabalaga",
-                }
+            "Meslier",
+            "Kinsky",
+            "Arrizabalaga",
+            "Trafford",
+        }
+
         if p.get("web_name") in DEBUG_PLAYERS:
+
             print(
-                "ROLE DEBUG:",
-                p.get("web_name") or p.get("name"),
-                "new_transfer=", p.get("_is_new_transfer"),
-                "competition=", competition_score,
-                "prior=", prior_start_rate,
-                "minutes=", current_minutes,
+                f"\n========== ROLE DEBUG: {p.get('web_name')} =========="
+                f"\nnew_environment={is_new_environment}"
+                f"\ncurrent_minutes={current_minutes}"
+                f"\ncurrent_starts={current_starts}"
+                f"\nprior_start_rate={prior_start_rate:.3f}"
+                f"\ncompetition_score={competition_score}"
+                f"\ncompetition_rank={competition_rank}"
+                f"\navailable_teammates={available_teammates}"
+                f"\nobserved_start_rate={observed_start_rate}"
+                f"\nstart_rate={start_rate:.3f}"
+                f"\navailability={availability:.3f}"
+                f"\np_start={p_start:.3f}"
+                f"\navg_mins={avg_mins:.1f}"
+                f"\np_plays_60={p_plays_60:.3f}"
+                f"\nxmins={xmins:.1f}"
+                f"\nrotation_risk={rotation_risk:.3f}"
+                f"\n==============================================",
+                flush=True,
             )
-        
+
         return {
             "p_start": round(p_start, 3),
             "p_plays_60": round(p_plays_60, 3),
             "xmins": round(xmins, 1),
             "rotation_risk": round(rotation_risk, 3),
             "mins_volatility": round(mins_volatility, 2),
-            "dgw_both_start_prob": round(dgw_both_prob, 2) if dgw_both_prob is not None else None,
-            "dgw_effective_matches": round(dgw_effective, 2),
+            "dgw_both_start_prob": (
+                round(dgw_both_prob, 2)
+                if dgw_both_prob is not None
+                else None
+            ),
+            "dgw_effective_matches": round(
+                dgw_effective,
+                2,
+            ),
         }
 
 
