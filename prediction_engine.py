@@ -1360,13 +1360,7 @@ class PredictionEngine:
         }
 
 
-    def calculate_expected_minutes(
-        self,
-        p: dict,
-        num_fixtures: int = 1,
-        teammates_out: int = 0,
-        out_minutes: int = 0,
-    ) -> dict:
+    def calculate_expected_minutes(self, p: dict, num_fixtures: int = 1, teammates_out: int = 0, out_minutes: int = 0,) -> dict:
         """
         Unified probabilistic playing-time model.
 
@@ -1412,13 +1406,21 @@ class PredictionEngine:
         # ============================================================
         # 2. CURRENT-SEASON EVIDENCE
         # ============================================================
-
         if self.current_gw <= 1:
-            current_season_minutes = int(p.get("_current_season_minutes", 0) or 0)
-            current_season_starts = int(p.get("_current_season_starts", 0) or 0)
+            # At the start of a new FPL season there may be no current-season appearances yet.
+            current_minutes = int(
+                p.get("_current_season_minutes", 0) or 0
+            )
+            current_starts = int(
+                p.get("_current_season_starts", 0) or 0
+            )
         else:
-            current_minutes = current_season_minutes
-            current_starts = current_season_starts
+            current_minutes = int(
+                p.get("_current_season_minutes", total_minutes) or 0
+            )
+            current_starts = int(
+                p.get("_current_season_starts", starts) or 0
+            )
 
         if current_minutes > 0:
             current_start_rate = min(
@@ -1433,6 +1435,33 @@ class PredictionEngine:
         else:
             current_start_rate = None
             current_avg_mins = None
+
+        # debug print 
+        DEBUG_PLAYERS = {
+                    "Meslier",
+                    "Trafford",
+                    "Kinsky",
+                    "Arrizabalaga",
+                    "Raya",
+                    "Haaland",
+                }
+        if p.get("web_name") in DEBUG_PLAYERS:
+            print(
+                f"[CURRENT EVIDENCE DEBUG] {p.get('web_name')}"
+                f"\ntotal_minutes={total_minutes}"
+                f"\nstarts={starts}"
+                f"\ngws_played={gws_played}"
+                f"\ncurrent_minutes={current_minutes}"
+                f"\ncurrent_starts={current_starts}"
+                f"\ncurrent_start_rate={current_start_rate}"
+                f"\ncurrent_avg_mins={current_avg_mins}"
+                f"\nrecent_games={recent_games}"
+                f"\nrecent_start_rate={recent_start_rate}"
+                f"\nobserved_start_rate={observed_start_rate}"
+                f"\ncurrent_weight={min(current_minutes / 900.0, 1.0)}"
+                f"\n================================",
+                flush=True,
+            )
 
         # ============================================================
         # 3. RECENT ROLE EVIDENCE
@@ -1627,31 +1656,16 @@ class PredictionEngine:
         # ============================================================
 
         if p.get("position_id") == 1:
-
-            # GKP:
-            # if they start, they almost always reach 60 minutes.
+            # GKP: if they start, they almost always reach 60 minutes.
             p_plays_60 = p_start * 0.98
-
         else:
-
             mins_ratio = min(avg_mins / 90.0, 1.0)
-
             p_sub_appearance = 0.35
-
-            p_plays_60 = (
-                p_start * mins_ratio
-                +
-                (1.0 - p_start)
-                * p_sub_appearance
-                * 0.05
-            )
+            p_plays_60 = (p_start * mins_ratio + (1.0 - p_start) * p_sub_appearance * 0.05)
 
         # Volatility only matters once there is actual evidence.
-        if total_minutes > 0:
-            p_plays_60 *= (
-                1.0 - mins_volatility * 0.30
-            )
-
+        if current_minutes > 0:
+            p_plays_60 *= (1.0 - mins_volatility * 0.30)
         p_plays_60 = min(max(p_plays_60, 0.0), 1.0)
 
         # ============================================================
@@ -1700,11 +1714,8 @@ class PredictionEngine:
         else:
             base_rotation_risk = 0.80
 
-        if total_minutes > 0:
-            rotation_risk = max(
-                base_rotation_risk,
-                mins_volatility * 0.50,
-            )
+        if current_minutes > 0:
+            rotation_risk = max(base_rotation_risk, mins_volatility * 0.50)
         else:
             rotation_risk = base_rotation_risk
 
@@ -1763,16 +1774,6 @@ class PredictionEngine:
         # ============================================================
         # DEBUG — ONLY IMPORTANT GKPs
         # ============================================================
-
-        DEBUG_PLAYERS = {
-            "Meslier",
-            "Trafford",
-            "Kinsky",
-            "Arrizabalaga",
-            "Raya",
-            "Haaland",
-        }
-
         if p.get("web_name") in DEBUG_PLAYERS:
 
             print(
