@@ -563,6 +563,22 @@ class PredictionEngine:
                     p["_previous_season_name"] = ""
                     p["_previous_team_id"] = None
                     p["_is_new_transfer"] = False
+
+                # debug print
+                if p.get("web_name") in {
+                    "Haaland",
+                    "Savinho",
+                    "Donnarumma",
+                    "Meslier",
+                    "Kinsky",
+                }:
+                    print(
+                        f"[TRANSFER DEBUG] {p.get('web_name')} "
+                        f"current_team_id={current_team_id} "
+                        f"previous_team_id={previous_team_id} "
+                        f"is_new_transfer={p.get('_is_new_transfer')} "
+                        f"previous_season={p.get('_previous_season_name')}"
+                    )
             
                 # Store attacking priors too 
                 if rates: 
@@ -1292,7 +1308,7 @@ class PredictionEngine:
                     if pos_id == 1:
                         score = (prior_start_rate * 0.90 + POSITION_START_RATE_PRIOR.get(pos_id, 0.55) * 0.10)
                     else:
-                        score = (prior_start_rate * 0.75 + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.25)
+                        score = prior_start_rate
 
             # ------------------------------------------------------------
             # AVAILABILITY
@@ -1418,7 +1434,7 @@ class PredictionEngine:
             # --------------------------------------------------------
 
             competition_score = candidates[own_index]["score"]
-            
+
         return {
             "competition_score": round(min(max(competition_score, 0.0,), 1.0), 3),
             "available_teammates": max(num_candidates - 1, 0),
@@ -1817,28 +1833,7 @@ class PredictionEngine:
             p_start = min(p_start + boost, 1.0,)
 
         # ============================================================
-        # 11. P(60+)
-        # ============================================================
-
-        if p.get("position_id") == 1:
-            # GKP: Once selected, almost always reaches 60 minutes.
-            p_plays_60 = p_start * 0.98
-        else:
-            mins_ratio = min(avg_mins / 90.0, 1.0)
-            p_sub_appearance = 0.35
-            p_plays_60 = (
-                p_start * mins_ratio
-                + (1.0 - p_start)
-                * p_sub_appearance
-                * 0.05
-            )
-        # Volatility only applies to players with actual current-season evidence.
-        if current_minutes > 0:
-            p_plays_60 *= (1.0 - mins_volatility * 0.30)
-        p_plays_60 = min(max(p_plays_60, 0.0), 1.0,)
-
-        # ============================================================
-        # 12. ROTATION RISK
+        # 11. ROTATION RISK
         # ============================================================
 
         if p_start >= 0.85:
@@ -1860,7 +1855,7 @@ class PredictionEngine:
             rotation_risk = base_rotation_risk
 
         # ============================================================
-        # 13. EXPECTED MINUTES
+        # 12. EXPECTED MINUTES
         # ============================================================
 
         if p.get("position_id") == 1:
@@ -1892,7 +1887,7 @@ class PredictionEngine:
         )
 
         # ============================================================
-        # 14. DGW
+        # 13. DGW
         # ============================================================
 
         if num_fixtures >= 2:
@@ -1933,7 +1928,14 @@ class PredictionEngine:
 
             print(
                 f"\n========== ROLE DEBUG: {p.get('web_name')} =========="
+                f"\nis_new_transfer={is_new_transfer}"
+                f"\nis_promoted_team={is_promoted_team}"
+                f"\nhas_previous_role={has_previous_role}"
                 f"\nnew_environment={is_new_environment}"
+                f"\ncurrent_team_id={p.get('team')}"
+                f"\nprevious_team_id={p.get('_previous_team_id')}"
+                f"\nprior_source={prior.get('source')}"
+                f"\nprior_season={prior.get('season')}"
                 f"\ntotal_minutes={total_minutes}"
                 f"\ntotal_starts={starts}"
                 f"\ncurrent_minutes={current_minutes}"

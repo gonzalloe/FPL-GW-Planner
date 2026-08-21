@@ -242,56 +242,96 @@ def _season_name_to_vaastav_code(season_name: str | None) -> str | None:
     return f"{start_year}-{str(start_year + 1)[-2:]}"
 
 
-def get_previous_season_player_team(player_code: int, previous_season_name: str | None = None) -> int | None:
+def get_previous_season_player_team(player_code: int, previous_season_name: str | None = None, bootstrap: dict | None = None) -> int | None:
     """
-    Return the player's FPL team ID in the immediately previous season.
+    Return the player's CURRENT FPL team ID corresponding to
+    the player's team in the immediately previous season.
 
-    `code` is persistent across seasons while FPL player `id` can change.
+    Vaastav team IDs are season-specific, so we map:
 
-    The season is derived dynamically. Nothing here is hardcoded to
-    2025/26 or any other specific season.
+        previous Vaastav team ID
+            ↓
+        previous-season short_name
+            ↓
+        current FPL bootstrap team ID
     """
+
     try:
-        if not previous_season_name:
-            previous_season_name = _get_previous_season_name()
+        if bootstrap is None:
+            bootstrap = fetch_bootstrap()
 
-        season = _season_name_to_vaastav_code(previous_season_name)
+        if not previous_season_name:
+            previous_season_name = _get_previous_season_name(
+                bootstrap
+            )
+
+        season = _season_name_to_vaastav_code(
+            previous_season_name
+        )
 
         if not season:
             return None
 
-        url = (
+        base_url = (
             "https://raw.githubusercontent.com/"
             "vaastav/Fantasy-Premier-League/master/"
-            f"data/{season}/players_raw.csv"
+            f"data/{season}"
         )
 
-        rows = _fetch_csv(
-            url,
+        player_url = f"{base_url}/players_raw.csv"
+        teams_url = f"{base_url}/teams.csv"
+
+        player_rows = _fetch_csv(
+            player_url,
             f"previous_players_{season}",
+            cache_ttl=86400,
+        )
+
+        previous_teams = _fetch_csv(
+            teams_url,
+            f"previous_teams_{season}",
             cache_ttl=86400,
         )
 
         code = int(player_code)
 
-        for row in rows:
+        previous_team_id = None
+
+        for row in player_rows:
             try:
                 if int(row.get("code", 0) or 0) != code:
                     continue
 
-                team = row.get("team")
-
-                if team in (None, ""):
-                    return None
-
-                return int(team)
+                previous_team_id = row.get("team")
+                break
 
             except (TypeError, ValueError):
                 continue
 
+        if previous_team_id in (None, ""):
+            return None
+
+        previous_team_id = str(previous_team_id)
+
+        # Previous Vaastav team ID -> previous short name
+        previous_short_name = None
+
+        for team in previous_teams:
+            if str(team.get("id")) == previous_team_id:
+                previous_short_name = team.get("short_name")
+                break
+
+        if not previous_short_name:
+            return None
+
+        # Current FPL short name -> current FPL team ID
+        for team in bootstrap.get("teams", []):
+            if team.get("short_name") == previous_short_name:
+                return int(team["id"])
+
     except Exception as e:
         print(
-            f"[PRIOR] Failed to find previous team "
+            f"[PRIOR] Failed to map previous team "
             f"for player code {player_code}: {e}"
         )
 
@@ -435,6 +475,7 @@ def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict
         previous_team_id = get_previous_season_player_team(
             player_code,
             previous_season_name=previous_season_name,
+            bootstrap=bootstrap
         )
 
     return {
