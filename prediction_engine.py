@@ -1590,66 +1590,14 @@ class PredictionEngine:
         # 5. START PROBABILITY
         # ============================================================
 
-        if (
-            observed_start_rate is not None
-            and current_minutes > 0
-        ):
-
-            # Current-season evidence progressively dominates the prior.
-            #
-            # 90 mins  -> 10% current evidence
-            # 450 mins -> 50%
-            # 900 mins -> 100%
-            current_weight = min(
-                current_minutes / 900.0,
-                1.0,
-            )
-
-            start_rate = (
-                prior_start_rate * (1.0 - current_weight)
-                + observed_start_rate * current_weight
-            )
-
-        elif (
-            is_new_environment
-            and competition_score is not None
-            and has_competition_evidence
-        ):
-
-            # New club / promoted team:
-            # competition is the strongest available signal.
-            competition_weight = 0.75
-            prior_weight = 0.25
-
-            start_rate = (
-                competition_score * competition_weight
-                + prior_start_rate * prior_weight
-            )
-
-        elif (
-            competition_score is not None
-            and has_competition_evidence
-        ):
-
-            # No current-season evidence.
-            competition_start_rate = min(
-                max(float(competition_score), 0.0),
-                1.0,
-            )
-
-            start_rate = (
-                0.65 * competition_start_rate
-                + 0.35 * prior_start_rate
-            )
-
+        if (observed_start_rate is not None and current_minutes > 0):
+            current_weight = min(current_minutes / 900.0, 1.0,)
+            start_rate = (prior_start_rate * (1.0 - current_weight) + observed_start_rate * current_weight)
+        elif (competition_score is not None and has_competition_evidence):
+            start_rate = competition_score
         else:
-
             start_rate = prior_start_rate
-
-        start_rate = min(
-            max(start_rate, 0.0),
-            1.0,
-        )
+        start_rate = min(max(start_rate, 0.0), 1.0,)
 
         # ============================================================
         # 6. EXPECTED STARTER MINUTES
@@ -1779,68 +1727,62 @@ class PredictionEngine:
         # ============================================================
         # 10. INJURY / TEAM ROLE BOOST
         # ============================================================
-
         if teammates_out >= 1:
-
-            injured_was_starter = (
-                out_minutes > gws_played * 30
-            )
-
+            injured_was_starter = (out_minutes > gws_played * 30)
             boost = 0.0
-
             if injured_was_starter:
-
                 boost = (
                     0.15
                     if teammates_out == 1
                     else 0.25
                 )
-
-            p_start = min(
-                p_start + boost,
-                1.0,
-            )
-
-            p_plays_60 = min(
-                p_plays_60 + boost * 0.8,
-                1.0,
-            )
+            p_start = min(p_start + boost, 1.0,)
 
         # ============================================================
-        # 11. ROTATION RISK
+        # 11. P(60+)
+        # ============================================================
+
+        if p.get("position_id") == 1:
+            # GKP: Once selected, almost always reaches 60 minutes.
+            p_plays_60 = p_start * 0.98
+        else:
+            mins_ratio = min(avg_mins / 90.0, 1.0)
+            p_sub_appearance = 0.35
+            p_plays_60 = (
+                p_start * mins_ratio
+                + (1.0 - p_start)
+                * p_sub_appearance
+                * 0.05
+            )
+        # Volatility only applies to players with actual current-season evidence.
+        if current_minutes > 0:
+            p_plays_60 *= (1.0 - mins_volatility * 0.30)
+        p_plays_60 = min(max(p_plays_60, 0.0), 1.0,)
+
+        # ============================================================
+        # 12. ROTATION RISK
         # ============================================================
 
         if p_start >= 0.85:
             base_rotation_risk = 0.15
-
         elif p_start >= 0.75:
             base_rotation_risk = 0.25
-
         elif p_start >= 0.65:
             base_rotation_risk = 0.35
-
         elif p_start >= 0.55:
             base_rotation_risk = 0.50
-
         elif p_start >= 0.40:
             base_rotation_risk = 0.65
-
         else:
             base_rotation_risk = 0.80
 
         if current_minutes > 0:
-
-            rotation_risk = max(
-                base_rotation_risk,
-                mins_volatility * 0.50,
-            )
-
+            rotation_risk = max(base_rotation_risk, mins_volatility * 0.50,)
         else:
-
             rotation_risk = base_rotation_risk
 
         # ============================================================
-        # 12. EXPECTED MINUTES
+        # 13. EXPECTED MINUTES
         # ============================================================
 
         if p.get("position_id") == 1:
@@ -1872,7 +1814,7 @@ class PredictionEngine:
         )
 
         # ============================================================
-        # 13. DGW
+        # 14. DGW
         # ============================================================
 
         if num_fixtures >= 2:
