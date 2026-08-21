@@ -1352,16 +1352,6 @@ class PredictionEngine:
                 "rank": None,
                 "has_evidence": False,
             }
-
-        # ------------------------------------------------------------
-        # IMPORTANT:
-        #
-        # competition_score is an absolute selection-strength estimate,
-        # not a probability that the player starts.
-        #
-        # calculate_expected_minutes() combines this with the player's
-        # own historical role.
-        # ------------------------------------------------------------
         return {
             "competition_score": round(candidates[own_index]["score"], 3),
             "available_teammates": max(len(candidates) - 1, 0),
@@ -1424,11 +1414,11 @@ class PredictionEngine:
         # ============================================================
 
         if self.current_gw <= 1:
-            current_minutes = 0
-            current_starts = 0
+            current_season_minutes = int(p.get("_current_season_minutes", 0) or 0)
+            current_season_starts = int(p.get("_current_season_starts", 0) or 0)
         else:
-            current_minutes = total_minutes
-            current_starts = starts
+            current_minutes = current_season_minutes
+            current_starts = current_season_starts
 
         if current_minutes > 0:
             current_start_rate = min(
@@ -1826,10 +1816,17 @@ class PredictionEngine:
 
     def _derive_tier_label(self, profile: dict, position_id: int | None = None) -> str:
         """Display-only squad role label."""
+
         p_start = profile["p_start"]
         risk = profile["rotation_risk"]
         xmins = profile["xmins"]
 
+        # ============================================================
+        # GOALKEEPERS
+        # GKs are usually binary first-choice / backup roles.
+        # Give strong weight to starting probability and low rotation
+        # risk rather than treating them like outfield rotation players.
+        # ============================================================
         if position_id == 1:
             if p_start >= 0.85:
                 return "nailed"
@@ -1842,32 +1839,21 @@ class PredictionEngine:
             return "bench_warmer"
 
         # ============================================================
-        # NAILED: Strong starting probability and low role uncertainty.
+        # OUTFIELD
         # ============================================================
         if p_start >= 0.85 and risk <= 0.35:
             return "nailed"
-
-        # ============================================================
-        # REGULAR: A player expected to start most matches should not be 
-        # labelled rotation merely because the model has some uncertainty.
-        # ============================================================
+        # Regular starter.
         if p_start >= 0.70:
             return "regular"
         if p_start >= 0.60 and risk <= 0.40:
             return "regular"
-
-        # ============================================================
-        # ROTATION: Reserve this for genuinely uncertain starters.
-        # ============================================================
+        # Genuine rotation uncertainty.
         if p_start >= 0.45:
             return "rotation"
-
-        # ============================================================
-        # FRINGE
-        # ============================================================
+        # Fringe / occasional minutes.
         if p_start >= 0.20 or xmins >= 15:
             return "fringe"
-
         return "bench_warmer"
 
 
