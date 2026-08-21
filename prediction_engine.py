@@ -57,7 +57,7 @@ PROMOTED_ATTACK_SHRINKAGE = 450
 ESTABLISHED_ATTACK_SHRINKAGE = 720
 
 PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for players still under this many mins
-POSITION_START_RATE_PRIOR = {1: 0.55, 2: 0.70, 3: 0.65, 4: 0.65}
+POSITION_START_RATE_PRIOR = {1: 0.50, 2: 0.70, 3: 0.65, 4: 0.65}
 POSITION_MINUTES_PRIOR = {1: 0.70, 2: 0.65, 3: 0.60, 4: 0.60}
 PLAYER_PRIOR_PHASEOUT_GW = 12
 
@@ -1293,22 +1293,33 @@ class PredictionEngine:
                 # --------------------------------------------------------
                 # NO CURRENT-SEASON EVIDENCE
                 #
-                # This is the preseason/new-transfer case.
+                # GW1 goalkeeper selection is different from outfield.
+                # Historical minutes tell us about the goalkeeper's ability
+                # to be a starter, but NOT necessarily whether the current
+                # manager has selected him as first choice.
                 #
-                # Established player:
-                #   previous role is meaningful because it was at the
-                #   current club.
+                # Therefore:
+                #   GKP -> use historical role only as a weak prior
+                #         and let current-club competition decide.
                 #
-                # New transfer:
-                #   previous role came from another club, so downgrade it.
+                #   Outfield -> preserve existing historical-role behaviour.
                 # --------------------------------------------------------
-                if is_new_transfer:
-                    score = (prior_start_rate * 0.70 + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.30)
-                else:
-                    if pos_id == 1:
-                        score = (prior_start_rate * 0.90 + POSITION_START_RATE_PRIOR.get(pos_id, 0.55) * 0.10)
+                if pos_id == 1:
+                    if is_new_transfer:
+                        score = (
+                            prior_start_rate * 0.40
+                            + POSITION_START_RATE_PRIOR.get(pos_id, 0.55) * 0.10
+                            + 0.50
+                        )
                     else:
-                        score = prior_start_rate
+                        score = prior_start_rate * 0.90 + 0.55 * 0.10
+                elif is_new_transfer:
+                    score = (
+                        prior_start_rate * 0.70
+                        + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.30
+                    )
+                else:
+                    score = prior_start_rate
 
             # ------------------------------------------------------------
             # AVAILABILITY
@@ -1402,38 +1413,20 @@ class PredictionEngine:
         num_candidates = len(candidates)
 
         if pos_id == 1 and num_candidates >= 2:
-            # GKP: WINNER-TAKES-MOST MODEL
-            temperature = 0.12
-            max_score = max(
+            own_score = candidates[own_index]["score"]
+            alternative_scores = [
                 candidate["score"]
-                for candidate in candidates
-            )
-            weights = []
-            for candidate in candidates:
-                exponent = (
-                    candidate["score"] - max_score
-                ) / temperature
-                # Prevent overflow/underflow.
-                exponent = max(
-                    min(exponent, 50.0),
-                    -50.0,
-                )
-                weights.append(
-                    math.exp(exponent)
-                )
-            total_weight = sum(weights)
-            if total_weight > 0:
-                competition_score = (weights[own_index] / total_weight)
-            else:
-                competition_score = 1.0 / num_candidates
+                for i, candidate in enumerate(candidates)
+                if i != own_index
+            ]
+            best_alternative = max(alternative_scores) if alternative_scores else 0.0
 
-        else:
-            # --------------------------------------------------------
-            # OUTFIELD:
-            # Keep the continuous role score.
-            # --------------------------------------------------------
+            # Difference from strongest competitor.
+            gap = own_score - best_alternative
+            competition_score = (0.50 + gap * 1.75)
 
-            competition_score = candidates[own_index]["score"]
+            # Keep the result inside sensible probability bounds.
+            competition_score = min(max(competition_score, 0.05),0.95)
 
         return {
             "competition_score": round(min(max(competition_score, 0.0,), 1.0), 3),
@@ -1823,14 +1816,16 @@ class PredictionEngine:
         # ============================================================
         if teammates_out >= 1:
             injured_was_starter = (out_minutes > gws_played * 30)
-            boost = 0.0
-            if injured_was_starter:
-                boost = (
-                    0.15
-                    if teammates_out == 1
-                    else 0.25
-                )
-            p_start = min(p_start + boost, 1.0,)
+            if p.get("position_id") != 1:
+                boost = 0.0
+
+                if injured_was_starter:
+                    boost = (
+                        0.15
+                        if teammates_out == 1
+                        else 0.25
+                    )
+                p_start = min(p_start + boost, 1.0)
 
         # ============================================================
         # 11. ROTATION RISK
