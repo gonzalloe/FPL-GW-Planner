@@ -1411,21 +1411,17 @@ class PredictionEngine:
 
         rank = own_index + 1
         num_candidates = len(candidates)
-
+        own_score = candidates[own_index]["score"]
+        competition_score = own_score
         if pos_id == 1 and num_candidates >= 2:
-            own_score = candidates[own_index]["score"]
             alternative_scores = [
                 candidate["score"]
                 for i, candidate in enumerate(candidates)
                 if i != own_index
             ]
             best_alternative = max(alternative_scores) if alternative_scores else 0.0
-
-            # Difference from strongest competitor.
             gap = own_score - best_alternative
             competition_score = (0.50 + gap * 1.75)
-
-            # Keep the result inside sensible probability bounds.
             competition_score = min(max(competition_score, 0.05),0.95)
 
         return {
