@@ -643,7 +643,13 @@ class PredictionEngine:
             print(f"Profile: {profile}", flush=True)
             print(f"===========================================\n", flush=True)
             
-        p["starter_quality"] = {**profile, "tier": self._derive_tier_label(profile)}
+        p["starter_quality"] = {
+            **profile,
+            "tier": self._derive_tier_label(
+                profile,
+                p.get("position_id"),
+            ),
+        }
 
         # ── Per-fixture xPts ──
         total_raw = 0.0
@@ -1243,20 +1249,22 @@ class PredictionEngine:
                 # New transfer:
                 #   previous role came from another club, so downgrade it.
                 # --------------------------------------------------------
-
                 if is_new_transfer:
-                    # Old-club role is only weak evidence about the
-                    # new manager's selection decision.
                     score = (
                         prior_start_rate * 0.35
                         + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.65
                     )
                 else:
-                    # Established current-club player.
-                    score = (
-                        prior_start_rate * 0.75
-                        + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.25
-                    )
+                    if pos_id == 1:
+                        score = (
+                            prior_start_rate * 0.90
+                            + POSITION_START_RATE_PRIOR.get(pos_id, 0.55) * 0.10
+                        )
+                    else:
+                        score = (
+                            prior_start_rate * 0.75
+                            + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.25
+                        )
 
             # ------------------------------------------------------------
             # AVAILABILITY
@@ -1558,18 +1566,8 @@ class PredictionEngine:
             and has_competition_evidence
         ):
             # No current-season evidence.
-            if competition_rank == 1:
-                competition_start_rate = 0.90
-            elif competition_rank == 2:
-                competition_start_rate = 0.55
-            elif competition_rank == 3:
-                competition_start_rate = 0.25
-            else:
-                competition_start_rate = 0.10
-            start_rate = (
-                0.65 * competition_start_rate
-                + 0.35 * prior_start_rate
-            )
+            competition_start_rate = min(max(float(competition_score), 0.0), 1.0,)
+            start_rate = (0.65 * competition_start_rate + 0.35 * prior_start_rate)
         else:
             # No useful competition information.
             start_rate = prior_start_rate
@@ -1696,19 +1694,26 @@ class PredictionEngine:
         # 11. ROTATION RISK
         # ============================================================
 
-        rotation_risk = max(
-            0.0,
-            min(
-                1.0 - abs(p_start - 0.5) * 2.0,
-                1.0,
-            ),
-        )
+        if p_start >= 0.85:
+            base_rotation_risk = 0.15
+        elif p_start >= 0.75:
+            base_rotation_risk = 0.25
+        elif p_start >= 0.65:
+            base_rotation_risk = 0.35
+        elif p_start >= 0.55:
+            base_rotation_risk = 0.50
+        elif p_start >= 0.40:
+            base_rotation_risk = 0.65
+        else:
+            base_rotation_risk = 0.80
 
         if total_minutes > 0:
             rotation_risk = max(
-                rotation_risk,
-                mins_volatility * 0.5,
+                base_rotation_risk,
+                mins_volatility * 0.50,
             )
+        else:
+            rotation_risk = base_rotation_risk
 
         # ============================================================
         # 12. EXPECTED MINUTES
@@ -1814,31 +1819,50 @@ class PredictionEngine:
         }
 
 
-    def _derive_tier_label(self, profile: dict) -> str:
+    def _derive_tier_label(self, profile: dict, position_id: int | None = None) -> str:
         """Display-only squad role label."""
         p_start = profile["p_start"]
         risk = profile["rotation_risk"]
         xmins = profile["xmins"]
 
-        # First-choice starter
-        if p_start >= 0.85 and risk < 0.35:
+        if position_id == 1:
+            if p_start >= 0.85:
+                return "nailed"
+            if p_start >= 0.65:
+                return "regular"
+            if p_start >= 0.40:
+                return "rotation"
+            if p_start >= 0.20:
+                return "fringe"
+            return "bench_warmer"
+
+        # ============================================================
+        # NAILED: Strong starting probability and low role uncertainty.
+        # ============================================================
+        if p_start >= 0.85 and risk <= 0.35:
             return "nailed"
-        # Usually starts, but not completely secure
-        if p_start >= 0.75:
-            if risk < 0.50:
-                return "regular"
+
+        # ============================================================
+        # REGULAR: A player expected to start most matches should not be 
+        # labelled rotation merely because the model has some uncertainty.
+        # ============================================================
+        if p_start >= 0.70:
+            return "regular"
+        if p_start >= 0.60 and risk <= 0.40:
+            return "regular"
+
+        # ============================================================
+        # ROTATION: Reserve this for genuinely uncertain starters.
+        # ============================================================
+        if p_start >= 0.45:
             return "rotation"
-        # Regular starters with meaningful risk
-        if p_start >= 0.55:
-            if risk < 0.50:
-                return "regular"
-            return "rotation"
-        # True rotation pool
-        if p_start >= 0.35:
-            return "rotation"
-        # Fringe/sub players
-        if p_start >= 0.15 or xmins >= 15:
+
+        # ============================================================
+        # FRINGE
+        # ============================================================
+        if p_start >= 0.20 or xmins >= 15:
             return "fringe"
+
         return "bench_warmer"
 
 
