@@ -666,14 +666,10 @@ class PredictionEngine:
                 )
             fix_xg_data = self.fixture_xg_cache[cache_key]
             xmins = profile["xmins"]
-            # Rotation risk reduces expected minutes BEFORE EV calculation
-            rotation_risk = profile.get("rotation_risk", 0)
-            rotation_multiplier = 1.0 - (rotation_risk * 0.25)
-            xmins *= rotation_multiplier
-            # Reduce minutes expectation for second DGW fixture
+            rotation_risk = profile.get("rotation_risk", 0.0)
             if num_fixtures >= 2 and fix_idx > 0:
                 xmins *= 0.85
-            fix_ev = self._fixture_ev(p, fix_info, fix_xg_data, xmins, profile["p_plays_60"] * rotation_multiplier)
+            fix_ev = self._fixture_ev(p, fix_info, fix_xg_data, xmins, profile["p_plays_60"])
 
             # Contextual factor modifiers
             factors = self._calc_all_factors(p, fix_info, fix_xg_data)
@@ -682,13 +678,8 @@ class PredictionEngine:
             # Modifiers are bounded to avoid runaway inflation
             weighted_mod = max(-0.35, min(weighted_mod, 0.45))
 
-            # Rotation risk penalty
-            rotation_risk = profile.get("rotation_risk", 0)
-            # only reduce attacking/bonus upside from uncertain starts
-            fix_ev["other"] *= (1.0 - rotation_risk * 0.05)
             fix_xp = fix_ev["appearance"] + fix_ev["other"] * (1.0 + weighted_mod)
             fix_xp = max(0.0, fix_xp)
-
             total_raw += fix_xp
 
             # Availability discount
@@ -1564,16 +1555,21 @@ class PredictionEngine:
 
         elif (
             competition_score is not None
-            and
-            has_competition_evidence
+            and has_competition_evidence
         ):
-            # Established player at same club with no current minutes.
-            # Historical role gets equal weight with competition.
+            # No current-season evidence.
+            if competition_rank == 1:
+                competition_start_rate = 0.90
+            elif competition_rank == 2:
+                competition_start_rate = 0.55
+            elif competition_rank == 3:
+                competition_start_rate = 0.25
+            else:
+                competition_start_rate = 0.10
             start_rate = (
-                0.50 * prior_start_rate
-                + 0.50 * competition_score
+                0.65 * competition_start_rate
+                + 0.35 * prior_start_rate
             )
-
         else:
             # No useful competition information.
             start_rate = prior_start_rate
@@ -1859,7 +1855,7 @@ class PredictionEngine:
         gws_played = max(self.current_gw - 1, 1)
         # No data
         if total_minutes == 0:
-            return 1.0
+            return 0.5
         # Confidence increases with sample size
         sample_confidence = min(total_minutes / 900.0, 1.0)
         # Observed volatility from starting pattern
