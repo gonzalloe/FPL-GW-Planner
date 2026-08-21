@@ -1226,6 +1226,7 @@ class PredictionEngine:
             }
 
         candidates = []
+        competition_score = None
 
         def role_prior(player):
             try:
@@ -1309,10 +1310,13 @@ class PredictionEngine:
                         score = (
                             prior_start_rate * 0.40
                             + POSITION_START_RATE_PRIOR.get(pos_id, 0.55) * 0.10
-                            + 0.50
+                            + 0.50 * 0.50
                         )
                     else:
-                        score = prior_start_rate * 0.90 + 0.55 * 0.10
+                        score = (
+                            prior_start_rate * 0.90
+                            + POSITION_START_RATE_PRIOR.get(pos_id, 0.55) * 0.10
+                        )
                 elif is_new_transfer:
                     score = (
                         prior_start_rate * 0.70
@@ -1404,6 +1408,28 @@ class PredictionEngine:
                 "rank": None,
                 "has_evidence": False,
             }
+
+        # debug print
+        if pos_id == 1 and p.get("web_name") in {
+            "Meslier",
+            "Trafford",
+            "Kinsky",
+            "Raya",
+            "Kelleher",
+            "Donnarumma",
+        }:
+            print(
+                f"\n========== GKP COMPETITION: {p.get('web_name')} =========="
+            )
+            for candidate in candidates:
+                print(
+                    f"candidate="
+                    f"{candidate['player_id']} "
+                    f"score={candidate['score']:.3f} "
+                    f"starts={candidate['current_starts']} "
+                    f"minutes={candidate['current_minutes']}"
+                )
+            print("====================================================")
         
         # ============================================================
         # FINAL COMPETITION SCORE
@@ -1411,24 +1437,52 @@ class PredictionEngine:
 
         rank = own_index + 1
         num_candidates = len(candidates)
-        own_score = candidates[own_index]["score"]
+        own_score = float(candidates[own_index]["score"])
         competition_score = own_score
-        if pos_id == 1 and num_candidates >= 2:
-            alternative_scores = [
-                candidate["score"]
-                for i, candidate in enumerate(candidates)
-                if i != own_index
-            ]
-            best_alternative = max(alternative_scores) if alternative_scores else 0.0
-            gap = own_score - best_alternative
-            competition_score = (0.50 + gap * 1.75)
-            competition_score = min(max(competition_score, 0.05),0.95)
 
+        # ------------------------------------------------------------
+        # GOALKEEPER COMPETITION
+        # ------------------------------------------------------------
+
+        if pos_id == 1 and num_candidates >= 2:
+
+            gk_scores = [
+                max(float(candidate["score"]), 0.0)
+                for candidate in candidates
+            ]
+
+            # Higher temperature = less certainty.
+            temperature = 0.15
+            try:
+                import math
+                max_score = max(gk_scores)
+                weights = [
+                    math.exp(
+                        (score - max_score) / temperature
+                    )
+                    for score in gk_scores
+                ]
+
+                total_weight = sum(weights)
+
+                if total_weight > 0:
+                    raw_probability = (
+                        weights[own_index] / total_weight
+                    )
+                else:
+                    raw_probability = 1.0 / num_candidates
+
+            except (ValueError, OverflowError, ZeroDivisionError):
+                raw_probability = 1.0 / num_candidates
+
+            # Shrink the probability toward uncertainty.
+            competition_score = (0.15 + raw_probability * 0.70)
+            competition_score = min(max(competition_score, 0.05), 0.95)
         return {
-            "competition_score": round(min(max(competition_score, 0.0,), 1.0), 3),
+            "competition_score": round(min(max(competition_score, 0.0), 1.0), 3),
             "available_teammates": max(num_candidates - 1, 0),
             "rank": rank,
-            "has_evidence": num_candidates >= 2
+            "has_evidence": num_candidates >= 2,
         }
 
 
@@ -1455,24 +1509,19 @@ class PredictionEngine:
 
         total_minutes = int(p.get("minutes", 0) or 0)
         starts = int(p.get("starts", 0) or 0)
-
         gws_played = max(self.current_gw - 1, 1)
-
         recent_games = int(p.get("_recent_games", 0) or 0)
         recent_start_rate = p.get("_recent_start_rate")
         recent_avg_mins = p.get("_recent_avg_mins")
-
+        available_teammates = 0
         current_minutes = 0
         current_starts = 0
         current_start_rate = None
         current_avg_mins = None
-
-        observed_start_rate = None
-        observed_avg_mins = None
-
         competition_score = None
         competition_rank = None
-        available_teammates = 0
+        observed_start_rate = None
+        observed_avg_mins = None
         has_competition_evidence = False
 
         # ============================================================
@@ -1487,7 +1536,6 @@ class PredictionEngine:
             "Raya",
             "Haaland",
         }
-
         debug_player = p.get("web_name") in DEBUG_PLAYERS
 
         # ============================================================
@@ -1499,70 +1547,37 @@ class PredictionEngine:
         prior_start_rate = float(
             prior.get(
                 "start_rate",
-                POSITION_START_RATE_PRIOR.get(
-                    p.get("position_id", 3),
-                    0.5,
-                ),
+                POSITION_START_RATE_PRIOR.get(p.get("position_id", 3), 0.5)
             )
         )
-
         prior_avg_mins = float(
             prior.get(
                 "avg_minutes",
-                POSITION_MINUTES_PRIOR.get(
-                    p.get("position_id", 3),
-                    60.0,
-                ),
+                POSITION_MINUTES_PRIOR.get(p.get("position_id", 3), 60.0)
             )
         )
-
-        prior_start_rate = min(
-            max(prior_start_rate, 0.0),
-            1.0,
-        )
-
-        prior_avg_mins = min(
-            max(prior_avg_mins, 0.0),
-            90.0,
-        )
+        prior_start_rate = min(max(prior_start_rate, 0.0), 1.0)
+        prior_avg_mins = min(max(prior_avg_mins, 0.0), 90.0)
 
         # ============================================================
         # 2. CURRENT-SEASON EVIDENCE
+        # Prefer explicit current-season fields when present. 
+        # Fall back to the normal player minutes/starts fields.
         # ============================================================
 
-        # Prefer explicit current-season fields when present.
-        # Fall back to the normal player minutes/starts fields.
-        current_minutes = int(
-            p.get("_current_season_minutes", total_minutes) or 0
-        )
-
-        current_starts = int(
-            p.get("_current_season_starts", starts) or 0
-        )
-
+        current_minutes = int(p.get("_current_season_minutes", total_minutes) or 0)
+        current_starts = int(p.get("_current_season_starts", starts) or 0)
         current_minutes = max(current_minutes, 0)
         current_starts = max(current_starts, 0)
 
         # At GW1 there should normally be no current-season evidence.
         if self.current_gw <= 1:
-            current_minutes = int(
-                p.get("_current_season_minutes", 0) or 0
-            )
-            current_starts = int(
-                p.get("_current_season_starts", 0) or 0
-            )
+            current_minutes = int(p.get("_current_season_minutes", 0) or 0)
+            current_starts = int(p.get("_current_season_starts", 0) or 0)
 
         if current_minutes > 0:
-
-            current_start_rate = min(
-                current_starts / max(current_minutes / 90.0, 1.0),
-                1.0,
-            )
-
-            current_avg_mins = min(
-                current_minutes / gws_played,
-                90.0,
-            )
+            current_start_rate = min(current_starts / max(current_minutes / 90.0, 1.0),1.0)
+            current_avg_mins = min(current_minutes / gws_played, 90.0)
 
         # ============================================================
         # 3. RECENT ROLE EVIDENCE
@@ -1729,12 +1744,19 @@ class PredictionEngine:
             # --------------------------------------------------------
             # ESTABLISHED OUTFIELD PLAYER — PRESEASON
             # --------------------------------------------------------
-            #
-            # No current-season evidence exists.
-            #
-            # Previous-season role is the baseline.
-            #
-            start_rate = prior_start_rate
+            if (
+                pos_id != 1
+                and competition_score is not None
+                and has_competition_evidence
+            ):
+                competition_weight = 0.30
+
+                start_rate = (
+                    prior_start_rate * (1.0 - competition_weight)
+                    + competition_score * competition_weight
+                )
+            else:
+                start_rate = prior_start_rate
         start_rate = min(
             max(start_rate, 0.0),
             1.0,
