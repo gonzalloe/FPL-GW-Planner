@@ -175,51 +175,150 @@ def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) ->
             "ga_per_game": round(final_ga, 3),
         }
     return priors
-    
 
-def get_previous_season_player_team(player_code: int) -> int | None:
+def _get_current_season_name(bootstrap: dict | None = None) -> str | None:
     """
-    Return the player's previous-season FPL team ID.
-    FPL element-summary history_past does not expose historical team,
-    so use the Vaastav players_raw snapshot. `code` is persistent across
-    seasons while FPL `id` can change.
+    Derive the current FPL season from bootstrap event dates.
+    Example:
+        2026/27 -> "2026/27"
+    """
+    if bootstrap is None:
+        try:
+            bootstrap = fetch_bootstrap()
+        except Exception:
+            return None
+    events = bootstrap.get("events", []) if isinstance(bootstrap, dict) else []
+    if not events:
+        return None
+    dates = []
+    for event in events:
+        deadline = event.get("deadline_time")
+        if not deadline:
+            continue
+        try:
+            dates.append(deadline[:10])
+        except Exception:
+            continue
+    if not dates:
+        return None
+    # FPL season starts in the calendar year of the earliest GW deadline.
+    start_year = min(int(d[:4]) for d in dates)
+    return f"{start_year}/{str(start_year + 1)[-2:]}"
+
+
+def _get_previous_season_name(bootstrap: dict | None = None) -> str | None:
+    """
+    Return the immediately preceding completed FPL season.
+    Example:
+        current = 2026/27
+        previous = 2025/26
+    """
+    current = _get_current_season_name(bootstrap)
+    if not current:
+        return None
+    try:
+        start_year = int(current[:4])
+    except (TypeError, ValueError):
+        return None
+    return f"{start_year - 1}/{str(start_year)[-2:]}"
+
+
+def _season_name_to_vaastav_code(season_name: str | None) -> str | None:
+    """
+    Convert FPL season naming to Vaastav archive naming.
+    Example:
+        2025/26 -> 2025-26
+    """
+    if not season_name:
+        return None
+    normalized = (str(season_name).strip().replace("-", "/"))
+    parts = normalized.split("/")
+    if len(parts) != 2:
+        return None
+    try:
+        start_year = int(parts[0])
+    except ValueError:
+        return None
+    return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+
+def get_previous_season_player_team(player_code: int, previous_season_name: str | None = None) -> int | None:
+    """
+    Return the player's FPL team ID in the immediately previous season.
+
+    `code` is persistent across seasons while FPL player `id` can change.
+
+    The season is derived dynamically. Nothing here is hardcoded to
+    2025/26 or any other specific season.
     """
     try:
-        # Current 2026/27 season -> previous 2025/26 season.
-        # Keep this derived from the current calendar/bootstrap if you
-        # later want to make it fully dynamic.
-        season = "2025-26"
+        if not previous_season_name:
+            previous_season_name = _get_previous_season_name()
+
+        season = _season_name_to_vaastav_code(previous_season_name)
+
+        if not season:
+            return None
+
         url = (
             "https://raw.githubusercontent.com/"
             "vaastav/Fantasy-Premier-League/master/"
             f"data/{season}/players_raw.csv"
         )
+
         rows = _fetch_csv(
             url,
             f"previous_players_{season}",
             cache_ttl=86400,
         )
+
         code = int(player_code)
+
         for row in rows:
             try:
-                if int(row.get("code", 0) or 0) == code:
-                    team = row.get("team")
-                    return int(team) if team not in (None, "") else None
+                if int(row.get("code", 0) or 0) != code:
+                    continue
+
+                team = row.get("team")
+
+                if team in (None, ""):
+                    return None
+
+                return int(team)
+
             except (TypeError, ValueError):
                 continue
+
     except Exception as e:
         print(
             f"[PRIOR] Failed to find previous team "
             f"for player code {player_code}: {e}"
         )
+
     return None
 
 
-def get_last_season_rates(player_id: int) -> dict:
+def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict:
     """
-    Per-90 xG/xA/bonus rate from the player's most recent completed
-    PL season with a meaningful sample (>=450 mins).
+    Return role/attacking data from the IMMEDIATELY previous completed
+    Premier League season only.
+
+    Example:
+
+        Current season 2026/27
+            ↓
+        Previous season 2025/26
+
+    IMPORTANT:
+        We deliberately do NOT fall back to older seasons.
+
+    If the immediately previous season has no meaningful sample,
+    return {}.
+
+    This prevents old historical seasons from contaminating GW1 role
+    predictions.
     """
+
     try:
         detail = fetch_player_detail(player_id)
     except Exception:
@@ -234,43 +333,139 @@ def get_last_season_rates(player_id: int) -> dict:
     if not history_past:
         return {}
 
-    # Walk backwards from most recent season, skip ones with too little data
-    for season in reversed(history_past):
-        mins = int(season.get("minutes", 0) or 0)
-        if mins < 450:
-            continue
-        starts = int(season.get("starts", 0) or 0)
-        if starts <= 0:
-            # Older FPL seasons don't always report `starts` - approximate
-            starts = max(round(mins / 75), 1)
-        games = int(season.get("appearances", 0) or 0)
-        if games <= 0:
-            games = max(round(mins / 75), starts, 1,)
-        xg = float(season.get("expected_goals", 0) or 0)
-        xa = float(season.get("expected_assists", 0) or 0)
-        bonus = int(season.get("bonus", 0) or 0)
-        per90 = mins / 90.0
-        player_code = None
-        try:
-            player_code = int(season.get("element_code"))
-        except (TypeError, ValueError):
-            pass
-        previous_team_id = (
-            get_previous_season_player_team(player_code)
-            if player_code is not None
-            else None
+    # ============================================================
+    # DETERMINE THE IMMEDIATELY PREVIOUS SEASON
+    # ============================================================
+
+    previous_season_name = _get_previous_season_name(bootstrap)
+
+    if not previous_season_name:
+        return {}
+
+    normalized_previous = (
+        previous_season_name
+        .replace("-", "/")
+        .strip()
+    )
+
+    previous_season = None
+
+    for season in history_past:
+        season_name = str(
+            season.get("season_name", "")
+        ).strip().replace("-", "/")
+
+        if season_name == normalized_previous:
+            previous_season = season
+            break
+
+    # IMPORTANT:
+    # Do NOT search older seasons.
+    if previous_season is None:
+        return {}
+
+    # ============================================================
+    # MEANINGFUL SAMPLE CHECK
+    # ============================================================
+
+    mins = int(
+        previous_season.get("minutes", 0) or 0
+    )
+
+    if mins < 450:
+        return {}
+
+    starts = int(
+        previous_season.get("starts", 0) or 0
+    )
+
+    if starts <= 0:
+        # Defensive fallback for historical API records that do not
+        # expose starts reliably.
+        starts = max(
+            round(mins / 75),
+            1,
         )
-        return {
-            "xg_per90": xg / per90 if per90 > 0 else 0.0,
-            "xa_per90": xa / per90 if per90 > 0 else 0.0,
-            "bonus_per_start": (bonus / starts if starts > 0 else 0.0),
-            "season_name": season.get("season_name", ""),
-            "minutes": mins,
-            "starts": starts,
-            "games": games,
-            "previous_team_id": previous_team_id,
-        }
-    return {}
+
+    games = int(
+        previous_season.get("appearances", 0) or 0
+    )
+
+    if games <= 0:
+        games = max(
+            round(mins / 75),
+            starts,
+            1,
+        )
+
+    xg = float(
+        previous_season.get("expected_goals", 0) or 0
+    )
+
+    xa = float(
+        previous_season.get("expected_assists", 0) or 0
+    )
+
+    bonus = int(
+        previous_season.get("bonus", 0) or 0
+    )
+
+    per90 = mins / 90.0
+
+    # ============================================================
+    # PREVIOUS-SEASON PLAYER CODE
+    # ============================================================
+
+    player_code = None
+
+    try:
+        player_code = int(
+            previous_season.get("element_code")
+        )
+    except (TypeError, ValueError):
+        pass
+
+    # ============================================================
+    # PREVIOUS-SEASON TEAM
+    # ============================================================
+
+    previous_team_id = None
+
+    if player_code is not None:
+        previous_team_id = get_previous_season_player_team(
+            player_code,
+            previous_season_name=previous_season_name,
+        )
+
+    return {
+        "xg_per90": (
+            xg / per90
+            if per90 > 0
+            else 0.0
+        ),
+
+        "xa_per90": (
+            xa / per90
+            if per90 > 0
+            else 0.0
+        ),
+
+        "bonus_per_start": (
+            bonus / starts
+            if starts > 0
+            else 0.0
+        ),
+
+        "season_name": previous_season.get(
+            "season_name",
+            previous_season_name,
+        ),
+
+        "minutes": mins,
+        "starts": starts,
+        "games": games,
+        "previous_team_id": previous_team_id,
+    }
 
 def get_recent_gw_stats(player_id: int, window: int = 5) -> dict:
     """

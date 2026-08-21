@@ -538,7 +538,7 @@ class PredictionEngine:
             if not p.get("_prior_loaded", False):
                 rates = {}
                 try: 
-                    rates = get_last_season_rates(pid) 
+                    rates = get_last_season_rates(pid, bootstrap=self.bootstrap) 
                 except Exception:
                     rates = {}     
                 if rates:
@@ -1086,57 +1086,91 @@ class PredictionEngine:
     # ══════════════════════════════════════════════════════════
     
     def get_player_role_prior(self, p: dict):
-        team_id = p.get("team")
+        """
+        Return the player's baseline role entering the current season.
 
-        # 1. Promoted team → most recent meaningful Championship role
-        if team_id in self.promoted_team_ids:
-            champ = p.get("championship_role")
+        PRESEASON / GW1 PRINCIPLE:
+            Use the immediately previous completed season whenever
+            meaningful data exists.
 
-            if champ and int(champ.get("minutes", 0) or 0) >= 450:
-                return {
-                    "start_rate": min(
-                        float(champ.get("start_rate", 0.5) or 0.5),
-                        1.0,
-                    ),
-                    "avg_minutes": min(
-                        float(champ.get("avg_minutes", 60) or 60),
-                        90.0,
-                    ),
-                    "source": "championship",
-                    "season": champ.get("season", ""),
-                    "minutes": int(champ.get("minutes", 0) or 0),
-                    "starts": int(champ.get("starts", 0) or 0),
-                    "matches": int(champ.get("matches", 0) or 0),
-                }
+        Priority:
+            1. Previous-season Premier League role
+            2. Previous-season Championship role
+            3. Position prior
 
-        # 2. Most recent meaningful Premier League role
+        Current-club selection is NOT handled here.
+        That belongs to _current_team_position_competition().
+        """
+
+        pos = p.get("position_id", p.get("element_type", 3))
+
+        # ============================================================
+        # 1. IMMEDIATELY PREVIOUS PREMIER LEAGUE SEASON
+        # ============================================================
+
         previous_minutes = int(p.get("previous_minutes", 0) or 0)
         previous_starts = int(p.get("previous_starts", 0) or 0)
-        previous_games = max(
-            int(p.get("previous_games", 38) or 38),
-            1,
-        )
-
-        if previous_minutes >= 450:
-            previous_start_rate = min(previous_starts / previous_games, 1.0,)
-            previous_avg_minutes = min(previous_minutes / previous_games, 90.0,)
+        previous_games = int(p.get("previous_games", 0) or 0)
+        if (previous_minutes >= 450 and previous_games > 0):
+            previous_start_rate = min(max(previous_starts / previous_games, 0.0,), 1.0)
+            previous_avg_minutes = min(max(previous_minutes / previous_games, 0.0,), 90.0)
 
             return {
                 "start_rate": previous_start_rate,
                 "avg_minutes": previous_avg_minutes,
                 "source": "premier_league",
-                "season": p.get("_previous_season_name", ""),
+                "season": p.get(
+                    "_previous_season_name",
+                    "",
+                ),
                 "minutes": previous_minutes,
                 "starts": previous_starts,
                 "matches": previous_games,
             }
 
-        # 3. Position prior
-        pos = p.get("element_type", 3)
+        # ============================================================
+        # 2. PREVIOUS-SEASON CHAMPIONSHIP ROLE
+        # ============================================================
+
+        champ = p.get("championship_role")
+        if isinstance(champ, dict):
+            champ_minutes = int(champ.get("minutes", 0) or 0)
+            champ_matches = int(champ.get("matches", 0) or 0)
+            if (champ_minutes >= 450 and champ_matches > 0):
+                champ_start_rate = min(max(float(champ.get("start_rate", 0.5) or 0.5), 0.0), 1.0)
+                champ_avg_minutes = min(max(float(champ.get("avg_minutes", 60.0) or 60.0), 0.0), 90.0,)
+
+                return {
+                    "start_rate": champ_start_rate,
+                    "avg_minutes": champ_avg_minutes,
+                    "source": "championship",
+                    "season": champ.get(
+                        "season",
+                        "",
+                    ),
+                    "minutes": champ_minutes,
+                    "starts": int(
+                        champ.get(
+                            "starts",
+                            0,
+                        ) or 0
+                    ),
+                    "matches": champ_matches,
+                }
+
+        # ============================================================
+        # 3. POSITION PRIOR
+        # ============================================================
 
         return {
-            "start_rate": POSITION_START_RATE_PRIOR.get(pos, 0.5),
-            "avg_minutes": POSITION_MINUTES_PRIOR.get(pos, 60),
+            "start_rate": POSITION_START_RATE_PRIOR.get(
+                pos,
+                0.5,
+            ),
+            "avg_minutes": POSITION_MINUTES_PRIOR.get(
+                pos,
+                60,
+            ),
             "source": "position_prior",
             "season": "",
             "minutes": 0,
@@ -1253,21 +1287,12 @@ class PredictionEngine:
                 #   previous role came from another club, so downgrade it.
                 # --------------------------------------------------------
                 if is_new_transfer:
-                    score = (
-                        prior_start_rate * 0.35
-                        + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.65
-                    )
+                    score = (prior_start_rate * 0.70 + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.30)
                 else:
                     if pos_id == 1:
-                        score = (
-                            prior_start_rate * 0.90
-                            + POSITION_START_RATE_PRIOR.get(pos_id, 0.55) * 0.10
-                        )
+                        score = (prior_start_rate * 0.90 + POSITION_START_RATE_PRIOR.get(pos_id, 0.55) * 0.10)
                     else:
-                        score = (
-                            prior_start_rate * 0.75
-                            + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.25
-                        )
+                        score = (prior_start_rate * 0.75 + POSITION_START_RATE_PRIOR.get(pos_id, 0.5) * 0.25)
 
             # ------------------------------------------------------------
             # AVAILABILITY
@@ -1352,11 +1377,53 @@ class PredictionEngine:
                 "rank": None,
                 "has_evidence": False,
             }
+        
+        # ============================================================
+        # FINAL COMPETITION SCORE
+        # ============================================================
+
+        rank = own_index + 1
+        num_candidates = len(candidates)
+
+        if pos_id == 1 and num_candidates >= 2:
+            # GKP: WINNER-TAKES-MOST MODEL
+            temperature = 0.12
+            max_score = max(
+                candidate["score"]
+                for candidate in candidates
+            )
+            weights = []
+            for candidate in candidates:
+                exponent = (
+                    candidate["score"] - max_score
+                ) / temperature
+                # Prevent overflow/underflow.
+                exponent = max(
+                    min(exponent, 50.0),
+                    -50.0,
+                )
+                weights.append(
+                    math.exp(exponent)
+                )
+            total_weight = sum(weights)
+            if total_weight > 0:
+                competition_score = (weights[own_index] / total_weight)
+            else:
+                competition_score = 1.0 / num_candidates
+
+        else:
+            # --------------------------------------------------------
+            # OUTFIELD:
+            # Keep the continuous role score.
+            # --------------------------------------------------------
+
+            competition_score = candidates[own_index]["score"]
+            
         return {
-            "competition_score": round(candidates[own_index]["score"], 3),
-            "available_teammates": max(len(candidates) - 1, 0),
-            "rank": own_index + 1,
-            "has_evidence": len(candidates) >= 2,
+            "competition_score": round(min(max(competition_score, 0.0,), 1.0), 3),
+            "available_teammates": max(num_candidates - 1, 0),
+            "rank": rank,
+            "has_evidence": num_candidates >= 2
         }
 
 
@@ -1577,54 +1644,105 @@ class PredictionEngine:
             except (TypeError, ValueError):
                 competition_score = None
 
+        is_new_transfer = bool(p.get("_is_new_transfer", False))
+        has_previous_role = (
+            prior.get("source") in {"premier_league", "championship"}
+            and prior.get("minutes", 0) >= 450
+        )
+        is_promoted_team = (
+            p.get("team") in getattr(self, "promoted_team_ids", set())
+        )
         is_new_environment = (
-            bool(p.get("_is_new_transfer", False))
-            or p.get("team") in getattr(
-                self,
-                "promoted_team_ids",
-                set(),
+            is_new_transfer
+            or (
+                is_promoted_team
+                and not has_previous_role
             )
         )
 
         # ============================================================
         # 5. START PROBABILITY
         # ============================================================
+        #
+        # ROLE HIERARCHY
+        #
+        # GW1 / PRESEASON:
+        #
+        #   GKP:
+        #       Current-club competition determines first-choice
+        #       probability.
+        #
+        #   New environment / new transfer:
+        #       Current-club competition is relevant because the
+        #       previous club does not establish selection at the
+        #       new club.
+        #
+        #   Established outfield player:
+        #       Previous-season role is the baseline.
+        #
+        # GW2+:
+        #
+        #   Current-season evidence gradually replaces the prior.
+        #
+        # IMPORTANT:
+        #   Competition must NOT automatically overwrite the
+        #   previous-season role of an established outfield player.
+        # ============================================================
 
-        if (observed_start_rate is not None and current_minutes > 0):
-            current_weight = min(current_minutes / 900.0, 1.0,)
+        pos_id = p.get("position_id")
+        has_current_season_evidence = (current_minutes > 0 and observed_start_rate is not None)
+
+        if has_current_season_evidence:
+            # --------------------------------------------------------
+            # CURRENT-SEASON EVIDENCE
+            # --------------------------------------------------------
+            current_weight = min(current_minutes / 900.0, 1.0)
             start_rate = (prior_start_rate * (1.0 - current_weight) + observed_start_rate * current_weight)
-        elif (competition_score is not None and has_competition_evidence):
+        elif (
+            pos_id == 1
+            and competition_score is not None
+            and has_competition_evidence
+        ):
+            # --------------------------------------------------------
+            # GKP PRESEASON
+            # --------------------------------------------------------
+            #
+            # Goalkeeper selection is unusually binary.
+            #
+            # We therefore use the current-club competition model
+            # to estimate who is first choice.
+            #
             start_rate = competition_score
+        elif (
+            is_new_environment
+            and competition_score is not None
+            and has_competition_evidence
+        ):
+            start_rate = competition_score
+
         else:
+            # --------------------------------------------------------
+            # ESTABLISHED OUTFIELD PLAYER — PRESEASON
+            # --------------------------------------------------------
+            #
+            # No current-season evidence exists.
+            #
+            # Previous-season role is the baseline.
+            #
             start_rate = prior_start_rate
-        start_rate = min(max(start_rate, 0.0), 1.0,)
+        start_rate = min(
+            max(start_rate, 0.0),
+            1.0,
+        )
 
         # ============================================================
         # 6. EXPECTED STARTER MINUTES
         # ============================================================
 
-        if (
-            observed_avg_mins is not None
-            and current_minutes > 0
-        ):
-
-            current_weight = min(
-                current_minutes / 900.0,
-                1.0,
-            )
-
-            avg_mins = (
-                prior_avg_mins * (1.0 - current_weight)
-                + observed_avg_mins * current_weight
-            )
-
-        elif (
-            is_new_environment
-            and competition_score is not None
-        ):
-
-            # New environment.
-            #
+        if (observed_avg_mins is not None and current_minutes > 0):
+            current_weight = min(current_minutes / 900.0, 1.0)
+            avg_mins = (prior_avg_mins * (1.0 - current_weight) + observed_avg_mins * current_weight)
+        elif (is_new_environment and competition_score is not None):
             # GKP:
             # If selected, normally plays close to 90.
             #
@@ -1634,22 +1752,15 @@ class PredictionEngine:
                 avg_mins = 90.0
             else:
                 avg_mins = prior_avg_mins
-
         else:
-
             avg_mins = prior_avg_mins
-
-        avg_mins = min(
-            max(avg_mins, 0.0),
-            90.0,
-        )
+        avg_mins = min(max(avg_mins, 0.0), 90.0)
 
         # ============================================================
         # 7. AVAILABILITY
         # ============================================================
 
         chance = p.get("chance_of_playing_next_round")
-
         if chance is None:
             availability = 1.0
         else:
@@ -1658,71 +1769,38 @@ class PredictionEngine:
             except (TypeError, ValueError):
                 availability = 1.0
 
-        availability = min(
-            max(availability, 0.0),
-            1.0,
-        )
-
-        p_start = min(
-            start_rate * availability,
-            1.0,
-        )
+        availability = min(max(availability, 0.0), 1.0)
+        p_start = min(start_rate * availability, 1.0)
 
         # ============================================================
         # 8. MINUTES VOLATILITY
         # ============================================================
 
         mins_volatility = self._calc_minutes_volatility(p)
-
         # Make absolutely sure downstream calculations receive a number.
         try:
             mins_volatility = float(mins_volatility)
         except (TypeError, ValueError):
             mins_volatility = 0.0
-
-        mins_volatility = min(
-            max(mins_volatility, 0.0),
-            1.0,
-        )
+        mins_volatility = min(max(mins_volatility, 0.0), 1.0)
 
         # ============================================================
         # 9. P(60+)
         # ============================================================
 
         if p.get("position_id") == 1:
-
             # GKP:
             # If starting, almost always reaches 60.
             p_plays_60 = p_start * 0.98
-
         else:
-
-            mins_ratio = min(
-                avg_mins / 90.0,
-                1.0,
-            )
-
+            mins_ratio = min(avg_mins / 90.0, 1.0,)
             p_sub_appearance = 0.35
-
-            p_plays_60 = (
-                p_start * mins_ratio
-                +
-                (1.0 - p_start)
-                * p_sub_appearance
-                * 0.05
-            )
+            p_plays_60 = (p_start * mins_ratio + (1.0 - p_start) * p_sub_appearance * 0.05)
 
         # Volatility only affects players with actual current-season evidence.
         if current_minutes > 0:
-
-            p_plays_60 *= (
-                1.0 - mins_volatility * 0.30
-            )
-
-        p_plays_60 = min(
-            max(p_plays_60, 0.0),
-            1.0,
-        )
+            p_plays_60 *= (1.0 - mins_volatility * 0.30)
+        p_plays_60 = min(max(p_plays_60, 0.0), 1.0)
 
         # ============================================================
         # 10. INJURY / TEAM ROLE BOOST
