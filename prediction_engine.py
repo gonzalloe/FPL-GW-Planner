@@ -624,6 +624,8 @@ class PredictionEngine:
             "Trafford",
             "Kinsky",
             "Arrizabalaga",
+            "Raya",
+            "Haaland",
         }
         if p.get("web_name") in DEBUG_PLAYERS:
             print(
@@ -1052,10 +1054,11 @@ class PredictionEngine:
         #debug print
         DEBUG_GK_PLAYERS = {
             "Meslier",
+            "Trafford",
             "Kinsky",
             "Arrizabalaga",
             "Raya",
-            "Trafford"
+            "Haaland",
         }
         if pos == 1 and p.get("web_name") in DEBUG_GK_PLAYERS:
             print(
@@ -1773,9 +1776,11 @@ class PredictionEngine:
 
         DEBUG_PLAYERS = {
             "Meslier",
+            "Trafford",
             "Kinsky",
             "Arrizabalaga",
-            "Trafford",
+            "Raya",
+            "Haaland",
         }
 
         if p.get("web_name") in DEBUG_PLAYERS:
