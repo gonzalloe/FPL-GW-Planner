@@ -1749,7 +1749,7 @@ class PredictionEngine:
                 and competition_score is not None
                 and has_competition_evidence
             ):
-                competition_weight = 0.30
+                competition_weight = 0.15
 
                 start_rate = (
                     prior_start_rate * (1.0 - competition_weight)
@@ -1757,6 +1757,13 @@ class PredictionEngine:
                 )
             else:
                 start_rate = prior_start_rate
+        if (
+            pos_id != 1
+            and not has_current_season_evidence
+            and has_previous_role
+        ):
+            if prior_start_rate < 0.60:
+                start_rate = min(start_rate, prior_start_rate)
         start_rate = min(
             max(start_rate, 0.0),
             1.0,
@@ -1987,38 +1994,20 @@ class PredictionEngine:
         # ============================================================
 
         return {
-            "p_start": round(
-                p_start,
-                3,
-            ),
-            "p_plays_60": round(
-                p_plays_60,
-                3,
-            ),
-            "xmins": round(
-                xmins,
-                1,
-            ),
-            "rotation_risk": round(
-                rotation_risk,
-                3,
-            ),
-            "mins_volatility": round(
-                mins_volatility,
-                2,
-            ),
+            "p_start": round(p_start, 3),
+            "p_plays_60": round(p_plays_60, 3),
+            "xmins": round(xmins, 1),
+            "rotation_risk": round(rotation_risk, 3),
+            "mins_volatility": round(mins_volatility, 2),
+            "prior_start_rate": round(prior_start_rate, 3),
+            "has_previous_role": has_previous_role,
+            "has_current_season_evidence": has_current_season_evidence,
             "dgw_both_start_prob": (
-                round(
-                    dgw_both_prob,
-                    2,
-                )
+                round(dgw_both_prob, 2)
                 if dgw_both_prob is not None
                 else None
             ),
-            "dgw_effective_matches": round(
-                dgw_effective,
-                2,
-            ),
+            "dgw_effective_matches": round(dgw_effective, 2),
         }
 
 
@@ -2028,10 +2017,13 @@ class PredictionEngine:
         p_start = profile["p_start"]
         risk = profile["rotation_risk"]
         xmins = profile["xmins"]
-        current_starts = profile.get("current_starts", 0) or 0
-        current_minutes = profile.get("current_minutes", 0) or 0
-        gws_played = profile.get("gws_played", 0) or 0
-        has_current_season_evidence = (current_starts > 0 or current_minutes > 0)
+
+        prior_start_rate = profile.get("prior_start_rate")
+        has_previous_role = profile.get("has_previous_role", False)
+        has_current_season_evidence = profile.get(
+            "has_current_season_evidence",
+            False,
+        )
 
         # ============================================================
         # GOALKEEPERS
@@ -2048,29 +2040,39 @@ class PredictionEngine:
             return "bench_warmer"
 
         # ============================================================
-        # OUTFIELD
+        # PRESEASON HISTORICAL ROLE GUARD
+        #
+        # Do not call an established player "regular" before the
+        # current season has produced evidence if last season showed
+        # that he was not a regular starter.
         # ============================================================
-        early_season_no_evidence = (
-            gws_played <= 1
-            and not has_current_season_evidence
-        )
+        if (
+            not has_current_season_evidence
+            and has_previous_role
+            and prior_start_rate is not None
+        ):
+            if prior_start_rate < 0.60:
+                if p_start >= 0.45:
+                    return "rotation"
+                if p_start >= 0.20 or xmins >= 15:
+                    return "fringe"
+                return "bench_warmer"
 
-        if not early_season_no_evidence:
-            if p_start >= 0.85 and risk <= 0.35:
-                return "nailed"
+        # ============================================================
+        # NORMAL OUTFIELD TIERS
+        # ============================================================
+        if p_start >= 0.85 and risk <= 0.35:
+            return "nailed"
 
-        # Regular starter.
         if p_start >= 0.70:
             return "regular"
 
         if p_start >= 0.60 and risk <= 0.40:
             return "regular"
 
-        # Genuine rotation uncertainty.
         if p_start >= 0.45:
             return "rotation"
 
-        # Fringe / occasional minutes.
         if p_start >= 0.20 or xmins >= 15:
             return "fringe"
 
