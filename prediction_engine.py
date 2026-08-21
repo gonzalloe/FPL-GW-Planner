@@ -2028,12 +2028,13 @@ class PredictionEngine:
         p_start = profile["p_start"]
         risk = profile["rotation_risk"]
         xmins = profile["xmins"]
+        current_starts = profile.get("current_starts", 0) or 0
+        current_minutes = profile.get("current_minutes", 0) or 0
+        gws_played = profile.get("gws_played", 0) or 0
+        has_current_season_evidence = (current_starts > 0 or current_minutes > 0)
 
         # ============================================================
         # GOALKEEPERS
-        # GKs are usually binary first-choice / backup roles.
-        # Give strong weight to starting probability and low rotation
-        # risk rather than treating them like outfield rotation players.
         # ============================================================
         if position_id == 1:
             if p_start >= 0.85:
@@ -2049,19 +2050,30 @@ class PredictionEngine:
         # ============================================================
         # OUTFIELD
         # ============================================================
-        if p_start >= 0.85 and risk <= 0.35:
-            return "nailed"
+        early_season_no_evidence = (
+            gws_played <= 1
+            and not has_current_season_evidence
+        )
+
+        if not early_season_no_evidence:
+            if p_start >= 0.85 and risk <= 0.35:
+                return "nailed"
+
         # Regular starter.
         if p_start >= 0.70:
             return "regular"
+
         if p_start >= 0.60 and risk <= 0.40:
             return "regular"
+
         # Genuine rotation uncertainty.
         if p_start >= 0.45:
             return "rotation"
+
         # Fringe / occasional minutes.
         if p_start >= 0.20 or xmins >= 15:
             return "fringe"
+
         return "bench_warmer"
 
 
