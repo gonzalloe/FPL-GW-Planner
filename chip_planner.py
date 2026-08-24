@@ -155,163 +155,139 @@ class SeasonChipPlanner:
         if chips_available is None:
             chips_available = ["BB", "TC", "FH", "WC"]
 
-        max_gw = 38
-        remaining_gws = list(
-            range(self.next_gw, max_gw + 1)
-        )
-
-        # ------------------------------------------------------------
-        # IMPORTANT:
-        # Only classify as preseason when we are actually at GW1.
-        #
-        # Do NOT use simply:
-        #     not current_squad_ids
-        #
-        # because a temporary API failure during GW20 should not
-        # suddenly become "preseason".
-        # ------------------------------------------------------------
-        preseason = (
-            self.next_gw == 1
-            and not current_squad_ids
-        )
-
-        print(
-            f"[CHIP] Analyze season: GW{self.next_gw}-38 | "
-            f"squad={len(current_squad_ids) if current_squad_ids else 0} | "
-            f"preseason={preseason}"
-        )
-
-        # ------------------------------------------------------------
-        # Build GW metadata
-        # ------------------------------------------------------------
-
-        gw_meta = {}
-
-        for gw in remaining_gws:
-            fixes = get_fixtures_for_gameweek(
-                gw,
-                self.fixtures
+            max_gw = 38
+            remaining_gws = list(
+                range(self.next_gw, max_gw + 1)
             )
 
-            dgw = get_dgw_teams(
-                gw,
-                self.fixtures
+            preseason = (
+                self.next_gw == 1
+                and not current_squad_ids
             )
 
-            bgw = get_bgw_teams(
-                gw,
-                self.fixtures,
-                self.bootstrap
+            print(
+                f"[CHIP] Analyze season: GW{self.next_gw}-38 | "
+                f"squad={len(current_squad_ids) if current_squad_ids else 0} | "
+                f"preseason={preseason}"
             )
 
-            gw_meta[gw] = {
-                "gameweek": gw,
-                "total_fixtures": len(fixes),
-
-                "is_dgw": len(dgw) > 0,
-                "dgw_team_count": len(dgw),
-
-                "dgw_teams": {
-                    tid: self.teams.get(
-                        tid,
-                        {}
-                    ).get(
-                        "short_name",
-                        "?"
-                    )
-                    for tid in dgw
-                },
-
-                "is_bgw": len(bgw) > 0,
-                "bgw_team_count": len(bgw),
-
-                "bgw_teams": {
-                    tid: self.teams.get(
-                        tid,
-                        {}
-                    ).get(
-                        "short_name",
-                        "?"
-                    )
-                    for tid in bgw
-                },
-            }
-
-        # ------------------------------------------------------------
-        # PRESEASON
-        # ------------------------------------------------------------
-        #
-        # Do not run the normal scoring engine.
-        #
-        # 0 = genuinely scored zero
-        # 5 = genuinely weak score
-        # None = cannot evaluate yet
-        #
-        # This is the correct semantic meaning before GW1.
-        # ------------------------------------------------------------
-
-        if preseason:
-            chip_scores = {
-                chip: [
-                    {
-                        "gameweek": gw,
-                        "score": None,
-                        "reason": (
-                            "Preseason — current squad "
-                            "data unavailable"
-                        ),
-                        "is_dgw": gw_meta[gw]["is_dgw"],
-                        "is_bgw": gw_meta[gw]["is_bgw"],
-                        "dgw_teams": gw_meta[gw][
-                            "dgw_team_count"
-                        ],
-                        "fixtures": gw_meta[gw][
-                            "total_fixtures"
-                        ],
-                        "score_available": False,
-                        "reason_code": "PRESEASON",
-                    }
-                    for gw in remaining_gws
-                ]
-                for chip in chips_available
-            }
-
-            return {
-                "from_gw": self.next_gw,
-                "to_gw": max_gw,
-                "remaining_gws": len(remaining_gws),
-
-                "gw_metadata": gw_meta,
-
-                "chip_analysis": {
-                    chip: {
-                        "best_gw": None,
-                        "best_score": None,
-                        "best_reason": (
-                            "Preseason — waiting for "
-                            "GW1 squad data"
-                        ),
-                        "top_3": [],
-                        "all_scores": chip_scores[chip],
-                        "score_available": False,
-                        "reason_code": "PRESEASON",
-                    }
+            # ------------------------------------------------------------
+            # PRESEASON
+            # ------------------------------------------------------------
+            # There is no squad yet, so chip scores cannot be calculated.
+            # IMPORTANT: return BEFORE building gw_meta. Building DGW/BGW
+            # metadata for all 38 GWs defeats the purpose of the lightweight
+            # preseason path.
+            # ------------------------------------------------------------
+            if preseason:
+                chip_scores = {
+                    chip: [
+                        {
+                            "gameweek": gw,
+                            "score": None,
+                            "reason": (
+                                "Preseason — current squad "
+                                "data unavailable"
+                            ),
+                            "is_dgw": False,
+                            "is_bgw": False,
+                            "dgw_teams": 0,
+                            "fixtures": 0,
+                            "score_available": False,
+                            "reason_code": "PRESEASON",
+                        }
+                        for gw in remaining_gws
+                    ]
                     for chip in chips_available
-                },
+                }
 
-                "recommended_sequence": [],
+                return {
+                    "from_gw": self.next_gw,
+                    "to_gw": max_gw,
+                    "remaining_gws": len(remaining_gws),
 
-                "chips_available": chips_available,
+                    "gw_metadata": {},
 
-                # Explicit UI state.
-                "preseason": True,
-                "squad_data_available": False,
-                "score_status": "unavailable",
-                "score_status_reason": (
-                    "Chip scores will be calculated "
-                    "once GW1 squad data is available."
-                ),
-            }
+                    "chip_analysis": {
+                        chip: {
+                            "best_gw": None,
+                            "best_score": None,
+                            "best_reason": (
+                                "Preseason — waiting for "
+                                "GW1 squad data"
+                            ),
+                            "top_3": [],
+                            "all_scores": chip_scores[chip],
+                            "score_available": False,
+                            "reason_code": "PRESEASON",
+                        }
+                        for chip in chips_available
+                    },
+
+                    "recommended_sequence": [],
+                    "chips_available": chips_available,
+                    "preseason": True,
+                    "squad_data_available": False,
+                    "score_status": "unavailable",
+                    "score_status_reason": (
+                        "Chip scores will be calculated "
+                        "once GW1 squad data is available."
+                    ),
+                }
+
+            # ------------------------------------------------------------
+            # Build GW metadata
+            # ------------------------------------------------------------
+            gw_meta = {}
+
+            for gw in remaining_gws:
+                fixes = get_fixtures_for_gameweek(
+                    gw,
+                    self.fixtures
+                )
+
+                dgw = get_dgw_teams(
+                    gw,
+                    self.fixtures
+                )
+
+                bgw = get_bgw_teams(
+                    gw,
+                    self.fixtures,
+                    self.bootstrap
+                )
+
+                gw_meta[gw] = {
+                    "gameweek": gw,
+                    "total_fixtures": len(fixes),
+                    "is_dgw": len(dgw) > 0,
+                    "dgw_team_count": len(dgw),
+
+                    "dgw_teams": {
+                        tid: self.teams.get(
+                            tid,
+                            {}
+                        ).get(
+                            "short_name",
+                            "?"
+                        )
+                        for tid in dgw
+                    },
+
+                    "is_bgw": len(bgw) > 0,
+                    "bgw_team_count": len(bgw),
+
+                    "bgw_teams": {
+                        tid: self.teams.get(
+                            tid,
+                            {}
+                        ).get(
+                            "short_name",
+                            "?"
+                        )
+                        for tid in bgw
+                    },
+                }
 
         # ------------------------------------------------------------
         # Score every chip for every GW

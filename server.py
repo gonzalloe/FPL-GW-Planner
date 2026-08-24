@@ -12,7 +12,6 @@ Scalability features:
 """
 import json
 import sys
-import os
 import time
 import threading
 import hashlib
@@ -291,7 +290,9 @@ def _run_predictions(gw=None):
     try:
         t0 = _t.time()
         print("[ENGINE] Creating PredictionEngine...")
+        _log_gw_planner_memory("BEFORE PredictionEngine")
         engine = PredictionEngine()
+        _log_gw_planner_memory("AFTER PredictionEngine")
         print(
             f"  [TIMING] PredictionEngine init: "
             f"{_t.time() - t0:.1f}s"
@@ -301,13 +302,16 @@ def _run_predictions(gw=None):
 
         t1 = _t.time()
         predictions = engine.predict_all(target_gw)
+        _log_gw_planner_memory("AFTER predict_all")
         print(f"  [TIMING] predict_all: {_t.time()-t1:.1f}s")
 
         engine._baseline_predictions = predictions
 
         t2 = _t.time()
         optimizer = SquadOptimizer(predictions)
+        _log_gw_planner_memory("AFTER SquadOptimizer init")
         squad = optimizer.optimize_squad()
+        _log_gw_planner_memory("AFTER normal squad")
         print(
             f"  [TIMING] optimize_squad (normal): "
             f"{_t.time()-t2:.1f}s"
@@ -315,13 +319,15 @@ def _run_predictions(gw=None):
 
         t3 = _t.time()
         bb_squad = optimizer.optimize_squad(chip="bench_boost")
+        _log_gw_planner_memory("AFTER bench boost")
         print(
             f"  [TIMING] optimize_squad (bench_boost): "
             f"{_t.time()-t3:.1f}s"
         )
-
+        _log_gw_planner_memory("BEFORE ChipAdvisor")
         chip_advisor = ChipAdvisor(predictions, gw_info)
         chip_analysis = chip_advisor.analyze()
+        _log_gw_planner_memory("AFTER ChipAdvisor")
 
         output = {
             "generated_at": datetime.now().isoformat(),
@@ -357,6 +363,7 @@ def _run_predictions(gw=None):
         prediction_file = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
         tmp = prediction_file.with_suffix(".tmp")
 
+        _log_gw_planner_memory("BEFORE JSON serialization")
         tmp.write_text(
             json.dumps(
                 output,
@@ -366,7 +373,7 @@ def _run_predictions(gw=None):
             ),
             encoding="utf-8"
         )
-
+        _log_gw_planner_memory("AFTER JSON serialization")
         os.replace(tmp, prediction_file)
 
         latest = OUTPUT_DIR / "latest_predictions.json"
@@ -403,7 +410,7 @@ def _run_predictions(gw=None):
             upload_prediction_cache(output)
         except Exception as e:
             print(f"[CACHE] Supabase upload failed: {e}")
-
+        _log_gw_planner_memory("AFTER cache upload")
         invalidate_cache()
 
         # Explicitly release large temporary objects before returning.
