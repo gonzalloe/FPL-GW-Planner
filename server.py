@@ -1574,9 +1574,7 @@ def api_gw_planner():
                 })
 
     except Exception as e:
-        # Don't kill the planner just because the optional
-        # preseason check failed. The actual planner can still
-        # determine the state itself.
+        # Don't kill the planner just because the optional preseason check failed. .
         print(
             "[GW PLANNER] Preseason check failed:",
             repr(e)
@@ -1585,52 +1583,40 @@ def api_gw_planner():
     # ─────────────────────────────────────────────
     # PREVENT CONCURRENT HEAVY CALCULATIONS
     # ─────────────────────────────────────────────
-        if not GW_PLANNER_LOCK.acquire(blocking=False):
-            return jsonify({
-                "error": (
-                    "GW Planner is already calculating. "
-                    "Please wait for the current calculation to finish."
-                )
-            }), 429
+    if not GW_PLANNER_LOCK.acquire(blocking=False):
+        return jsonify({
+            "error": (
+                "GW Planner is already calculating. "
+                "Please wait for the current calculation to finish."
+            )
+        }), 429
 
-        if not _prediction_run_lock.acquire(blocking=False):
-            GW_PLANNER_LOCK.release()
-            return jsonify({
-                "error": (
-                    "Prediction refresh is currently running. "
-                    "Please wait for the current calculation to finish."
-                )
-            }), 503
+    if not _prediction_run_lock.acquire(blocking=False):
+        GW_PLANNER_LOCK.release()
+        return jsonify({
+            "error": (
+                "Prediction refresh is currently running. "
+                "Please wait for the current calculation to finish."
+            )
+        }), 503
 
-        # ─────────────────────────────────────────
-        # CREATE PLANNER
-        # ─────────────────────────────────────────
-
+    # ─────────────────────────────────────────
+    # CREATE PLANNER
+    # ─────────────────────────────────────────
+    try:
         from gw_planner import GWPlanner
-
-        planner = GWPlanner(
-            horizon=horizon
-        )
-
+        planner = GWPlanner(horizon=horizon)
         _log_gw_planner_memory("after GWPlanner init")
 
         # ─────────────────────────────────────────
         # RUN PLANNER
         # ─────────────────────────────────────────
 
-        print(
-            "[GW PLANNER] Running plan_from_team_id:",
-            team_id
-        )
+        print("[GW PLANNER] Running plan_from_team_id:", team_id)
 
-        plan = planner.plan_from_team_id(
-            team_id,
-            horizon=horizon
-        )
+        plan = planner.plan_from_team_id(team_id, horizon=horizon)
 
-        _log_gw_planner_memory(
-            "after plan_from_team_id"
-        )
+        _log_gw_planner_memory("after plan_from_team_id")
 
         # ─────────────────────────────────────────
         # DEBUG
@@ -1668,53 +1654,35 @@ def api_gw_planner():
         # SUCCESS
         # ─────────────────────────────────────────
 
-        print(
-            "[GW PLANNER] Calculation complete"
-        )
-
+        print("[GW PLANNER] Calculation complete")
         _log_gw_planner_memory("before response")
-
         return jsonify(plan)
 
     except MemoryError:
-        # Python-level MemoryError.
-        # Render may kill the process before this executes,
-        # but keeping this here is still useful.
-        print(
-            "[GW PLANNER] !!! PYTHON MEMORY ERROR !!!"
-        )
-
+        print("[GW PLANNER] !!! PYTHON MEMORY ERROR !!!")
         _log_gw_planner_memory("MemoryError")
-
         return jsonify({
             "error": (
-                "GW Planner ran out of memory while calculating "
-                "the plan. Try a shorter planning horizon."
+                "GW Planner ran out of memory while "
+                "calculating the plan. "
+                "Try a shorter planning horizon."
             )
         }), 500
 
     except Exception as e:
         import traceback
-
-        print(
-            "[GW PLANNER] Exception:",
-            repr(e)
-        )
-
+        print("[GW PLANNER] Exception:", repr(e))
         traceback.print_exc()
-
-        _log_gw_planner_memory(
-            "exception"
-        )
-
+        _log_gw_planner_memory("exception")
         return jsonify({
             "error": "Internal server error"
         }), 500
 
     finally:
-        _prediction_run_lock.release()
-        GW_PLANNER_LOCK.release()
-
+        if prediction_lock_acquired:
+            _prediction_run_lock.release()
+        if gw_planner_lock_acquired:
+            GW_PLANNER_LOCK.release()
         print("[GW PLANNER] Locks released")
         _log_gw_planner_memory("request finished")
 
