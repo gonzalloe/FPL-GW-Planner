@@ -27,6 +27,8 @@ from data_fetcher import fetch_bootstrap
 from supabase import create_client
 
 _prediction_engine_lock = threading.Lock()
+_prediction_run_lock = threading.Lock()
+GW_PLANNER_LOCK = threading.Lock()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -276,7 +278,6 @@ except Exception as _e:
     print(f"  [STARTUP] apply_overrides_to_config skipped: {_e}")
 
 
-_prediction_run_lock = threading.Lock()
 def _run_predictions(gw=None):
     import time as _t
     from prediction_engine import PredictionEngine
@@ -1583,6 +1584,9 @@ def api_gw_planner():
     # ─────────────────────────────────────────────
     # PREVENT CONCURRENT HEAVY CALCULATIONS
     # ─────────────────────────────────────────────
+    gw_planner_lock_acquired = False
+    prediction_lock_acquired = False
+
     if not GW_PLANNER_LOCK.acquire(blocking=False):
         return jsonify({
             "error": (
@@ -1591,14 +1595,20 @@ def api_gw_planner():
             )
         }), 429
 
+    gw_planner_lock_acquired = True
+
     if not _prediction_run_lock.acquire(blocking=False):
         GW_PLANNER_LOCK.release()
+        gw_planner_lock_acquired = False
+
         return jsonify({
             "error": (
                 "Prediction refresh is currently running. "
                 "Please wait for the current calculation to finish."
             )
         }), 503
+
+    prediction_lock_acquired = True
 
     # ─────────────────────────────────────────
     # CREATE PLANNER
