@@ -143,28 +143,21 @@ class SeasonChipPlanner:
     ):
         """
         Scan all remaining GWs and score each chip.
-
         Preseason:
             If this is GW1 and no current squad exists, chip scores are
             unavailable and returned as None.
-
         Normal season:
             Scores are calculated normally.
         """
 
         if chips_available is None:
             chips_available = ["BB", "TC", "FH", "WC"]
-
             max_gw = 38
-            remaining_gws = list(
-                range(self.next_gw, max_gw + 1)
-            )
-
+            remaining_gws = list(range(self.next_gw, max_gw + 1))
             preseason = (
                 self.next_gw == 1
                 and not current_squad_ids
             )
-
             print(
                 f"[CHIP] Analyze season: GW{self.next_gw}-38 | "
                 f"squad={len(current_squad_ids) if current_squad_ids else 0} | "
@@ -977,95 +970,209 @@ class SeasonChipPlanner:
     # Wildcard
     # ------------------------------------------------------------------
 
-    def _score_wc(
-        self,
-        gw,
-        meta,
-        predictions,
-        current_squad_ids,
-    ):
-        """Score Wildcard for a GW."""
-
+    def _score_wc(self, gw, meta, predictions, current_squad_ids,):
         score = 0
         reasons = []
         details = {}
 
         # ------------------------------------------------------------
-        # Look ahead for a large DGW
+        # Wildcard should NOT be triggered merely because a DGW exists.
+        # A future DGW is a reason to CONSIDER WC, not automatically USE it.
         # ------------------------------------------------------------
 
         next_gw_meta = None
 
         for future_gw in range(
             gw + 1,
-            min(gw + 3, 39)
+            min(gw + 4, 39)
         ):
-
             future_dgw = get_dgw_teams(
                 future_gw,
                 self.fixtures
             )
 
             if len(future_dgw) >= 4:
-
                 next_gw_meta = {
                     "gw": future_gw,
-                    "dgw_count": len(
-                        future_dgw
-                    ),
+                    "dgw_count": len(future_dgw),
                 }
-
                 break
 
-        if next_gw_meta:
+        # ------------------------------------------------------------
+        # Current squad must exist
+        # ------------------------------------------------------------
 
-            score += min(
-                50,
-                next_gw_meta["dgw_count"] * 8
+        if not current_squad_ids:
+            return (
+                None,
+                "Unavailable — no current squad",
+                {
+                    "score_available": False,
+                    "reason_code": "NO_SQUAD",
+                },
             )
+
+        # ------------------------------------------------------------
+        # Future DGW
+        #
+        # Give only a moderate score.
+        # A DGW alone is NOT enough to recommend WC.
+        # ------------------------------------------------------------
+
+        if next_gw_meta:
+            dgw_count = next_gw_meta["dgw_count"]
+
+            # 4-team DGW = useful planning signal
+            # 6+ team DGW = stronger signal
+            score += min(
+                25,
+                max(0, (dgw_count - 3) * 6)
+            )
+
+            details["target_dgw"] = next_gw_meta["gw"]
+            details["target_dgw_count"] = dgw_count
 
             reasons.append(
                 f"GW{next_gw_meta['gw']} has "
-                f"{next_gw_meta['dgw_count']}-team DGW ahead"
+                f"{dgw_count}-team DGW ahead"
             )
-
-            reasons.append(
-                "WC to build DGW squad → BB next week"
-            )
-
-            details[
-                "target_dgw"
-            ] = next_gw_meta["gw"]
 
         # ------------------------------------------------------------
-        # Major fixture swing
+        # Current squad fixture exposure
+        #
+        # Count how many current players have poor fixture coverage
+        # in the upcoming GWs. This is a much better WC signal than
+        # simply detecting a DGW.
+        # ------------------------------------------------------------
+
+        poor_fixture_players = 0
+        blank_players = 0
+
+        check_gws = range(
+            gw,
+            min(gw + 4, 39)
+        )
+
+        for pid in current_squad_ids:
+
+            player = self.engine.players.get(pid)
+
+            if not player:
+                continue
+
+            team_id = player.get("team")
+
+            if not team_id:
+                continue
+
+            fixtures_seen = 0
+            good_fixtures = 0
+
+            for check_gw in check_gws:
+
+                fixtures = get_player_fixtures(
+                    team_id,
+                    check_gw,
+                    self.fixtures
+                )
+
+                if not fixtures:
+                    continue
+
+                fixtures_seen += len(fixtures)
+
+                for fixture in fixtures:
+                    fdr = fixture.get("fdr", 3)
+
+                    if fdr <= 2:
+                        good_fixtures += 1
+
+            if fixtures_seen == 0:
+                blank_players += 1
+
+            elif good_fixtures == 0:
+                poor_fixture_players += 1
+
+        details["blank_players"] = blank_players
+        details["poor_fixture_players"] = poor_fixture_players
+
+        # ------------------------------------------------------------
+        # Squad problem
+        #
+        # Only award meaningful WC points when the actual squad
+        # has structural problems.
+        # ------------------------------------------------------------
+
+        if blank_players >= 4:
+            score += 30
+            reasons.append(
+                f"{blank_players} current squad players "
+                f"have poor fixture coverage"
+            )
+
+        elif blank_players >= 2:
+            score += 15
+            reasons.append(
+                f"{blank_players} current squad players "
+                f"have poor fixture coverage"
+            )
+
+        if poor_fixture_players >= 6:
+            score += 25
+            reasons.append(
+                f"{poor_fixture_players} players lack "
+                f"good fixtures over the next 3 GWs"
+            )
+
+        elif poor_fixture_players >= 4:
+            score += 15
+            reasons.append(
+                f"{poor_fixture_players} players lack "
+                f"good fixtures over the next 3 GWs"
+            )
+
+        # ------------------------------------------------------------
+        # Current GW DGW
+        #
+        # Small bonus only. Do NOT heavily reward WC simply because
+        # the current GW is a DGW.
         # ------------------------------------------------------------
 
         if meta["is_dgw"]:
-
-            score += 10
-
+            score += 5
             reasons.append(
-                "Fixture swing opportunity"
+                "Current GW has a DGW"
             )
 
         # ------------------------------------------------------------
-        # Late-season WC
+        # Late season
         # ------------------------------------------------------------
 
         if gw >= 30:
-
             score += 5
-
             reasons.append(
                 "Late season — WC for final push"
             )
 
-        if not reasons:
+        # ------------------------------------------------------------
+        # Conservative cap
+        #
+        # Without a demonstrated squad problem, WC should never
+        # become an extremely high-confidence recommendation.
+        # ------------------------------------------------------------
 
-            reasons.append(
-                "No strong WC trigger — save for later"
-            )
+        if score < 20:
+            reasons = [
+                "Current squad does not justify a Wildcard yet"
+            ]
+
+        details["recommendation_strength"] = (
+            "strong"
+            if score >= 70
+            else "consider"
+            if score >= 40
+            else "save"
+        )
 
         return (
             score,
