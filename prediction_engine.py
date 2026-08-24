@@ -633,33 +633,6 @@ class PredictionEngine:
 
         # ── Starter quality (DGW-aware, injury-aware) ──
         profile = self.calculate_expected_minutes(p, num_fixtures, teammates_out, out_minutes)
-
-        #debug print
-        DEBUG_PLAYERS = {
-            "Meslier",
-            "Trafford",
-            "Kinsky",
-            "Arrizabalaga",
-            "Raya",
-            "Haaland",
-        }
-        if p.get("web_name") in DEBUG_PLAYERS:
-            print(
-                f"\n========== GKP PREDICTION DEBUG ==========",
-                flush=True,
-            )
-            print(f"Player: {p.get('web_name')}", flush=True)
-            print(f"ID: {p.get('id')}", flush=True)
-            print(f"Position: {p.get('position_id')}", flush=True)
-            print(f"Current minutes: {p.get('minutes')}", flush=True)
-            print(f"Current starts: {p.get('starts')}", flush=True)
-            print(f"Previous minutes: {p.get('previous_minutes')}", flush=True)
-            print(f"Previous starts: {p.get('previous_starts')}", flush=True)
-            print(f"Previous games: {p.get('previous_games')}", flush=True)
-            print(f"Prior role: {self.get_player_role_prior(p)}", flush=True)
-            print(f"Competition: {self._current_team_position_competition(p)}", flush=True)
-            print(f"Profile: {profile}", flush=True)
-            print(f"===========================================\n", flush=True)
             
         p["starter_quality"] = {
             **profile,
@@ -1066,33 +1039,6 @@ class PredictionEngine:
             dc_fixture_mod = 1.0 + (fdr - 3) * 0.06
             expected_dc = base_dc_rate * mins_fraction * dc_fixture_mod
             other_ev += (expected_dc / 3.0) * 1.0 * 0.35
-
-        #debug print
-        DEBUG_GK_PLAYERS = {
-            "Meslier",
-            "Trafford",
-            "Kinsky",
-            "Arrizabalaga",
-            "Raya",
-            "Haaland",
-        }
-        if pos == 1 and p.get("web_name") in DEBUG_GK_PLAYERS:
-            print(
-                f"""
-        [GKP EV DEBUG] {p.get('web_name')}
-        xmins={xmins:.2f}
-        p_plays_60={p_plays_60:.3f}
-        appearance={appearance_pts:.3f}
-        goal={poisson_ev_goals(effective_xg, goal_pts):.3f}
-        assist={poisson_ev_assists(effective_xa):.3f}
-        clean_sheet={blended_cs * cs_pts * p_plays_60:.3f}
-        goals_conceded={gc_ev * p_plays_60:.3f}
-        bonus={bonus_ev:.3f}
-        saves={save_points_ev:.3f}
-        TOTAL_OTHER={other_ev:.3f}
-        """,
-                flush=True,
-            )
         
         return {"appearance": appearance_pts, "other": max(other_ev, 0.0)}
 
@@ -1408,28 +1354,6 @@ class PredictionEngine:
                 "rank": None,
                 "has_evidence": False,
             }
-
-        # debug print
-        if pos_id == 1 and p.get("web_name") in {
-            "Meslier",
-            "Trafford",
-            "Kinsky",
-            "Raya",
-            "Kelleher",
-            "Donnarumma",
-        }:
-            print(
-                f"\n========== GKP COMPETITION: {p.get('web_name')} =========="
-            )
-            for candidate in candidates:
-                print(
-                    f"candidate="
-                    f"{candidate['player_id']} "
-                    f"score={candidate['score']:.3f} "
-                    f"starts={candidate['current_starts']} "
-                    f"minutes={candidate['current_minutes']}"
-                )
-            print("====================================================")
         
         # ============================================================
         # FINAL COMPETITION SCORE
@@ -1934,65 +1858,7 @@ class PredictionEngine:
 
             dgw_both_prob = None
             dgw_effective = 1.0
-
-        # ============================================================
-        # 14. DEBUG — ONLY IMPORTANT PLAYERS
-        # ============================================================
-
-        if debug_player:
-
-            current_weight = min(
-                current_minutes / 900.0,
-                1.0,
-            )
-
-            print(
-                f"\n========== ROLE DEBUG: {p.get('web_name')} =========="
-                f"\nis_new_transfer={is_new_transfer}"
-                f"\nis_promoted_team={is_promoted_team}"
-                f"\nhas_previous_role={has_previous_role}"
-                f"\nnew_environment={is_new_environment}"
-                f"\ncurrent_team_id={p.get('team')}"
-                f"\nprevious_team_id={p.get('_previous_team_id')}"
-                f"\nprior_source={prior.get('source')}"
-                f"\nprior_season={prior.get('season')}"
-                f"\ntotal_minutes={total_minutes}"
-                f"\ntotal_starts={starts}"
-                f"\ncurrent_minutes={current_minutes}"
-                f"\ncurrent_starts={current_starts}"
-                f"\ngws_played={gws_played}"
-                f"\nprior_start_rate={prior_start_rate:.3f}"
-                f"\nprior_avg_mins={prior_avg_mins:.1f}"
-                f"\nrecent_games={recent_games}"
-                f"\nrecent_start_rate={recent_start_rate}"
-                f"\nrecent_avg_mins={recent_avg_mins}"
-                f"\ncurrent_start_rate={current_start_rate}"
-                f"\ncurrent_avg_mins={current_avg_mins}"
-                f"\nobserved_start_rate={observed_start_rate}"
-                f"\nobserved_avg_mins={observed_avg_mins}"
-                f"\ncompetition_score={competition_score}"
-                f"\ncompetition_rank={competition_rank}"
-                f"\navailable_teammates={available_teammates}"
-                f"\nhas_competition_evidence={has_competition_evidence}"
-                f"\ncurrent_weight={current_weight:.3f}"
-                f"\nstart_rate={start_rate:.3f}"
-                f"\navailability={availability:.3f}"
-                f"\np_start={p_start:.3f}"
-                f"\navg_mins={avg_mins:.1f}"
-                f"\np_plays_60={p_plays_60:.3f}"
-                f"\nmins_volatility={mins_volatility:.3f}"
-                f"\nxmins={xmins:.1f}"
-                f"\nrotation_risk={rotation_risk:.3f}"
-                f"\ndgw_both_prob={dgw_both_prob}"
-                f"\ndgw_effective={dgw_effective:.2f}"
-                f"\n==============================================",
-                flush=True,
-            )
-
-        # ============================================================
-        # 15. RETURN
-        # ============================================================
-
+            
         return {
             "p_start": round(p_start, 3),
             "p_plays_60": round(p_plays_60, 3),
