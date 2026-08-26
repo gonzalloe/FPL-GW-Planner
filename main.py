@@ -87,7 +87,7 @@ def main():
 
     # ── Step 5: Chip Strategy ──
     print("\n[5/5] Analyzing chip strategy...")
-    chip_advisor = ChipAdvisor(predictions, gw_info)
+    chip_advisor = ChipAdvisor(predictions, gw_info,)
     chip_analysis = chip_advisor.analyze()
 
     print(f"\n  CHIP RECOMMENDATIONS (GW{gw})")
