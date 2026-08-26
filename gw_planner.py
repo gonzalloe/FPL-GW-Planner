@@ -237,14 +237,14 @@ class GWPlanner:
         squad = list(current_squad_ids)
         rolling_bank = bank
         rolling_ft = free_transfers
-        remaining_chips = set(chips_available)
+        remaining_chips_by_half = {1: set(chips_available), 2: set(chips_available)}
 
         gw_plans = []
-
         for gw in range(self.next_gw, self.next_gw + self.horizon):
             if gw > 38:
                 break
-
+            chip_half = 1 if gw <= 19 else 2
+            remaining_chips = remaining_chips_by_half[chip_half]
             pred_map = self._get_pred_map(gw)
             gw_info = self._gw_infos.get(gw, {})
 
@@ -358,8 +358,11 @@ class GWPlanner:
             # If chip used, update remaining chips
             if chip_rec and chip_rec.get("use_chip"):
                 chip_code = chip_rec["chip_code"]
-                if chip_code in remaining_chips:
-                    remaining_chips.discard(chip_code)
+                # Consume the chip only from the current half.
+                current_half_chips = remaining_chips_by_half[chip_half]
+
+                if chip_code in current_half_chips:
+                    current_half_chips.discard(chip_code)
                     if chip_code == "WC":
                         rolling_ft = 1  # WC resets FT to 1
                     elif chip_code == "FH":
@@ -615,14 +618,34 @@ class GWPlanner:
         # Wildcard
         if "WC" in remaining_chips:
             # WC is good when squad needs major overhaul
-            low_xpts = sum(1 for p in squad_enriched if p["predicted_points"] < 3)
-            flagged = sum(1 for p in squad_enriched if p.get("status") not in ("a", None))
+            low_xpts = sum(
+                1
+                for p in squad_enriched
+                if p["predicted_points"] < 3
+            )
+
+            flagged = sum(
+                1
+                for p in squad_enriched
+                if p.get("status") not in ("a", None)
+            )
+
             fixture_swings = self._count_fixture_swings(squad_enriched, gw)
-            wc_score = min(100, low_xpts * 8 + flagged * 10 + fixture_swings * 5)
+
+            wc_score = min(
+                100,
+                low_xpts * 5
+                + flagged * 8
+                + fixture_swings * 3
+            )
+
             scores["WC"] = {
                 "score": wc_score,
-                "reason": f"{low_xpts} low-xPts players, {flagged} flagged. "
-                          f"Fixture swing score: {fixture_swings}.",
+                "reason": (
+                    f"{low_xpts} low-xPts players, "
+                    f"{flagged} flagged. "
+                    f"Fixture swing score: {fixture_swings}."
+                ),
             }
 
         if not scores:
@@ -635,7 +658,7 @@ class GWPlanner:
         return {
             "chip_code": best_chip,
             "score": best_score,
-            "use_chip": best_score >= 70,  # Only recommend if score >= 70
+            "use_chip": (best_score >= 70 and best_chip in {"BB", "TC", "FH", "WC"}),
             "reason": scores[best_chip]["reason"],
             "all_scores": {
                 code: {"score": s["score"], "reason": s["reason"]}
@@ -706,31 +729,28 @@ class GWPlanner:
         # ------------------------------------------------------------
 
         chip_map = {"wildcard": "WC", "freehit": "FH", "bboost": "BB", "3xc": "TC"}
-        chip_usage = {
-            "H1": {"BB": False, "TC": False, "FH": False, "WC": False},
-            "H2": {"BB": False, "TC": False, "FH": False, "WC": False}
-        }
+        chip_usage = {1: set(), 2: set()}
+
         for chip in team_data.get("chips", []):
             name = chip.get("name")
-            event = chip.get("event")
             code = chip_map.get(name)
-            if code is None or event is None:
+
+            if not code:
                 continue
 
-            try:
-                event = int(event)
-            except (TypeError, ValueError):
+            chip_gw = chip.get("event")
+
+            if chip_gw is None:
                 continue
 
-            half = "H1" if event <= 19 else "H2"
-            chip_usage[half][code] = True
+            chip_half = 1 if int(chip_gw) <= 19 else 2
+            chip_usage[chip_half].add(code)
 
-        current_half = "H1" if self.current_gw <= 19 else "H2"
-
+        current_half = 1 if self.next_gw <= 19 else 2
         chips_available = [
             code
-            for code, used in chip_usage[current_half].items()
-            if not used
+            for code in ["WC", "FH", "BB", "TC"]
+            if code not in chip_usage[current_half]
         ]
         print(
             f"[CHIPS] Current GW={self.current_gw} "
