@@ -703,30 +703,16 @@ class SeasonChipPlanner:
         best_fixture_count = 0
 
         for player in squad_candidates:
-
             team_id = self.engine.players.get(
                 player["player_id"],
                 {}
             ).get("team")
-
-            fixtures = get_player_fixtures(
-                team_id,
-                gw,
-                self.fixtures
-            )
-
+            fixtures = get_player_fixtures(team_id, gw, self.fixtures)
             fixture_count = len(fixtures)
-
-            base_xp = float(
-                player.get(
-                    "predicted_points",
-                    0.0
-                ) or 0.0
-            )
+            base_xp = float(player.get("predicted_points", 0.0) or 0.0)
 
             # Fixture adjustment
             if fixtures:
-
                 avg_fdr = (
                     sum(
                         float(f.get("fdr", 3) or 3)
@@ -735,14 +721,8 @@ class SeasonChipPlanner:
                     / len(fixtures)
                 )
 
-                fixture_multiplier = (
-                    1.0
-                    + ((3.0 - avg_fdr) * 0.08)
-                )
-
-                adjusted_xp = (
-                    base_xp * fixture_multiplier
-                )
+                fixture_multiplier = (1.0 + ((3.0 - avg_fdr) * 0.08))
+                adjusted_xp = (base_xp * fixture_multiplier)
 
             else:
                 adjusted_xp = 0.0
@@ -767,20 +747,10 @@ class SeasonChipPlanner:
             )
 
         details["best_captain"] = best["name"]
-        details["captain_xpts"] = round(
-            best_xp,
-            1
-        )
-        details["captain_fixture_count"] = (
-            best_fixture_count
-        )
+        details["captain_xpts"] = round(best_xp, 1)
+        details["captain_fixture_count"] = (best_fixture_count)
 
-        # ------------------------------------------------------------
         # Base captain quality
-        #
-        # More granular than the old 5/8/12/20 buckets.
-        # ------------------------------------------------------------
-
         if best_xp >= 12:
             score += 45
         elif best_xp >= 10:
@@ -804,19 +774,12 @@ class SeasonChipPlanner:
         if best_fixture_count >= 2:
 
             score += 35
-
-            reasons.append(
-                f"DGW captain ({best_fixture_count} fixtures)"
-            )
+            reasons.append(f"DGW captain ({best_fixture_count} fixtures)")
 
         # Large DGW
         if meta["is_dgw"]:
 
-            dgw_count = meta.get(
-                "dgw_team_count",
-                0
-            )
-
+            dgw_count = meta.get("dgw_team_count",0)
             details["dgw_team_count"] = dgw_count
 
             if dgw_count >= 6:
@@ -838,10 +801,7 @@ class SeasonChipPlanner:
                 )
 
         # Cap score.
-        score = min(
-            100,
-            max(0, score)
-        )
+        score = min(100, max(0, score))
 
         return (
             score,

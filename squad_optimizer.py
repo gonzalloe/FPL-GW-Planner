@@ -299,139 +299,193 @@ class SquadOptimizer:
 
 
 class ChipAdvisor:
-    """Analyzes the current gameweek and squad to recommend chip usage."""
+    """Thin adapter around SeasonChipPlanner for current-GW scoring."""
 
-    def __init__(self, predictions: list[dict], gw_info: dict):
+    def __init__(self, predictions: list[dict], gw_info: dict, engine=None,):
         self.predictions = predictions
         self.gw_info = gw_info
+        self.engine = engine
 
-    def analyze(self, current_squad_ids: list[int] | None = None,
-                chips_available: list[str] | None = None) -> dict:
+    def analyze(self, current_squad_ids: list[int] | None = None,chips_available: list[str] | None = None) -> dict:
+        """Score the current GW using SeasonChipPlanner."""
+
+        from chip_planner import SeasonChipPlanner
+
         if chips_available is None:
-            chips_available = ["wildcard", "free_hit", "bench_boost", "triple_captain"]
+            chips_available = [
+                "wildcard",
+                "free_hit",
+                "bench_boost",
+                "triple_captain",
+            ]
 
-        is_dgw = self.gw_info.get("is_dgw", False)
-        dgw_teams = self.gw_info.get("dgw_teams", {})
-        total_fixtures = self.gw_info.get("total_fixtures", 10)
-        gw = self.gw_info.get("gameweek", 0)
+        if self.engine is None:
+            raise RuntimeError(
+                "ChipAdvisor requires an existing PredictionEngine."
+            )
+
+        planner = SeasonChipPlanner(
+            engine=self.engine
+        )
+
+        gw = self.gw_info.get(
+            "gameweek",
+            0,
+        )
+
+        meta = {
+            "is_dgw": self.gw_info.get(
+                "is_dgw",
+                False,
+            ),
+            "dgw_team_count": len(
+                self.gw_info.get(
+                    "dgw_teams",
+                    {},
+                )
+            ),
+            "is_bgw": self.gw_info.get(
+                "is_bgw",
+                False,
+            ),
+            "bgw_team_count": len(
+                self.gw_info.get(
+                    "bgw_teams",
+                    {},
+                )
+            ),
+            "total_fixtures": self.gw_info.get(
+                "total_fixtures",
+                10,
+            ),
+        }
+
+        # Make sure the planner's engine sees the same
+        # current-GW predictions.
+        self.engine._baseline_predictions = self.predictions
+
+        # Keep planner-level copy synchronized too.
+        planner._baseline_predictions = self.predictions
+
+        chip_definitions = [
+            (
+                "bench_boost",
+                "BB",
+                "Bench Boost",
+                "_score_bb",
+            ),
+            (
+                "triple_captain",
+                "TC",
+                "Triple Captain",
+                "_score_tc",
+            ),
+            (
+                "free_hit",
+                "FH",
+                "Free Hit",
+                "_score_fh",
+            ),
+            (
+                "wildcard",
+                "WC",
+                "Wildcard",
+                "_score_wc",
+            ),
+        ]
 
         recommendations = []
 
-        # ── Bench Boost ──
-        if "bench_boost" in chips_available and is_dgw:
-            optimizer = SquadOptimizer(self.predictions)
-            bb_optimizer.optimize_squad(chip="bench_boost")
-            bench_xp = sum(p["predicted_points"] for p in bb_squad["bench"])
-            bench_dgw = sum(1 for p in bb_squad["bench"] if p.get("is_dgw"))
+        for (
+            chip_key,
+            code,
+            name,
+            method_name,
+        ) in chip_definitions:
 
-            score = 0
-            reasons = []
-            if bench_xp >= CHIP_THRESHOLDS["bench_boost_min_bench_xp"]:
-                score += 40
-                reasons.append(f"Strong bench ({bench_xp:.1f} xPts)")
-            if bench_dgw >= 3:
-                score += 30
-                reasons.append(f"{bench_dgw}/4 bench players have DGW")
-            if is_dgw and len(dgw_teams) >= 4:
-                score += 20
-                reasons.append(f"Big DGW ({len(dgw_teams)} teams with double fixtures)")
-            if total_fixtures >= 12:
-                score += 10
-                reasons.append(f"{total_fixtures} total fixtures this GW")
+            if chip_key not in chips_available:
+                continue
 
-            recommendations.append({
-                "chip": "bench_boost", "name": "Bench Boost", "code": "BB",
-                "score": score, "reasons": reasons,
-                "bench_xp": round(bench_xp, 1),
-                "predicted_total": bb_squad["predicted_total_points"],
-            })
+            score_fn = getattr(
+                planner,
+                method_name,
+            )
 
-        # ── Triple Captain ──
-        if "triple_captain" in chips_available:
-            top_player = self.predictions[0] if self.predictions else None
-            if top_player:
-                score = 0
-                reasons = []
-                xp = top_player["predicted_points"]
-                if xp >= CHIP_THRESHOLDS["triple_captain_min_xp"]:
-                    score += 30
-                    reasons.append(f"{top_player['name']} has {xp:.1f} xPts")
-                if top_player.get("is_dgw"):
-                    score += 35
-                    reasons.append("Captain plays twice (DGW)")
-                if top_player.get("form", 0) >= 7:
-                    score += 15
-                    reasons.append(f"Excellent form ({top_player['form']:.1f})")
-                if top_player.get("starter_quality", {}).get("tier") == "nailed":
-                    score += 10
-                    reasons.append("Nailed starter")
-                fixtures = top_player.get("fixtures", [])
-                easy = sum(1 for f in fixtures if f.get("fdr", 3) <= 2)
-                if easy >= 1:
-                    score += 10
-                    reasons.append(f"{easy} easy fixture(s)")
+            if method_name == "_score_bb":
 
-                recommendations.append({
-                    "chip": "triple_captain", "name": "Triple Captain", "code": "TC",
-                    "score": score, "reasons": reasons,
-                    "captain": top_player["name"],
-                    "captain_xp": round(xp, 1),
-                    "extra_points": round(xp, 1),
-                })
+                score, reason, details = score_fn(
+                    gw,
+                    meta,
+                    self.predictions,
+                    self.gw_info,
+                    current_squad_ids,
+                )
 
-        # ── Free Hit ──
-        if "free_hit" in chips_available:
-            score = 0
-            reasons = []
-            if current_squad_ids:
-                pred_map = {p["player_id"]: p for p in self.predictions}
-                blanking = sum(1 for sid in current_squad_ids
-                               if pred_map.get(sid, {}).get("num_fixtures", 0) == 0)
-                dgw_in_squad = sum(1 for sid in current_squad_ids
-                                    if pred_map.get(sid, {}).get("is_dgw"))
-                if blanking >= CHIP_THRESHOLDS["free_hit_blank_threshold"]:
-                    score += 50
-                    reasons.append(f"{blanking} players blanking this GW")
-                if is_dgw and dgw_in_squad < 4:
-                    score += 25
-                    reasons.append(f"Only {dgw_in_squad} DGW players in your squad")
             else:
-                if is_dgw and len(dgw_teams) >= 4:
-                    score += 20
-                    reasons.append("Large DGW - FH can maximize DGW exposure")
-            if not is_dgw and total_fixtures < 8:
-                score += 30
-                reasons.append(f"Only {total_fixtures} fixtures (BGW)")
 
-            recommendations.append({
-                "chip": "free_hit", "name": "Free Hit", "code": "FH",
-                "score": score, "reasons": reasons,
-            })
+                score, reason, details = score_fn(
+                    gw,
+                    meta,
+                    self.predictions,
+                    current_squad_ids,
+                )
 
-        # ── Wildcard ──
-        if "wildcard" in chips_available:
-            score = 0
-            reasons = []
-            if is_dgw and len(dgw_teams) >= 5:
-                score += 15
-                reasons.append("Large DGW - could WC to build optimal DGW squad")
-            reasons.append("Use WC when your squad needs a complete overhaul")
-            reasons.append("Best used 1 GW before a big DGW (prep + BB next week)")
-            recommendations.append({
-                "chip": "wildcard", "name": "Wildcard", "code": "WC",
-                "score": score, "reasons": reasons,
-            })
+            recommendation = {
+                "chip": chip_key,
+                "name": name,
+                "code": code,
+                "score": (
+                    score
+                    if score is not None
+                    else 0
+                ),
+                "reasons": (
+                    [reason]
+                    if reason
+                    else []
+                ),
+                "score_available": (
+                    score is not None
+                ),
+            }
 
-        recommendations.sort(key=lambda x: x["score"], reverse=True)
-        best = recommendations[0] if recommendations else None
+            if details:
+                recommendation.update(
+                    details
+                )
+
+            recommendations.append(
+                recommendation
+            )
+
+        recommendations.sort(
+            key=lambda x: x["score"],
+            reverse=True,
+        )
+
+        best = next(
+            (
+                r
+                for r in recommendations
+                if r.get(
+                    "score_available",
+                    True,
+                )
+            ),
+            None,
+        )
 
         return {
-            "gameweek": gw, "is_dgw": is_dgw,
-            "dgw_team_count": len(dgw_teams),
-            "total_fixtures": total_fixtures,
+            "gameweek": gw,
+            "is_dgw": meta["is_dgw"],
+            "dgw_team_count": meta["dgw_team_count"],
+            "total_fixtures": meta["total_fixtures"],
             "recommendations": recommendations,
             "best_chip": best,
-            "save_chips": not is_dgw and total_fixtures >= 8,
+            "save_chips": (
+                not meta["is_dgw"]
+                and meta["total_fixtures"] >= 8
+            ),
         }
 
 

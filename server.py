@@ -326,7 +326,7 @@ def _run_predictions(gw=None):
             f"{_t.time()-t3:.1f}s"
         )
         _log_gw_planner_memory("BEFORE ChipAdvisor")
-        chip_advisor = ChipAdvisor(predictions, gw_info)
+        chip_advisor = ChipAdvisor(predictions, gw_info, engine=self)
         chip_analysis = chip_advisor.analyze()
         _log_gw_planner_memory("AFTER ChipAdvisor")
 
