@@ -91,6 +91,7 @@ class SeasonChipPlanner:
             self._baseline_predictions = (
                 baseline_predictions or []
             )
+            self._target_prediction_cache = {}
 
     # ------------------------------------------------------------------
     # Fixture helper
@@ -133,9 +134,17 @@ class SeasonChipPlanner:
 
     def _get_target_predictions(self, gw):
         """
-        Get real player predictions for a specific target GW.
+        Get target-GW player projections.
 
-        Cached per GW so each player/GW prediction is only calculated once.
+        Full PredictionEngine mode:
+            Uses engine.predict_player(pid, gw).
+
+        Lightweight mode:
+            Uses cached baseline predictions and projects them onto
+            the target GW using that GW's fixtures/FDR.
+
+        This avoids constructing a second expensive PredictionEngine
+        during /api/season-chips.
         """
 
         cache = getattr(
@@ -147,30 +156,211 @@ class SeasonChipPlanner:
         if gw in cache:
             return cache[gw]
 
+        # ============================================================
+        # FULL ENGINE MODE
+        # ============================================================
+
+        if hasattr(self.engine, "predict_player"):
+            results = []
+
+            for pid in self.engine.players:
+                try:
+                    pred = self.engine.predict_player(
+                        pid,
+                        gw,
+                    )
+
+                    if pred and not pred.get("error"):
+                        results.append(pred)
+
+                except Exception as exc:
+                    print(
+                        f"[CHIP] Target prediction failed "
+                        f"GW{gw} player={pid}: {exc}"
+                    )
+
+            cache[gw] = results
+            self._target_prediction_cache = cache
+
+            print(
+                f"[CHIP] Target predictions GW{gw}: "
+                f"{len(results)} players"
+            )
+
+            return results
+
+        # ============================================================
+        # LIGHTWEIGHT MODE
+        # ============================================================
+
+        baseline = getattr(
+            self,
+            "_baseline_predictions",
+            []
+        )
+
+        if not baseline:
+            cache[gw] = []
+            self._target_prediction_cache = cache
+
+            print(
+                f"[CHIP] No baseline predictions available for GW{gw}"
+            )
+
+            return []
+
         results = []
 
-        for pid in self.engine.players:
+        for base in baseline:
             try:
-                pred = self.engine.predict_player(
-                    pid,
+                pid = base.get("player_id")
+
+                if pid is None:
+                    continue
+
+                player = self.engine.players.get(pid)
+
+                if not player:
+                    continue
+
+                team_id = player.get("team")
+
+                if not team_id:
+                    continue
+
+                fixtures = get_player_fixtures(
+                    team_id,
                     gw,
+                    self.fixtures,
                 )
 
-                if pred and not pred.get("error"):
-                    results.append(pred)
+                # ----------------------------------------------------
+                # BGW
+                # ----------------------------------------------------
+
+                if not fixtures:
+                    projected = dict(base)
+
+                    projected["predicted_points"] = 0.0
+                    projected["raw_xpts"] = 0.0
+                    projected["num_fixtures"] = 0
+                    projected["is_dgw"] = False
+                    projected["fixtures"] = []
+
+                    results.append(projected)
+                    continue
+
+                # ----------------------------------------------------
+                # Project each fixture
+                # ----------------------------------------------------
+
+                base_xpts = float(
+                    base.get(
+                        "raw_xpts",
+                        base.get("predicted_points", 0.0)
+                    ) or 0.0
+                )
+
+                # Avoid negative/invalid projections.
+                base_xpts = max(base_xpts, 0.0)
+
+                fixture_values = []
+
+                for fixture in fixtures:
+                    fdr = int(
+                        fixture.get("fdr", 3) or 3
+                    )
+
+                    is_home = bool(
+                        fixture.get("is_home", False)
+                    )
+
+                    # Position-aware FDR modifier.
+                    position_id = int(
+                        base.get(
+                            "position_id",
+                            player.get(
+                                "position_id",
+                                3
+                            )
+                        ) or 3
+                    )
+
+                    try:
+                        modifier = (
+                            self._position_fdr_modifier(
+                                position_id,
+                                fdr,
+                                is_home,
+                            )
+                        )
+                    except Exception:
+                        modifier = 1.0
+
+                    # The baseline prediction represents roughly one
+                    # normal fixture. Use a conservative share for
+                    # each target fixture.
+                    fixture_xpts = (
+                        base_xpts * modifier
+                    )
+
+                    fixture_values.append(
+                        {
+                            "fixture": fixture,
+                            "xpts": fixture_xpts,
+                        }
+                    )
+
+                projected_xpts = sum(
+                    item["xpts"]
+                    for item in fixture_values
+                )
+
+                projected = dict(base)
+
+                projected["predicted_points"] = round(
+                    projected_xpts,
+                    3,
+                )
+
+                projected["raw_xpts"] = round(
+                    projected_xpts,
+                    3,
+                )
+
+                projected["num_fixtures"] = len(
+                    fixtures
+                )
+
+                projected["is_dgw"] = (
+                    len(fixtures) >= 2
+                )
+
+                projected["fixtures"] = fixtures
+
+                results.append(projected)
 
             except Exception as exc:
                 print(
-                    f"[CHIP] Target prediction failed "
-                    f"GW{gw} player={pid}: {exc}"
+                    f"[CHIP] Lightweight projection failed "
+                    f"GW{gw} player={base.get('player_id')}: "
+                    f"{exc}"
                 )
 
         cache[gw] = results
         self._target_prediction_cache = cache
 
         print(
-            f"[CHIP] Target predictions GW{gw}: "
+            f"[CHIP] Lightweight target projections GW{gw}: "
             f"{len(results)} players"
+        )
+        print(
+            "[CHIP DEBUG] GW",
+            gw,
+            "engine_has_predict_player=",
+            hasattr(self.engine, "predict_player"),
+            "baseline=",
+            len(getattr(self, "_baseline_predictions", [])),
         )
 
         return results
