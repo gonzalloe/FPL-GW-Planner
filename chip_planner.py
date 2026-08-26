@@ -642,47 +642,6 @@ class SeasonChipPlanner:
         reasons = []
         details = {}
 
-        # ------------------------------------------------------------
-        # DGW
-        # ------------------------------------------------------------
-
-        if meta["is_dgw"]:
-
-            dgw_count = meta[
-                "dgw_team_count"
-            ]
-
-            score += min(
-                45,
-                dgw_count * 9
-            )
-
-            reasons.append(
-                f"DGW: {dgw_count} teams"
-            )
-
-            if dgw_count >= 6:
-                score += 20
-                reasons.append(
-                    "Large DGW"
-                )
-
-            elif dgw_count >= 4:
-                score += 10
-                reasons.append(
-                    "Strong DGW"
-                )
-
-            return (
-                score,
-                " · ".join(reasons),
-                details,
-            )
-
-        # ------------------------------------------------------------
-        # Normal GW requires squad
-        # ------------------------------------------------------------
-
         if not current_squad_ids:
             return (
                 None,
@@ -712,6 +671,7 @@ class SeasonChipPlanner:
         baseline_by_id = {
             p["player_id"]: p
             for p in candidates
+            if p.get("player_id") is not None
         }
 
         squad_candidates = [
@@ -726,14 +686,21 @@ class SeasonChipPlanner:
                 "Unavailable — no captain candidates",
                 {
                     "score_available": False,
-                    "reason_code": (
-                        "NO_CAPTAIN_CANDIDATES"
-                    ),
+                    "reason_code": "NO_CAPTAIN_CANDIDATES",
                 },
             )
 
+        # ------------------------------------------------------------
+        # Find the best captain for THIS GW.
+        #
+        # Important:
+        # baseline predictions are current-GW predictions, so fixture
+        # difficulty and DGW status are applied per target GW.
+        # ------------------------------------------------------------
+
         best = None
-        best_xp = -1
+        best_xp = -1.0
+        best_fixture_count = 0
 
         for player in squad_candidates:
 
@@ -748,36 +715,48 @@ class SeasonChipPlanner:
                 self.fixtures
             )
 
-            if not fixtures:
-                adjusted_xp = player.get(
+            fixture_count = len(fixtures)
+
+            base_xp = float(
+                player.get(
                     "predicted_points",
                     0.0
+                ) or 0.0
+            )
+
+            # Fixture adjustment
+            if fixtures:
+
+                avg_fdr = (
+                    sum(
+                        float(f.get("fdr", 3) or 3)
+                        for f in fixtures
+                    )
+                    / len(fixtures)
                 )
 
-            else:
-                avg_fdr = sum(
-                    f.get("fdr", 3)
-                    for f in fixtures
-                ) / len(fixtures)
-
-                multiplier = (
+                fixture_multiplier = (
                     1.0
-                    + ((3.0 - avg_fdr) * 0.05)
+                    + ((3.0 - avg_fdr) * 0.08)
                 )
 
                 adjusted_xp = (
-                    player.get(
-                        "predicted_points",
-                        0.0
-                    )
-                    * multiplier
+                    base_xp * fixture_multiplier
                 )
+
+            else:
+                adjusted_xp = 0.0
+
+            # DGW bonus
+            if fixture_count >= 2:
+                adjusted_xp *= 1.85
 
             if adjusted_xp > best_xp:
                 best_xp = adjusted_xp
                 best = player
+                best_fixture_count = fixture_count
 
-        if best is None:
+        if best is None or best_xp <= 0:
             return (
                 None,
                 "Unavailable — no captain candidate",
@@ -792,21 +771,76 @@ class SeasonChipPlanner:
             best_xp,
             1
         )
+        details["captain_fixture_count"] = (
+            best_fixture_count
+        )
 
-        if best_xp >= 15:
-            score += 20
+        # ------------------------------------------------------------
+        # Base captain quality
+        #
+        # More granular than the old 5/8/12/20 buckets.
+        # ------------------------------------------------------------
 
-        elif best_xp >= 12:
-            score += 12
-
+        if best_xp >= 12:
+            score += 45
         elif best_xp >= 10:
-            score += 8
-
+            score += 35
+        elif best_xp >= 8:
+            score += 25
+        elif best_xp >= 7:
+            score += 18
+        elif best_xp >= 6:
+            score += 12
+        elif best_xp >= 5:
+            score += 7
         else:
-            score += 5
+            score += 3
 
         reasons.append(
             f"{best['name']} ~{best_xp:.1f} xPts"
+        )
+
+        # DGW value
+        if best_fixture_count >= 2:
+
+            score += 35
+
+            reasons.append(
+                f"DGW captain ({best_fixture_count} fixtures)"
+            )
+
+        # Large DGW
+        if meta["is_dgw"]:
+
+            dgw_count = meta.get(
+                "dgw_team_count",
+                0
+            )
+
+            details["dgw_team_count"] = dgw_count
+
+            if dgw_count >= 6:
+                score += 20
+                reasons.append(
+                    f"Large DGW: {dgw_count} teams"
+                )
+
+            elif dgw_count >= 4:
+                score += 12
+                reasons.append(
+                    f"Strong DGW: {dgw_count} teams"
+                )
+
+            elif dgw_count >= 2:
+                score += 6
+                reasons.append(
+                    f"DGW: {dgw_count} teams"
+                )
+
+        # Cap score.
+        score = min(
+            100,
+            max(0, score)
         )
 
         return (
