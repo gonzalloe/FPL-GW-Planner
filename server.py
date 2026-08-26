@@ -2155,36 +2155,55 @@ def api_season_chips():
                         2 if cgw >= HALF_CUTOFF else 1
                     )
 
-                    used = set()
+                    # ============================================================
+                    # CHIP AVAILABILITY — 2026/27
+                    #
+                    # There are TWO copies of every chip:
+                    #   H1 = GW1-19
+                    #   H2 = GW20-38
+                    #
+                    # A chip used in H1 only consumes the H1 copy.
+                    # A chip used in H2 only consumes the H2 copy.
+                    # ============================================================
+
+                    ALL_CHIPS = ["BB", "TC", "FH", "WC"]
+
+                    chip_usage = {
+                        1: {code: False for code in ALL_CHIPS},
+                        2: {code: False for code in ALL_CHIPS},
+                    }
 
                     for chip in chips_used_list:
                         code = cmap.get(
                             chip.get("name", ""),
-                            chip.get(
-                                "name",
-                                ""
-                            ).upper()
+                            chip.get("name", "").upper(),
                         )
 
-                        chip_gw = chip.get("event", 0)
+                        if code not in ALL_CHIPS:
+                            continue
+
+                        chip_gw = chip.get("event")
+
+                        if chip_gw is None:
+                            continue
+
+                        try:
+                            chip_gw = int(chip_gw)
+                        except (TypeError, ValueError):
+                            continue
+
                         chip_half = (
                             2
                             if chip_gw >= HALF_CUTOFF
                             else 1
                         )
 
-                        if chip_half == current_half:
-                            used.add(code)
+                        chip_usage[chip_half][code] = True
 
                     chips_available = [
                         code
-                        for code in [
-                            "BB",
-                            "TC",
-                            "FH",
-                            "WC",
-                        ]
-                        if code not in used
+                        for code in ALL_CHIPS
+                        if not chip_usage[current_half][code]
                     ]
 
             except Exception:
@@ -2285,7 +2304,34 @@ def api_season_chips():
                         "GW1 squad data is available."
                     ),
                 }
-
+                result["chip_usage_by_half"] = chip_usage
+                result["chips_available_by_half"] = {
+                    1: [
+                        code
+                        for code in ALL_CHIPS
+                        if not chip_usage[1][code]
+                    ],
+                    2: [
+                        code
+                        for code in ALL_CHIPS
+                        if not chip_usage[2][code]
+                    ],
+                }
+                result["chip_inventory"] = {
+                    "total": 8,
+                    "remaining": sum(
+                        1
+                        for half in (1, 2)
+                        for code in ALL_CHIPS
+                        if not chip_usage[half][code]
+                    ),
+                    "used": sum(
+                        1
+                        for half in (1, 2)
+                        for code in ALL_CHIPS
+                        if chip_usage[half][code]
+                    ),
+                }
                 result["user_chips_available"] = chips_available
                 result["user_chips_used"] = [
                     {
@@ -2378,7 +2424,41 @@ def api_season_chips():
         # ============================================================
         # USER CHIP STATE
         # ============================================================
+        result["chip_usage_by_half"] = chip_usage
+        result["chips_available_by_half"] = {
+            1: [
+                code
+                for code in ALL_CHIPS
+                if not chip_usage[1][code]
+            ],
+            2: [
+                code
+                for code in ALL_CHIPS
+                if not chip_usage[2][code]
+            ],
+        }
+        result["chip_inventory"] = {
+            "total": 8,
+            "remaining": sum(
+                1
+                for half in (1, 2)
+                for code in ALL_CHIPS
+                if not chip_usage[half][code]
+            ),
+            "used": sum(
+                1
+                for half in (1, 2)
+                for code in ALL_CHIPS
+                if chip_usage[half][code]
+            ),
+        }
         result["user_chips_available"] = chips_available
+        print(
+            "[CHIP INVENTORY]",
+            "current_half=", current_half,
+            "usage=", chip_usage,
+            "available_current_half=", chips_available,
+        )
 
         result["user_chips_used"] = [
             {
