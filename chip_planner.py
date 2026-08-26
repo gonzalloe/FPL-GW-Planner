@@ -133,31 +133,28 @@ class SeasonChipPlanner:
 
     def _get_target_predictions(self, gw):
         """
-        Get real PredictionEngine predictions for a specific target GW.
+        Get real player predictions for a specific target GW.
 
-        Results are cached so each player/GW is only calculated once.
-        Uses PredictionEngine.predict_player(), which already:
-        - handles BGWs
-        - handles DGWs
-        - calculates per-fixture EV
-        - applies FDR
-        - applies expected minutes
-        - applies xG/xA
-        - applies team strength/form
-        - sums multiple fixtures
+        Cached per GW so each player/GW prediction is only calculated once.
         """
-        cache = getattr(self, "_target_prediction_cache", {})
+
+        cache = getattr(
+            self,
+            "_target_prediction_cache",
+            {}
+        )
 
         if gw in cache:
             return cache[gw]
 
         results = []
 
-        # Use all players. This is required for FH because the best
-        # Free Hit squad may contain players who are not in the current squad.
         for pid in self.engine.players:
             try:
-                pred = self.engine.predict_player(pid, gw)
+                pred = self.engine.predict_player(
+                    pid,
+                    gw,
+                )
 
                 if pred and not pred.get("error"):
                     results.append(pred)
@@ -175,6 +172,7 @@ class SeasonChipPlanner:
             f"[CHIP] Target predictions GW{gw}: "
             f"{len(results)} players"
         )
+
         return results
 
     # ------------------------------------------------------------------
