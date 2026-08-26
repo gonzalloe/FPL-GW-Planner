@@ -699,13 +699,45 @@ class GWPlanner:
         squad_ids = [p["element"] for p in picks]
         bank = team_data.get("gw_summary", {}).get("bank", 0)
 
-        # Determine chips still available
-        chips_used = {c.get("name") for c in team_data.get("chips", [])}
+        # ------------------------------------------------------------
+        # Chip availability — chips are available once per half-season
+        # GW1-19  = first half
+        # GW20-38 = second half
+        # ------------------------------------------------------------
+
         chip_map = {"wildcard": "WC", "freehit": "FH", "bboost": "BB", "3xc": "TC"}
+        chip_usage = {
+            "H1": {"BB": False, "TC": False, "FH": False, "WC": False},
+            "H2": {"BB": False, "TC": False, "FH": False, "WC": False}
+        }
+        for chip in team_data.get("chips", []):
+            name = chip.get("name")
+            event = chip.get("event")
+            code = chip_map.get(name)
+            if code is None or event is None:
+                continue
+
+            try:
+                event = int(event)
+            except (TypeError, ValueError):
+                continue
+
+            half = "H1" if event <= 19 else "H2"
+            chip_usage[half][code] = True
+
+        current_half = "H1" if self.current_gw <= 19 else "H2"
+
         chips_available = [
-            code for name, code in chip_map.items()
-            if name not in chips_used
+            code
+            for code, used in chip_usage[current_half].items()
+            if not used
         ]
+        print(
+            f"[CHIPS] Current GW={self.current_gw} "
+            f"half={current_half} "
+            f"usage={chip_usage[current_half]} "
+            f"available={chips_available}"
+        )
 
         # Estimate free transfers (FPL doesn't expose this directly)
         # If they made 0 transfers last GW, they gained 1 FT (max 5)
