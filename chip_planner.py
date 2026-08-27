@@ -93,6 +93,77 @@ class SeasonChipPlanner:
             )
             self._target_prediction_cache = {}
 
+
+    def _position_fdr_modifier(self, position_id, fdr, is_home):
+        """
+        Convert FPL fixture difficulty into an xPts multiplier.
+        FDR:
+            1 = easiest
+            2 = easy
+            3 = neutral
+            4 = difficult
+            5 = hardest
+        The baseline prediction is treated as a neutral-fixture
+        per-fixture expectation.
+        """
+
+        try:
+            position_id = int(position_id)
+        except (TypeError, ValueError):
+            position_id = 3
+
+        try:
+            fdr = int(fdr)
+        except (TypeError, ValueError):
+            fdr = 3
+
+        fdr = max(1, min(5, fdr))
+
+        # Base FDR multipliers.
+        base = {
+            1: 1.12,   # FDR 1
+            2: 1.06,   # FDR 2
+            3: 1.00,   # FDR 3
+            4: 0.93,   # FDR 4
+            5: 0.86,   # FDR 5
+        }
+
+        modifier = base[fdr]
+
+        # Small home advantage.
+        if is_home:
+            modifier *= 1.03
+        else:
+            modifier *= 0.98
+
+        # Goalkeepers/defenders are slightly more sensitive
+        # to fixture difficulty because clean-sheet probability
+        # is heavily fixture dependent.
+        if position_id in (1, 2):
+            defensive_adjustment = {
+                1: 1.04,
+                2: 1.02,
+                3: 1.00,
+                4: 0.96,
+                5: 0.92,
+            }
+            modifier *= defensive_adjustment[fdr]
+
+        # For midfielders/forwards, attacking output is affected
+        # by fixture difficulty, but less aggressively.
+        elif position_id in (3, 4):
+            attacking_adjustment = {
+                1: 1.03,
+                2: 1.015,
+                3: 1.00,
+                4: 0.985,
+                5: 0.97,
+            }
+            modifier *= attacking_adjustment[fdr]
+
+        return modifier
+
+
     # ------------------------------------------------------------------
     # Fixture helper
     # ------------------------------------------------------------------
@@ -287,14 +358,13 @@ class SeasonChipPlanner:
                     )
 
                     try:
-                        modifier = (
-                            self._position_fdr_modifier(
-                                position_id,
-                                fdr,
-                                is_home,
-                            )
+                        modifier = self._position_fdr_modifier(position_id, fdr, is_home)
+                    except Exception as exc:
+                        print(
+                            f"[CHIP] FDR modifier failed "
+                            f"GW{gw} player={pid} "
+                            f"fdr={fdr}: {exc}"
                         )
-                    except Exception:
                         modifier = 1.0
 
                     # The baseline prediction is a per-fixture estimate.
@@ -317,13 +387,19 @@ class SeasonChipPlanner:
 
                 #debug print 
                 if gw <= self.next_gw + 3:
+                    modifiers = [
+                        round(item["xpts"] / base_xpts, 3)
+                        for item in fixture_values
+                        if base_xpts > 0
+                    ]
                     print(
                         f"[CHIP PROJECTION DEBUG] "
                         f"GW{gw} {base.get('name')} "
                         f"base={base_xpts:.2f} "
                         f"fixtures={len(fixtures)} "
+                        f"modifiers={modifiers} "
                         f"projected={projected_xpts:.2f}"
-                    )                
+                    )               
 
                 projected = dict(base)
 
@@ -371,6 +447,23 @@ class SeasonChipPlanner:
             "baseline=",
             len(getattr(self, "_baseline_predictions", [])),
         )
+
+        if results:
+            xpts_values = [
+                round(
+                    float(p.get("predicted_points", 0.0) or 0.0),3)
+                for p in results
+            ]
+
+            unique_xpts = len(set(xpts_values))
+
+            print(
+                f"[CHIP TARGET CHECK] GW{gw}: "
+                f"players={len(results)} "
+                f"unique_xpts={unique_xpts} "
+                f"min={min(xpts_values):.3f} "
+                f"max={max(xpts_values):.3f}"
+            )
 
         return results
 
