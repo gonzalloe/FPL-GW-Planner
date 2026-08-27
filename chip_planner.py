@@ -1053,29 +1053,8 @@ class SeasonChipPlanner:
         # A 7.0 xPts SGW captain should NOT be 100/100.
         # ------------------------------------------------------------
 
-        if captain_xpts < 5.0:
-            score = 10.0
-
-        elif captain_xpts < 6.0:
-            score = 25.0
-
-        elif captain_xpts < 7.0:
-            score = 40.0
-
-        elif captain_xpts < 8.0:
-            score = 55.0
-
-        elif captain_xpts < 9.0:
-            score = 70.0
-
-        elif captain_xpts < 10.0:
-            score = 82.0
-
-        elif captain_xpts < 11.0:
-            score = 90.0
-
-        else:
-            score = 95.0
+        score = 10.0 + max(0.0, captain_xpts - 5.0) * 16.0
+        score = min(95.0, score)
 
         reasons = [
             f"{best['name']} ~{captain_xpts:.1f} xPts"
@@ -1157,12 +1136,11 @@ class SeasonChipPlanner:
         # Final clamp
         # ------------------------------------------------------------
 
-        score = 100.0 * (
-            1.0 - math.exp(
+        score = 100.0 * (1.0 - math.exp(
                 -(captain_xpts - 3.0) / 7.0
             )
         )
-        score = max(0.0, score)
+        score = round(max(0.0, score))
 
         details["score_available"] = True
 
