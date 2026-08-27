@@ -383,46 +383,14 @@ class SeasonChipPlanner:
                 projected_xpts = sum(
                     item["xpts"]
                     for item in fixture_values
-                )
-
-                #debug print 
-                if gw <= self.next_gw + 3:
-                    modifiers = [
-                        round(item["xpts"] / base_xpts, 3)
-                        for item in fixture_values
-                        if base_xpts > 0
-                    ]
-                    print(
-                        f"[CHIP PROJECTION DEBUG] "
-                        f"GW{gw} {base.get('name')} "
-                        f"base={base_xpts:.2f} "
-                        f"fixtures={len(fixtures)} "
-                        f"modifiers={modifiers} "
-                        f"projected={projected_xpts:.2f}"
-                    )               
+                )             
 
                 projected = dict(base)
-
-                projected["predicted_points"] = round(
-                    projected_xpts,
-                    3,
-                )
-
-                projected["raw_xpts"] = round(
-                    projected_xpts,
-                    3,
-                )
-
-                projected["num_fixtures"] = len(
-                    fixtures
-                )
-
-                projected["is_dgw"] = (
-                    len(fixtures) >= 2
-                )
-
+                projected["predicted_points"] = round(projected_xpts, 3)
+                projected["raw_xpts"] = round(projected_xpts, 3)
+                projected["num_fixtures"] = len(fixtures)
+                projected["is_dgw"] = (len(fixtures) >= 2)
                 projected["fixtures"] = fixtures
-
                 results.append(projected)
 
             except Exception as exc:
@@ -439,31 +407,6 @@ class SeasonChipPlanner:
             f"[CHIP] Lightweight target projections GW{gw}: "
             f"{len(results)} players"
         )
-        print(
-            "[CHIP DEBUG] GW",
-            gw,
-            "engine_has_predict_player=",
-            hasattr(self.engine, "predict_player"),
-            "baseline=",
-            len(getattr(self, "_baseline_predictions", [])),
-        )
-
-        if results:
-            xpts_values = [
-                round(
-                    float(p.get("predicted_points", 0.0) or 0.0),3)
-                for p in results
-            ]
-
-            unique_xpts = len(set(xpts_values))
-
-            print(
-                f"[CHIP TARGET CHECK] GW{gw}: "
-                f"players={len(results)} "
-                f"unique_xpts={unique_xpts} "
-                f"min={min(xpts_values):.3f} "
-                f"max={max(xpts_values):.3f}"
-            )
 
         return results
 
@@ -1399,7 +1342,6 @@ class SeasonChipPlanner:
         formations = (
             (3, 5, 2),
             (3, 4, 3),
-            (3, 3, 4),  # invalid FPL formation, retained nowhere
             (4, 5, 1),
             (4, 4, 2),
             (4, 3, 3),
@@ -1755,6 +1697,50 @@ class SeasonChipPlanner:
     # Wildcard
     # ------------------------------------------------------------------
 
+    def _get_horizon_predictions(self, start_gw, num_gws=4):
+        """
+        Build player projections across the full WC evaluation horizon.
+
+        Returns:
+            {
+                player_id: {
+                    "player": player,
+                    "xpts": total projected points
+                }
+            }
+        """
+        horizon = {}
+
+        for check_gw in range(
+            start_gw,
+            min(start_gw + num_gws, 39),
+        ):
+            predictions = self._get_target_predictions(check_gw)
+
+            for prediction in predictions:
+                pid = prediction.get("player_id")
+
+                if pid is None:
+                    continue
+
+                xpts = float(
+                    prediction.get(
+                        "predicted_points",
+                        0.0,
+                    )
+                    or 0.0
+                )
+
+                if pid not in horizon:
+                    horizon[pid] = {
+                        "player": prediction,
+                        "xpts": 0.0,
+                    }
+
+                horizon[pid]["xpts"] += max(xpts, 0.0)
+
+        return horizon
+
     def _score_wc(self, gw, meta, predictions, current_squad_ids):
         """
         Score Wildcard based on actual projected XI improvement.
@@ -1832,12 +1818,14 @@ class SeasonChipPlanner:
         # the four-week horizon.
         # ------------------------------------------------------------
 
+        horizon_predictions = self._get_horizon_predictions(gw, num_gws=4)
         positive_predictions = [
-            p
-            for p in predictions
-            if float(
-                p.get("predicted_points", 0.0) or 0.0
-            ) > 0
+            {
+                **data["player"],
+                "_wc_horizon_xpts": data["xpts"],
+            }
+            for data in horizon_predictions.values()
+            if data["xpts"] > 0
         ]
 
         if len(positive_predictions) < 11:
@@ -1882,12 +1870,11 @@ class SeasonChipPlanner:
                 by_position[position].append(player)
 
         for position in by_position:
-
             by_position[position].sort(
                 key=lambda p: float(
                     p.get(
-                        "predicted_points",
-                        0.0,
+                        "_wc_horizon_xpts",
+                        p.get("predicted_points", 0.0),
                     )
                     or 0.0
                 ),
