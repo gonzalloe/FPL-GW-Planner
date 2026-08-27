@@ -8,6 +8,7 @@ Preseason behavior:
 - Chip scores are therefore NOT calculated preseason.
 - Scores are returned as None rather than misleading 0/5 values.
 """
+import math
 from types import SimpleNamespace
 from data_fetcher import (
     get_dgw_teams,
@@ -593,35 +594,6 @@ class SeasonChipPlanner:
         for chip in chips_available:
             scores = chip_scores[chip]
 
-            if scores:
-                if chip in ("FH", "TC"):
-                    numeric_scores = [
-                        float(x["score"])
-                        for x in scores
-                        if x.get("score") is not None
-                    ]
-
-                    if numeric_scores:
-                        min_score = min(numeric_scores)
-                        max_score = max(numeric_scores)
-
-                        for item in scores:
-                            if item.get("score") is None:
-                                continue
-
-                            raw_score = float(item["score"])
-                            item["raw_score"] = round(raw_score, 2)
-
-                            if max_score > min_score:
-                                item["score"] = round(
-                                    100.0 * (
-                                        (raw_score - min_score)
-                                        / (max_score - min_score)
-                                    )
-                                )
-                            else:
-                                item["score"] = 0
-
             if not scores:
                 continue
 
@@ -1117,44 +1089,39 @@ class SeasonChipPlanner:
         }
 
         # ------------------------------------------------------------
-        # DGW captain
-        #
-        # This is the main TC trigger.
+        # Fixture opportunity
         # ------------------------------------------------------------
 
         if fixture_count >= 2:
+            # A genuine DGW is the strongest TC signal.
+            #
+            # 2 fixtures = +25
+            # 3 fixtures = +35
+            #
+            # Cap the bonus so fixture count cannot overwhelm
+            # captain quality.
+            fixture_bonus = 25.0
 
-            # Two fixtures is the normal strong TC setup.
-            score += 20.0
+            if fixture_count >= 3:
+                fixture_bonus += 10.0
+
+            score += fixture_bonus
 
             reasons.append(
                 f"DGW captain ({fixture_count} fixtures)"
             )
 
-            # Extra reward for 3+ fixtures if your fixture data ever
-            # contains a situation like this.
-            if fixture_count >= 3:
-                score += 5.0
-                reasons.append(
-                    "Exceptional fixture volume"
-                )
-
         else:
-
-            # A SGW captain can still be a good TC opportunity,
-            # but should require genuinely elite xPts.
+            # SGW TC is possible, but requires an exceptional captain.
             #
-            # This prevents every 7 xPts captain from becoming TC 100.
-            if captain_xpts < 8.5:
-                score -= 10.0
+            # Give a small bonus only when captain xPts are genuinely elite.
+            if captain_xpts >= 10.0:
+                score += 10.0
+                reasons.append("Elite SGW captain")
 
-            elif captain_xpts < 9.5:
-                score -= 5.0
-
-            else:
-                reasons.append(
-                    "Elite SGW captain"
-                )
+            elif captain_xpts >= 9.0:
+                score += 5.0
+                reasons.append("Very strong SGW captain")
 
         # ------------------------------------------------------------
         # Overall DGW strength
@@ -1190,13 +1157,12 @@ class SeasonChipPlanner:
         # Final clamp
         # ------------------------------------------------------------
 
-        score = min(
-            100,
-            max(
-                0,
-                round(score),
-            ),
+        score = 100.0 * (
+            1.0 - math.exp(
+                -(captain_xpts - 3.0) / 7.0
+            )
         )
+        score = max(0.0, score)
 
         details["score_available"] = True
 
@@ -1974,9 +1940,15 @@ class SeasonChipPlanner:
         # fixtures in the current squad.
         # ------------------------------------------------------------
 
-        score = min(
-            100.0,
-            wc_gain * 3.5,
+        score = 100.0 * (
+            1.0 - math.exp(
+                -wc_gain / 45.0
+            )
+        )
+
+        score = max(
+            0.0,
+            min(100.0, score)
         )
 
         reasons = []
