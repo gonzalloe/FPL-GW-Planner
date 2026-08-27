@@ -594,32 +594,33 @@ class SeasonChipPlanner:
             scores = chip_scores[chip]
 
             if scores:
-                numeric_scores = [
-                    float(x["score"])
-                    for x in scores
-                    if x.get("score") is not None
-                ]
+                if chip in ("FH", "TC"):
+                    numeric_scores = [
+                        float(x["score"])
+                        for x in scores
+                        if x.get("score") is not None
+                    ]
 
-                if numeric_scores:
-                    min_score = min(numeric_scores)
-                    max_score = max(numeric_scores)
+                    if numeric_scores:
+                        min_score = min(numeric_scores)
+                        max_score = max(numeric_scores)
 
-                    for item in scores:
-                        if item.get("score") is None:
-                            continue
+                        for item in scores:
+                            if item.get("score") is None:
+                                continue
 
-                        raw_score = float(item["score"])
-                        item["raw_score"] = round(raw_score, 2)
+                            raw_score = float(item["score"])
+                            item["raw_score"] = round(raw_score, 2)
 
-                        if max_score > min_score:
-                            item["score"] = round(
-                                100.0 * (
-                                    (raw_score - min_score)
-                                    / (max_score - min_score)
+                            if max_score > min_score:
+                                item["score"] = round(
+                                    100.0 * (
+                                        (raw_score - min_score)
+                                        / (max_score - min_score)
+                                    )
                                 )
-                            )
-                        else:
-                            item["score"] = 50
+                            else:
+                                item["score"] = 0
 
             if not scores:
                 continue

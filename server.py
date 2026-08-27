@@ -291,9 +291,7 @@ def _run_predictions(gw=None):
     try:
         t0 = _t.time()
         print("[ENGINE] Creating PredictionEngine...")
-        _log_gw_planner_memory("BEFORE PredictionEngine")
         engine = PredictionEngine()
-        _log_gw_planner_memory("AFTER PredictionEngine")
         print(
             f"  [TIMING] PredictionEngine init: "
             f"{_t.time() - t0:.1f}s"
@@ -303,16 +301,13 @@ def _run_predictions(gw=None):
 
         t1 = _t.time()
         predictions = engine.predict_all(target_gw)
-        _log_gw_planner_memory("AFTER predict_all")
         print(f"  [TIMING] predict_all: {_t.time()-t1:.1f}s")
 
         engine._baseline_predictions = predictions
 
         t2 = _t.time()
         optimizer = SquadOptimizer(predictions)
-        _log_gw_planner_memory("AFTER SquadOptimizer init")
         squad = optimizer.optimize_squad()
-        _log_gw_planner_memory("AFTER normal squad")
         print(
             f"  [TIMING] optimize_squad (normal): "
             f"{_t.time()-t2:.1f}s"
@@ -320,12 +315,10 @@ def _run_predictions(gw=None):
 
         t3 = _t.time()
         bb_squad = optimizer.optimize_squad(chip="bench_boost")
-        _log_gw_planner_memory("AFTER bench boost")
         print(
             f"  [TIMING] optimize_squad (bench_boost): "
             f"{_t.time()-t3:.1f}s"
         )
-        _log_gw_planner_memory("BEFORE ChipAdvisor")
         chip_advisor = ChipAdvisor(predictions, gw_info, engine=engine)
         current_squad_ids = None
         try:
@@ -353,7 +346,6 @@ def _run_predictions(gw=None):
         chip_analysis = chip_advisor.analyze(
             current_squad_ids=current_squad_ids
         )
-        _log_gw_planner_memory("AFTER ChipAdvisor")
 
         output = {
             "generated_at": datetime.now().isoformat(),
@@ -389,7 +381,6 @@ def _run_predictions(gw=None):
         prediction_file = OUTPUT_DIR / f"gw{target_gw}_predictions.json"
         tmp = prediction_file.with_suffix(".tmp")
 
-        _log_gw_planner_memory("BEFORE JSON serialization")
         tmp.write_text(
             json.dumps(
                 output,
@@ -399,7 +390,6 @@ def _run_predictions(gw=None):
             ),
             encoding="utf-8"
         )
-        _log_gw_planner_memory("AFTER JSON serialization")
         os.replace(tmp, prediction_file)
 
         latest = OUTPUT_DIR / "latest_predictions.json"
@@ -436,7 +426,6 @@ def _run_predictions(gw=None):
             upload_prediction_cache(output)
         except Exception as e:
             print(f"[CACHE] Supabase upload failed: {e}")
-        _log_gw_planner_memory("AFTER cache upload")
         invalidate_cache()
 
         # Explicitly release large temporary objects before returning.
@@ -1585,8 +1574,6 @@ def api_gw_planner():
     horizon = request.args.get("horizon", 5, type=int)
     print("[GW PLANNER] team_id:", team_id)
     print("[GW PLANNER] horizon:", horizon)
-
-    _log_gw_planner_memory("planner request START")
   
     if not team_id:
         return jsonify({"error": "No team ID"}), 400
@@ -1673,17 +1660,13 @@ def api_gw_planner():
     try:
         from gw_planner import GWPlanner
         planner = GWPlanner(horizon=horizon)
-        _log_gw_planner_memory("after GWPlanner init")
 
         # ─────────────────────────────────────────
         # RUN PLANNER
         # ─────────────────────────────────────────
 
         print("[GW PLANNER] Running plan_from_team_id:", team_id)
-
         plan = planner.plan_from_team_id(team_id, horizon=horizon)
-
-        _log_gw_planner_memory("after plan_from_team_id")
 
         # ─────────────────────────────────────────
         # DEBUG
@@ -1722,7 +1705,6 @@ def api_gw_planner():
         # ─────────────────────────────────────────
 
         print("[GW PLANNER] Calculation complete")
-        _log_gw_planner_memory("before response")
         return jsonify(plan)
 
     except MemoryError:
@@ -1751,7 +1733,6 @@ def api_gw_planner():
         if gw_planner_lock_acquired:
             GW_PLANNER_LOCK.release()
         print("[GW PLANNER] Locks released")
-        _log_gw_planner_memory("request finished")
 
 
 @app.route("/api/fixture-ticker")
