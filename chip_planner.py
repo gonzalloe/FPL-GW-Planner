@@ -309,6 +309,12 @@ class SeasonChipPlanner:
                         }
                     )
 
+
+                projected_xpts = sum(
+                    item["xpts"]
+                    for item in fixture_values
+                )
+
                 #debug print 
                 if gw <= self.next_gw + 3:
                     print(
@@ -317,12 +323,7 @@ class SeasonChipPlanner:
                         f"base={base_xpts:.2f} "
                         f"fixtures={len(fixtures)} "
                         f"projected={projected_xpts:.2f}"
-                    )
-
-                projected_xpts = sum(
-                    item["xpts"]
-                    for item in fixture_values
-                )
+                    )                
 
                 projected = dict(base)
 
@@ -625,7 +626,7 @@ class SeasonChipPlanner:
             ]
     
             # Reuse legal XI selection.
-            _, xi_xpts = select_best_xi(players)
+            _, xi_xpts = self._select_best_xi(players)
     
             total += xi_xpts
     
@@ -1064,40 +1065,93 @@ class SeasonChipPlanner:
 
     def _select_best_xi(self, player_pool):
         """
-        Build the highest-xPts legal FPL starting XI.
+        Select the highest-xPts legal FPL starting XI.
 
-        Rules:
-        - 1 GK
-        - 3-5 DEF
-        - 2-5 MID
-        - 1-3 FWD
-        - Maximum 3 players from one club
+        Formation rules:
+            GK  = 1
+            DEF = 3-5
+            MID = 2-5
+            FWD = 1-3
+
+        Club rule:
+            Maximum 3 players from one club.
+
+        Uses a bounded candidate search rather than the previous
+        full combinatorial search, which could take minutes for
+        a 600-player prediction pool.
         """
 
-        from itertools import combinations
-
         def position_id(player):
-            return int(
-                player.get("position_id")
-                or self.engine.players.get(
+            value = player.get("position_id")
+
+            if value is None:
+                value = player.get("element_type")
+
+            if value is None:
+                engine_player = self.engine.players.get(
                     player.get("player_id"),
-                    {}
-                ).get("position_id", 0)
-            )
+                    {},
+                )
+                value = engine_player.get("position_id")
+                
+                if value is None:
+                    value = engine_player.get("element_type")
+
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
 
         def xpts(player):
-            return float(
-                player.get("predicted_points", 0.0) or 0.0
-            )
+            try:
+                return float(
+                    player.get("predicted_points", 0.0) or 0.0
+                )
+            except (TypeError, ValueError):
+                return 0.0
 
         def team_id(player):
-            return player.get(
-                "team",
-                self.engine.players.get(
-                    player.get("player_id"),
-                    {}
-                ).get("team")
+            team = player.get("team")
+
+            if team is not None:
+                return team
+
+            engine_player = self.engine.players.get(
+                player.get("player_id"),
+                {},
             )
+
+            return engine_player.get("team")
+
+        def add_best(players, count, used_team_counts):
+            """
+            Select the best available players while respecting
+            the 3-player-per-club limit.
+            """
+            selected = []
+
+            for player in players:
+                team = team_id(player)
+
+                if team is not None:
+                    if used_team_counts.get(team, 0) >= 3:
+                        continue
+
+                selected.append(player)
+
+                if team is not None:
+                    used_team_counts[team] = (
+                        used_team_counts.get(team, 0) + 1
+                    )
+
+                if len(selected) >= count:
+                    break
+
+            return selected
+
+        # ------------------------------------------------------------
+        # Separate positions
+        # ------------------------------------------------------------
 
         goalkeepers = sorted(
             [
@@ -1106,7 +1160,7 @@ class SeasonChipPlanner:
             ],
             key=xpts,
             reverse=True,
-        )[:5]
+        )
 
         defenders = sorted(
             [
@@ -1115,7 +1169,7 @@ class SeasonChipPlanner:
             ],
             key=xpts,
             reverse=True,
-        )[:15]
+        )
 
         midfielders = sorted(
             [
@@ -1124,7 +1178,7 @@ class SeasonChipPlanner:
             ],
             key=xpts,
             reverse=True,
-        )[:15]
+        )
 
         forwards = sorted(
             [
@@ -1133,84 +1187,113 @@ class SeasonChipPlanner:
             ],
             key=xpts,
             reverse=True,
-        )[:10]
+        )
 
         if not goalkeepers:
             return [], 0.0
 
+        # ------------------------------------------------------------
+        # Keep a bounded candidate pool.
+        #
+        # We only need the strongest candidates to find a good XI.
+        # ------------------------------------------------------------
+
+        goalkeepers = goalkeepers[:3]
+        defenders = defenders[:12]
+        midfielders = midfielders[:12]
+        forwards = forwards[:8]
+
+        formations = (
+            (3, 5, 2),
+            (3, 4, 3),
+            (3, 3, 4),  # invalid FPL formation, retained nowhere
+            (4, 5, 1),
+            (4, 4, 2),
+            (4, 3, 3),
+            (5, 4, 1),
+            (5, 3, 2),
+            (5, 2, 3),
+        )
+
         best_xi = []
         best_points = -1.0
 
-        # GK
+        # ------------------------------------------------------------
+        # Try every valid formation and GK.
+        #
+        # Instead of combinations of 30+ players, we build the XI
+        # greedily while checking club limits.
+        # ------------------------------------------------------------
+
+        valid_formations = [
+            (d, m, f)
+            for d, m, f in formations
+            if (
+                3 <= d <= 5
+                and 2 <= m <= 5
+                and 1 <= f <= 3
+                and d + m + f == 10
+            )
+        ]
+
         for gk in goalkeepers:
 
-            # 3-5 defenders
-            for defender_count in range(3, 6):
+            for defender_count, midfielder_count, forward_count in (
+                valid_formations
+            ):
 
-                # 2-5 midfielders
-                for midfielder_count in range(2, 6):
+                team_counts = {}
 
-                    forward_count = (
-                        11
-                        - 1
-                        - defender_count
-                        - midfielder_count
-                    )
+                gk_team = team_id(gk)
 
-                    if not 1 <= forward_count <= 3:
-                        continue
+                if gk_team is not None:
+                    team_counts[gk_team] = 1
 
-                    for defs in combinations(
-                        defenders,
-                        defender_count
-                    ):
-                        for mids in combinations(
-                            midfielders,
-                            midfielder_count
-                        ):
-                            for fwds in combinations(
-                                forwards,
-                                forward_count
-                            ):
+                selected_defs = add_best(
+                    defenders,
+                    defender_count,
+                    team_counts,
+                )
 
-                                xi = (
-                                    [gk]
-                                    + list(defs)
-                                    + list(mids)
-                                    + list(fwds)
-                                )
+                if len(selected_defs) != defender_count:
+                    continue
 
-                                # FPL maximum 3 players per club
-                                club_counts = {}
+                selected_mids = add_best(
+                    midfielders,
+                    midfielder_count,
+                    team_counts,
+                )
 
-                                legal = True
+                if len(selected_mids) != midfielder_count:
+                    continue
 
-                                for player in xi:
-                                    club = team_id(player)
+                selected_fwds = add_best(
+                    forwards,
+                    forward_count,
+                    team_counts,
+                )
 
-                                    if club is None:
-                                        continue
+                if len(selected_fwds) != forward_count:
+                    continue
 
-                                    club_counts[club] = (
-                                        club_counts.get(club, 0)
-                                        + 1
-                                    )
+                xi = (
+                    [gk]
+                    + selected_defs
+                    + selected_mids
+                    + selected_fwds
+                )
 
-                                    if club_counts[club] > 3:
-                                        legal = False
-                                        break
+                if len(xi) != 11:
+                    continue
 
-                                if not legal:
-                                    continue
+                total = sum(
+                    xpts(player)
+                    for player in xi
+                )
 
-                                total = sum(
-                                    xpts(player)
-                                    for player in xi
-                                )
-
-                                if total > best_points:
-                                    best_points = total
-                                    best_xi = xi
+                if total > best_points:
+                    best_points = total
+                    best_xi = xi
 
         if not best_xi:
             return [], 0.0
