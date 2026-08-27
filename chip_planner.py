@@ -630,6 +630,34 @@ class SeasonChipPlanner:
         for chip in chips_available:
             scores = chip_scores[chip]
 
+            if scores:
+                numeric_scores = [
+                    float(x["score"])
+                    for x in scores
+                    if x.get("score") is not None
+                ]
+
+                if numeric_scores:
+                    min_score = min(numeric_scores)
+                    max_score = max(numeric_scores)
+
+                    for item in scores:
+                        if item.get("score") is None:
+                            continue
+
+                        raw_score = float(item["score"])
+                        item["raw_score"] = round(raw_score, 2)
+
+                        if max_score > min_score:
+                            item["score"] = round(
+                                100.0 * (
+                                    (raw_score - min_score)
+                                    / (max_score - min_score)
+                                )
+                            )
+                        else:
+                            item["score"] = 50
+
             if not scores:
                 continue
 
@@ -1145,10 +1173,7 @@ class SeasonChipPlanner:
                 f"DGW: {dgw_count} teams"
             )
 
-        score = min(
-            100,
-            max(0, round(score))
-        )
+        score = min(100, max(0, round(score)))
 
         return (
             score,
@@ -1159,20 +1184,18 @@ class SeasonChipPlanner:
     def _select_best_xi(self, player_pool):
         """
         Select the highest-xPts legal FPL starting XI.
-
         Formation rules:
             GK  = 1
             DEF = 3-5
             MID = 2-5
             FWD = 1-3
-
         Club rule:
             Maximum 3 players from one club.
-
         Uses a bounded candidate search rather than the previous
         full combinatorial search, which could take minutes for
         a 600-player prediction pool.
         """
+        player_lookup = getattr(self.engine, "players", {}) or {}
 
         def position_id(player):
             value = player.get("position_id")
@@ -1181,7 +1204,7 @@ class SeasonChipPlanner:
                 value = player.get("element_type")
 
             if value is None:
-                engine_player = self.engine.players.get(
+                engine_player = player_lookup.get(
                     player.get("player_id"),
                     {},
                 )
@@ -1209,11 +1232,10 @@ class SeasonChipPlanner:
             if team is not None:
                 return team
 
-            engine_player = self.engine.players.get(
+            engine_player = player_lookup.players.get(
                 player.get("player_id"),
                 {},
             )
-
             return engine_player.get("team")
 
         def add_best(players, count, used_team_counts):
@@ -1548,13 +1570,8 @@ class SeasonChipPlanner:
         # 10 xPts of gain = approximately 60 points.
         # ------------------------------------------------------------
 
-        score = min(
-            100.0,
-            fh_gain * 5.0
-        )
-
+        score = min(90.0, fh_gain * 4.5)
         reasons = []
-
         if fh_gain > 0:
             reasons.append(
                 f"+{fh_gain:.1f} xPts vs current XI"
@@ -1565,47 +1582,25 @@ class SeasonChipPlanner:
         # ------------------------------------------------------------
 
         if meta["is_bgw"]:
-            bgw_count = meta.get(
-                "bgw_team_count",
-                0
-            )
-
-            score += min(
-                25,
-                bgw_count * 4
-            )
-
-            reasons.append(
-                f"BGW: {bgw_count} teams missing"
-            )
-
+            bgw_count = meta.get("bgw_team_count", 0)
+            score += min(25, bgw_count * 4)
+            reasons.append(f"BGW: {bgw_count} teams missing")
             blanking = 0
-
             for pid in current_squad_ids:
                 player = self.engine.players.get(pid)
 
                 if not player:
                     continue
-
                 team_id = player.get("team")
-
-                fixtures = get_player_fixtures(
-                    team_id,
-                    gw,
-                    self.fixtures,
-                )
-
+                fixtures = get_player_fixtures(team_id, gw, self.fixtures)
                 if not fixtures:
                     blanking += 1
-
             details["blanking_players"] = blanking
-
             if blanking >= 5:
                 score += 15
                 reasons.append(
                     f"{blanking} squad players blank"
                 )
-
             elif blanking >= 3:
                 score += 8
                 reasons.append(
@@ -1617,25 +1612,10 @@ class SeasonChipPlanner:
         # ------------------------------------------------------------
 
         if meta["is_dgw"]:
-            dgw_count = meta.get(
-                "dgw_team_count",
-                0
-            )
-
-            score += min(
-                10,
-                dgw_count * 1.5
-            )
-
-            reasons.append(
-                f"DGW opportunity ({dgw_count} teams)"
-            )
-
-        score = min(
-            100,
-            max(0, round(score))
-        )
-
+            dgw_count = meta.get("dgw_team_count", 0)
+            score += min(10, dgw_count * 1.5)
+            reasons.append(f"DGW opportunity ({dgw_count} teams)")
+        score = min(100, max(0, round(score)))
         if not reasons:
             reasons.append(
                 "Limited Free Hit upside this GW"
@@ -1860,14 +1840,9 @@ class SeasonChipPlanner:
 
         if gw >= 30:
             score += 5
-            reasons.append(
-                "Late season — final-push flexibility"
-            )
+            reasons.append("Late season — final-push flexibility")
 
-        score = min(
-            100,
-            max(0, round(score))
-        )
+        score = min(100, max(0, round(score)))
 
         if score < 20:
             reasons = [
