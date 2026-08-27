@@ -2028,28 +2028,37 @@ class PredictionEngine:
     #  Position-Aware Fixture Difficulty
     # ══════════════════════════════════════════════════════════
 
-    def _position_fdr_modifier(self, pos: int, fdr: int, is_home: bool) -> float:
+    def _position_fdr_modifier(self, position_id, fdr, is_home):
         """
-        Position-aware FDR modifier (from SmartDraftBoard approach).
-
-        A tough fixture for a defender (facing high-xG attack) is not
-        equally tough for an attacker (who can still score against any team).
+        Lightweight fixture modifier.
+        FDR:
+            1 = easiest
+            5 = hardest
+        Home advantage is applied separately.
         """
-        base_mod = FDR_MULTIPLIER.get(fdr, 1.0)
-        home_mod = HOME_BONUS if is_home else AWAY_PENALTY
+        fdr = max(1, min(5, int(fdr)))
+        fdr_multiplier = {
+            1: 1.25,
+            2: 1.12,
+            3: 1.00,
+            4: 0.88,
+            5: 0.75,
+        }[fdr]
 
-        if pos in (3, 4):  # MID/FWD: fixture difficulty affects them LESS
-            # Attackers transcend fixture difficulty more often
-            # (from OpenFPL research: form > fixture for attackers)
-            dampened = 1.0 + (base_mod - 1.0) * 0.65
-            return dampened * home_mod
-        elif pos == 2:  # DEF: fixture difficulty affects them MORE
-            amplified = 1.0 + (base_mod - 1.0) * 1.20
-            return amplified * home_mod
-        elif pos == 1:  # GKP: similar to DEF
-            amplified = 1.0 + (base_mod - 1.0) * 1.10
-            return amplified * home_mod
-        return base_mod * home_mod
+        home_multiplier = 1.05 if is_home else 0.97
+
+        # Slightly reduce defensive dependency on fixture
+        # difficulty compared with attackers.
+        if position_id in (1, 2):
+            defensive_adjustment = 0.98
+        else:
+            defensive_adjustment = 1.00
+
+        return (
+            fdr_multiplier
+            * home_multiplier
+            * defensive_adjustment
+        )
 
     def _fdr_cs_probability(self, fdr: int, is_home: bool) -> float:
         """

@@ -297,18 +297,26 @@ class SeasonChipPlanner:
                     except Exception:
                         modifier = 1.0
 
-                    # The baseline prediction represents roughly one
-                    # normal fixture. Use a conservative share for
-                    # each target fixture.
-                    fixture_xpts = (
-                        base_xpts * modifier
-                    )
+                    # The baseline prediction is a per-fixture estimate.
+                    # Apply the target fixture difficulty and home/away adjustment.
+                    fixture_xpts = base_xpts * modifier
+                    fixture_xpts = max(0.0, fixture_xpts)
 
                     fixture_values.append(
                         {
                             "fixture": fixture,
                             "xpts": fixture_xpts,
                         }
+                    )
+
+                #debug print 
+                if gw <= self.next_gw + 3:
+                    print(
+                        f"[CHIP PROJECTION DEBUG] "
+                        f"GW{gw} {base.get('name')} "
+                        f"base={base_xpts:.2f} "
+                        f"fixtures={len(fixtures)} "
+                        f"projected={projected_xpts:.2f}"
                     )
 
                 projected_xpts = sum(
@@ -598,6 +606,169 @@ class SeasonChipPlanner:
             "score_status": "available",
             "score_status_reason": None,
         }
+
+    def select_best_xi(self, player_pool):
+                """
+                Build the best legal FPL XI.
+                Rules:
+                - 1 GK
+                - 3-5 DEF
+                - 2-5 MID
+                - 1-3 FWD
+                - max 3 players from one club
+                """
+    
+                def position_id(p):
+                    return int(
+                        p.get(
+                            "position_id",
+                            p.get("element_type", 0)
+                        ) or 0
+                    )
+    
+                def player_points(p):
+                    return float(
+                        p.get("predicted_points", 0.0) or 0.0
+                    )
+    
+                def team_id(p):
+                    return p.get("team")
+    
+                goalkeepers = sorted(
+                    [p for p in player_pool if position_id(p) == 1],
+                    key=player_points,
+                    reverse=True,
+                )
+    
+                defenders = sorted(
+                    [p for p in player_pool if position_id(p) == 2],
+                    key=player_points,
+                    reverse=True,
+                )
+    
+                midfielders = sorted(
+                    [p for p in player_pool if position_id(p) == 3],
+                    key=player_points,
+                    reverse=True,
+                )
+    
+                forwards = sorted(
+                    [p for p in player_pool if position_id(p) == 4],
+                    key=player_points,
+                    reverse=True,
+                )
+    
+                if not goalkeepers:
+                    return [], 0.0
+    
+                best_xi = []
+                best_points = -1.0
+    
+                # Search a reasonable number of candidates.
+                # This avoids an enormous combinatorial explosion.
+                goalkeepers = goalkeepers[:5]
+                defenders = defenders[:15]
+                midfielders = midfielders[:15]
+                forwards = forwards[:10]
+    
+                from itertools import combinations
+    
+                for gk in goalkeepers[:1]:
+    
+                    for defender_count in range(3, 6):
+    
+                        for midfielder_count in range(2, 6):
+    
+                            forward_count = (
+                                11
+                                - 1
+                                - defender_count
+                                - midfielder_count
+                            )
+    
+                            if not 1 <= forward_count <= 3:
+                                continue
+    
+                            for defs in combinations(
+                                defenders,
+                                defender_count,
+                            ):
+    
+                                for mids in combinations(
+                                    midfielders,
+                                    midfielder_count,
+                                ):
+    
+                                    for fwds in combinations(
+                                        forwards,
+                                        forward_count,
+                                    ):
+    
+                                        xi = (
+                                            [gk]
+                                            + list(defs)
+                                            + list(mids)
+                                            + list(fwds)
+                                        )
+    
+                                        counts = {}
+    
+                                        legal = True
+    
+                                        for p in xi:
+                                            tid = team_id(p)
+    
+                                            if tid is None:
+                                                continue
+    
+                                            counts[tid] = (
+                                                counts.get(tid, 0) + 1
+                                            )
+    
+                                            if counts[tid] > 3:
+                                                legal = False
+                                                break
+    
+                                        if not legal:
+                                            continue
+    
+                                        points = sum(
+                                            player_points(p)
+                                            for p in xi
+                                        )
+    
+                                        if points > best_points:
+                                            best_points = points
+                                            best_xi = xi
+                return (
+                    best_xi,
+                    max(best_points, 0.0),
+                )
+
+    def _project_squad_over_gws(self, player_ids, start_gw, num_gws=4):
+        total = 0.0
+    
+        for check_gw in range(start_gw, min(start_gw + num_gws, 39)):
+            predictions = self._get_target_predictions(check_gw)
+    
+            pred_map = {
+                p["player_id"]: p
+                for p in predictions
+                if p.get("player_id") is not None
+            }
+    
+            players = [
+                pred_map[pid]
+                for pid in player_ids
+                if pid in pred_map
+            ]
+    
+            # Reuse legal XI selection.
+            _, xi_xpts = select_best_xi(players)
+    
+            total += xi_xpts
+    
+        return total
 
     # ------------------------------------------------------------------
     # Individual chip scoring
@@ -961,7 +1132,7 @@ class SeasonChipPlanner:
         # ------------------------------------------------------------
         score = min(
             70.0,
-            (tc_incremental_xpts / 15.0) * 70.0
+            tc_incremental_xpts * (70.0 / 15.0)
         )
 
         reasons = [
@@ -984,7 +1155,6 @@ class SeasonChipPlanner:
 
         if fixture_count >= 2:
             score += 20
-
             reasons.append(
                 f"DGW captain ({fixture_count} fixtures)"
             )
@@ -1122,99 +1292,6 @@ class SeasonChipPlanner:
                 ).get("position_id", 0)
             )
 
-        def select_best_xi(player_pool):
-            goalkeepers = sorted(
-                [
-                    p for p in player_pool
-                    if position_id(p) == 1
-                ],
-                key=lambda p: p.get(
-                    "predicted_points", 0
-                ),
-                reverse=True,
-            )
-
-            defenders = sorted(
-                [
-                    p for p in player_pool
-                    if position_id(p) == 2
-                ],
-                key=lambda p: p.get(
-                    "predicted_points", 0
-                ),
-                reverse=True,
-            )
-
-            midfielders = sorted(
-                [
-                    p for p in player_pool
-                    if position_id(p) == 3
-                ],
-                key=lambda p: p.get(
-                    "predicted_points", 0
-                ),
-                reverse=True,
-            )
-
-            forwards = sorted(
-                [
-                    p for p in player_pool
-                    if position_id(p) == 4
-                ],
-                key=lambda p: p.get(
-                    "predicted_points", 0
-                ),
-                reverse=True,
-            )
-
-            if not goalkeepers:
-                return [], 0.0
-
-            # Try every legal formation and take the best.
-            best_xi = []
-            best_points = -1.0
-
-            for defender_count in range(3, 6):
-                for midfielder_count in range(2, 6):
-                    forward_count = 11 - (
-                        1
-                        + defender_count
-                        + midfielder_count
-                    )
-
-                    if not 1 <= forward_count <= 3:
-                        continue
-
-                    if (
-                        len(defenders) < defender_count
-                        or len(midfielders) < midfielder_count
-                        or len(forwards) < forward_count
-                    ):
-                        continue
-
-                    xi = (
-                        goalkeepers[:1]
-                        + defenders[:defender_count]
-                        + midfielders[:midfielder_count]
-                        + forwards[:forward_count]
-                    )
-
-                    points = sum(
-                        float(
-                            p.get(
-                                "predicted_points",
-                                0.0
-                            ) or 0.0
-                        )
-                        for p in xi
-                    )
-
-                    if points > best_points:
-                        best_points = points
-                        best_xi = xi
-
-            return best_xi, max(best_points, 0.0)
-
         # ------------------------------------------------------------
         # Current squad XI
         # ------------------------------------------------------------
@@ -1298,8 +1375,8 @@ class SeasonChipPlanner:
         # ------------------------------------------------------------
 
         score = min(
-            60.0,
-            fh_gain * 6.0
+            100.0,
+            fh_gain * 5.0
         )
 
         reasons = []

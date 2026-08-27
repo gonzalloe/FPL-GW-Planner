@@ -327,7 +327,32 @@ def _run_predictions(gw=None):
         )
         _log_gw_planner_memory("BEFORE ChipAdvisor")
         chip_advisor = ChipAdvisor(predictions, gw_info, engine=engine)
-        chip_analysis = chip_advisor.analyze()
+        current_squad_ids = None
+        try:
+            settings = _load_settings()
+            team_id = settings.get("team_id")
+
+            if team_id:
+                from my_team import fetch_my_team
+
+                team_data = fetch_my_team(
+                    int(team_id)
+                )
+
+                if not team_data.get("error"):
+                    current_squad_ids = [
+                        p.get("element")
+                        for p in team_data.get("picks", [])
+                        if p.get("element") is not None
+                    ]
+        except Exception as exc:
+            print(
+                f"[CHIP] Could not load current squad: {exc}"
+            )
+
+        chip_analysis = chip_advisor.analyze(
+            current_squad_ids=current_squad_ids
+        )
         _log_gw_planner_memory("AFTER ChipAdvisor")
 
         output = {
@@ -1493,8 +1518,40 @@ def api_chip_analysis():
             return jsonify({"error": "Predictions not ready"}), 503
         from squad_optimizer import SquadOptimizer, ChipAdvisor
         gw_info = cached.get("gw_info", {})
-        chip_advisor = ChipAdvisor(preds, gw_info)
-        analysis = chip_advisor.analyze()
+        from prediction_engine import PredictionEngine
+        engine = PredictionEngine()
+        try:
+            settings = _load_settings()
+            team_id = settings.get("team_id")
+
+            current_squad_ids = None
+
+            if team_id:
+                from my_team import fetch_my_team
+
+                team_data = fetch_my_team(
+                    int(team_id)
+                )
+
+                if not team_data.get("error"):
+                    current_squad_ids = [
+                        p.get("element")
+                        for p in team_data.get("picks", [])
+                        if p.get("element") is not None
+                    ]
+
+            chip_advisor = ChipAdvisor(
+                preds,
+                gw_info,
+                engine=engine,
+            )
+
+            analysis = chip_advisor.analyze(
+                current_squad_ids=current_squad_ids
+            )
+
+        finally:
+            del engine
         # FILTER_CHIP_ANALYSIS_ENDPOINT_DONE: strip user-exhausted chips
         used_codes = _user_used_chips_in_current_half()
         if used_codes:
@@ -2394,6 +2451,15 @@ def api_season_chips():
                 players=players,
                 next_gw=next_gw,
                 baseline_predictions=baseline_predictions,
+            )
+
+            print(
+                "[CHIP DEBUG] next_gw=",
+                next_gw,
+                "squad_ids=",
+                len(squad_ids or []),
+                "baseline_predictions=",
+                len(baseline_predictions),
             )
 
             result = planner.analyze_season(
