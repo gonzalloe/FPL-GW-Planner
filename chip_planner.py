@@ -488,8 +488,28 @@ class SeasonChipPlanner:
 
         if chips_available is None:
             chips_available = ["BB", "TC", "FH", "WC"]
-        max_gw = 38
-        remaining_gws = list(range(self.next_gw, max_gw + 1))
+        if self.next_gw <= 19:
+            half_start = 1
+            half_end = 19
+            season_half = 1
+        else:
+            half_start = 20
+            half_end = 38
+            season_half = 2
+
+        max_gw = half_end
+
+        remaining_gws = list(
+            range(
+                max(self.next_gw, half_start),
+                half_end + 1,
+            )
+        )
+
+        print(
+            f"[CHIP] Season half={season_half} "
+            f"GW{half_start}-{half_end}"
+        )
         preseason = (
             self.next_gw == 1
             and not current_squad_ids
@@ -1015,19 +1035,26 @@ class SeasonChipPlanner:
     # Triple Captain
     # ------------------------------------------------------------------
 
-    def _score_tc(self, gw, meta, predictions, current_squad_ids=None,):
+    def _score_tc(self, gw, meta, predictions, current_squad_ids=None):
         """
-        Score Triple Captain for a specific GW.
-        TC value is driven by the actual best captain available
-        in the current squad.
-        Scoring model:
-            - captain xPts = primary signal
-            - DGW captain = major bonus
-            - large DGW = secondary bonus
-        IMPORTANT:
-            The score is based on the captain's actual target-GW
-            projected points. A 7 xPts captain should NOT automatically
-            become 100/100.
+        Score Triple Captain for one GW.
+        TC should primarily reward:
+            - high captain xPts
+            - DGW captain
+            - strong DGW opportunity
+            - captain reliability
+        The score is deliberately NOT allowed to hit 100 merely because
+        a normal single-gameweek captain has ~7 xPts.
+        A normal SGW captain around 7 xPts is a decent captaincy option,
+        but it is not automatically a Triple Captain opportunity.
+        Approximate interpretation:
+            < 6.0 xPts       -> weak TC
+            6.0-7.0          -> moderate
+            7.0-8.0          -> strong SGW / moderate TC
+            8.0-9.0          -> very strong
+            9.0+             -> elite
+        DGW captain receives a substantial bonus because the captain has
+        multiple scoring opportunities.
         """
 
         if not current_squad_ids:
@@ -1073,7 +1100,7 @@ class SeasonChipPlanner:
             )
 
         # ------------------------------------------------------------
-        # Find best captain available in current squad
+        # Best captain
         # ------------------------------------------------------------
 
         best = max(
@@ -1102,89 +1129,121 @@ class SeasonChipPlanner:
             )
 
         # ------------------------------------------------------------
-        # Base TC value
+        # Base captain quality
         #
-        # Rough interpretation:
+        # This deliberately uses a much softer curve than the previous
+        # implementation.
         #
-        # 5 xPts  -> 20
-        # 6 xPts  -> 35
-        # 7 xPts  -> 50
-        # 8 xPts  -> 65
-        # 9 xPts  -> 80
-        # 10+     -> 95+
-        #
-        # This is intentionally not enough by itself to reach 100.
-        # The DGW opportunity supplies the remaining value.
+        # A 7.0 xPts SGW captain should NOT be 100/100.
         # ------------------------------------------------------------
 
-        base_score = min(
-            90.0,
-            max(
-                0.0,
-                (captain_xpts - 3.5) * 15.0,
-            ),
-        )
+        if captain_xpts < 5.0:
+            score = 10.0
 
-        score = base_score
+        elif captain_xpts < 6.0:
+            score = 25.0
+
+        elif captain_xpts < 7.0:
+            score = 40.0
+
+        elif captain_xpts < 8.0:
+            score = 55.0
+
+        elif captain_xpts < 9.0:
+            score = 70.0
+
+        elif captain_xpts < 10.0:
+            score = 82.0
+
+        elif captain_xpts < 11.0:
+            score = 90.0
+
+        else:
+            score = 95.0
 
         reasons = [
-            f"{best.get('name', 'Captain')} ~{captain_xpts:.1f} xPts"
+            f"{best['name']} ~{captain_xpts:.1f} xPts"
         ]
 
         details = {
-            "best_captain": best.get("name", "Unknown"),
+            "best_captain": best["name"],
             "captain_xpts": round(captain_xpts, 2),
             "captain_fixture_count": fixture_count,
-            "base_score": round(base_score, 1),
+            "is_dgw_captain": fixture_count >= 2,
         }
 
         # ------------------------------------------------------------
         # DGW captain
+        #
+        # This is the main TC trigger.
         # ------------------------------------------------------------
 
         if fixture_count >= 2:
-            # TC on a DGW captain is the main reason to use the chip.
-            score += 15
+
+            # Two fixtures is the normal strong TC setup.
+            score += 20.0
 
             reasons.append(
                 f"DGW captain ({fixture_count} fixtures)"
             )
 
-            details["is_dgw_captain"] = True
+            # Extra reward for 3+ fixtures if your fixture data ever
+            # contains a situation like this.
+            if fixture_count >= 3:
+                score += 5.0
+                reasons.append(
+                    "Exceptional fixture volume"
+                )
 
         else:
-            details["is_dgw_captain"] = False
+
+            # A SGW captain can still be a good TC opportunity,
+            # but should require genuinely elite xPts.
+            #
+            # This prevents every 7 xPts captain from becoming TC 100.
+            if captain_xpts < 8.5:
+                score -= 10.0
+
+            elif captain_xpts < 9.5:
+                score -= 5.0
+
+            else:
+                reasons.append(
+                    "Elite SGW captain"
+                )
 
         # ------------------------------------------------------------
-        # Overall DGW size
+        # Overall DGW strength
         # ------------------------------------------------------------
 
         dgw_count = int(
             meta.get("dgw_team_count", 0) or 0
         )
 
-        if dgw_count >= 8:
-            score += 10
-            reasons.append(
-                f"Major DGW: {dgw_count} teams"
-            )
-
-        elif dgw_count >= 6:
-            score += 7
-            reasons.append(
-                f"Large DGW: {dgw_count} teams"
-            )
-
-        elif dgw_count >= 4:
-            score += 4
-            reasons.append(
-                f"Strong DGW: {dgw_count} teams"
-            )
-
         details["dgw_team_count"] = dgw_count
 
+        if fixture_count >= 2:
+
+            if dgw_count >= 8:
+                score += 10.0
+                reasons.append(
+                    f"Major DGW: {dgw_count} teams"
+                )
+
+            elif dgw_count >= 6:
+                score += 7.0
+                reasons.append(
+                    f"Strong DGW: {dgw_count} teams"
+                )
+
+            elif dgw_count >= 4:
+                score += 4.0
+                reasons.append(
+                    f"DGW: {dgw_count} teams"
+                )
+
         # ------------------------------------------------------------
-        # Final score
+        # Final clamp
         # ------------------------------------------------------------
 
         score = min(
@@ -1195,7 +1254,7 @@ class SeasonChipPlanner:
             ),
         )
 
-        details["score"] = score
+        details["score_available"] = True
 
         return (
             score,
@@ -1443,15 +1502,15 @@ class SeasonChipPlanner:
 
     def _score_fh(self, gw, meta, predictions, current_squad_ids):
         """
-        Score Free Hit based on the expected-point gain from
-        replacing the current XI with the best legal FH XI.
+        Score Free Hit for a specific GW.
         Core value:
-            FH XI xPts - current XI xPts
-        Strategic bonuses:
-            - BGW
-            - squad blanking
-            - DGW
-        The xPts gain remains the dominant component.
+
+            optimal FH XI
+            -
+            current squad XI
+        FH receives its strongest strategic bonus in a BGW because the
+        temporary squad can replace blanking players for one GW.
+        DGW alone is NOT enough to make FH a great chip.
         """
 
         if not current_squad_ids:
@@ -1480,26 +1539,25 @@ class SeasonChipPlanner:
             if p.get("player_id") is not None
         }
 
-        # ------------------------------------------------------------
-        # Current squad
-        # ------------------------------------------------------------
-
         current_players = [
             pred_map[pid]
             for pid in current_squad_ids
             if pid in pred_map
         ]
 
-        if len(current_players) < 11:
+        if not current_players:
             return (
                 None,
-                "Unavailable — incomplete current squad predictions",
+                "Unavailable — current squad not in predictions",
                 {
                     "score_available": False,
-                    "reason_code": "INCOMPLETE_CURRENT_SQUAD",
-                    "players_found": len(current_players),
+                    "reason_code": "CURRENT_SQUAD_NOT_FOUND",
                 },
             )
+
+        # ------------------------------------------------------------
+        # Current XI
+        # ------------------------------------------------------------
 
         current_xi, current_xi_xpts = self._select_best_xi(
             current_players
@@ -1541,49 +1599,21 @@ class SeasonChipPlanner:
                 },
             )
 
-        # ------------------------------------------------------------
-        # Actual FH gain
-        # ------------------------------------------------------------
-
         fh_gain = max(
             0.0,
             fh_xi_xpts - current_xi_xpts,
         )
 
         # ------------------------------------------------------------
-        # Core score
+        # Core expected-point gain
         #
-        # 0 xPts gain  -> 0
-        # 5 xPts gain  -> 30
-        # 10 xPts gain -> 60
-        # 15 xPts gain -> 80
-        # 20 xPts gain -> 95
-        # 22+          -> 100
+        # 20 xPts is extremely large FH upside.
         # ------------------------------------------------------------
 
-        if fh_gain <= 0:
-            core_score = 0.0
-        elif fh_gain <= 5:
-            core_score = fh_gain * 6.0
-        elif fh_gain <= 10:
-            core_score = 30.0 + (
-                (fh_gain - 5.0) * 6.0
-            )
-        elif fh_gain <= 15:
-            core_score = 60.0 + (
-                (fh_gain - 10.0) * 4.0
-            )
-        elif fh_gain <= 20:
-            core_score = 80.0 + (
-                (fh_gain - 15.0) * 3.0
-            )
-        else:
-            core_score = 95.0 + min(
-                5.0,
-                (fh_gain - 20.0) * 1.0,
-            )
-
-        score = core_score
+        score = min(
+            70.0,
+            fh_gain * 3.5,
+        )
 
         reasons = []
 
@@ -1591,10 +1621,30 @@ class SeasonChipPlanner:
             reasons.append(
                 f"+{fh_gain:.1f} xPts vs current XI"
             )
-        else:
-            reasons.append(
-                "No meaningful FH xPts gain"
+
+        # ------------------------------------------------------------
+        # BGW
+        # ------------------------------------------------------------
+
+        blanking = 0
+
+        for pid in current_squad_ids:
+
+            player = self.engine.players.get(pid)
+
+            if not player:
+                continue
+
+            team_id = player.get("team")
+
+            fixtures = get_player_fixtures(
+                team_id,
+                gw,
+                self.fixtures,
             )
+
+            if not fixtures:
+                blanking += 1
 
         details = {
             "current_xi_xpts": round(
@@ -1609,106 +1659,71 @@ class SeasonChipPlanner:
                 fh_gain,
                 2,
             ),
-            "core_score": round(
-                core_score,
-                1,
-            ),
+            "blanking_players": blanking,
             "current_xi": [
-                p.get("name", "Unknown")
+                p["name"]
                 for p in current_xi
             ],
             "fh_xi": [
-                p.get("name", "Unknown")
+                p["name"]
                 for p in fh_xi
             ],
         }
 
-        # ------------------------------------------------------------
-        # BGW value
-        # ------------------------------------------------------------
-
         if meta.get("is_bgw"):
+
             bgw_count = int(
                 meta.get("bgw_team_count", 0) or 0
             )
 
-            # Maximum +15.
-            bgw_bonus = min(
-                15.0,
-                bgw_count * 2.5,
+            # BGW is FH's primary strategic use.
+            score += min(
+                25.0,
+                bgw_count * 4.0,
             )
-
-            score += bgw_bonus
 
             reasons.append(
                 f"BGW: {bgw_count} teams missing"
             )
 
-            details["bgw_bonus"] = round(
-                bgw_bonus,
-                1,
-            )
-
-            # Count current squad blanks.
-            blanking = 0
-
-            for pid in current_squad_ids:
-                player = self.engine.players.get(pid)
-
-                if not player:
-                    continue
-
-                team_id = player.get("team")
-
-                if not team_id:
-                    continue
-
-                fixtures = get_player_fixtures(
-                    team_id,
-                    gw,
-                    self.fixtures,
-                )
-
-                if not fixtures:
-                    blanking += 1
-
-            details["blanking_players"] = blanking
-
             if blanking >= 6:
-                score += 10
+                score += 15
                 reasons.append(
                     f"{blanking} squad players blank"
                 )
 
             elif blanking >= 4:
-                score += 6
+                score += 10
+                reasons.append(
+                    f"{blanking} squad players blank"
+                )
+
+            elif blanking >= 2:
+                score += 5
                 reasons.append(
                     f"{blanking} squad players blank"
                 )
 
         # ------------------------------------------------------------
-        # DGW value
+        # DGW
+        #
+        # DGW gets only a small bonus.
+        # FH is not primarily a DGW chip.
         # ------------------------------------------------------------
 
         if meta.get("is_dgw"):
+
             dgw_count = int(
                 meta.get("dgw_team_count", 0) or 0
             )
 
-            dgw_bonus = min(
+            score += min(
                 8.0,
                 dgw_count * 0.8,
             )
 
-            score += dgw_bonus
-
             reasons.append(
                 f"DGW opportunity ({dgw_count} teams)"
-            )
-
-            details["dgw_bonus"] = round(
-                dgw_bonus,
-                1,
             )
 
         # ------------------------------------------------------------
@@ -1723,7 +1738,12 @@ class SeasonChipPlanner:
             ),
         )
 
-        details["score"] = score
+        if not reasons:
+            reasons.append(
+                "Limited Free Hit upside this GW"
+            )
+
+        details["score_available"] = True
 
         return (
             score,
@@ -1735,16 +1755,16 @@ class SeasonChipPlanner:
     # Wildcard
     # ------------------------------------------------------------------
 
-    def _score_wc(self, gw, meta, predictions, current_squad_ids,):
+    def _score_wc(self, gw, meta, predictions, current_squad_ids):
         """
-        Score Wildcard using projected 4-GW squad value.
+        Score Wildcard based on actual projected XI improvement.
         Compare:
-            best possible squad from GW onward
+            best possible squad
             vs
             current squad
-        across the next 4 gameweeks.
-        The Wildcard score therefore represents actual projected
-        squad improvement rather than only fixture heuristics.
+        over the next four GWs.
+        Wildcard should therefore be driven primarily by actual xPts
+        improvement, not arbitrary fixture/DGW bonuses.
         """
 
         if not current_squad_ids:
@@ -1767,10 +1787,6 @@ class SeasonChipPlanner:
                 },
             )
 
-        # ------------------------------------------------------------
-        # Current squad must exist in target predictions
-        # ------------------------------------------------------------
-
         pred_map = {
             p["player_id"]: p
             for p in predictions
@@ -1783,35 +1799,40 @@ class SeasonChipPlanner:
             if pid in pred_map
         ]
 
-        if len(current_players) < 11:
+        if not current_players:
             return (
                 None,
-                "Unavailable — incomplete current squad predictions",
+                "Unavailable — current squad predictions missing",
                 {
                     "score_available": False,
-                    "reason_code": "INCOMPLETE_CURRENT_SQUAD",
-                    "players_found": len(current_players),
+                    "reason_code": "CURRENT_SQUAD_NOT_FOUND",
                 },
             )
 
         # ------------------------------------------------------------
-        # Current squad projected value
+        # Current squad projection
         # ------------------------------------------------------------
 
-        current_4gw_xpts = self._project_squad_over_gws(
+        current_xpts = self._project_squad_over_gws(
             current_squad_ids,
             gw,
             num_gws=4,
         )
 
         # ------------------------------------------------------------
-        # Build a candidate Wildcard pool.
+        # Build an approximate best WC squad.
         #
-        # Use the strongest players from the target GW, then use
-        # the XI selector to enforce position/club rules.
+        # IMPORTANT:
+        # _select_best_xi() only selects an XI.
+        #
+        # Wildcard needs a 15-player squad.
+        #
+        # For scoring purposes we create the strongest legal-ish pool
+        # from the target predictions, then project those players over
+        # the four-week horizon.
         # ------------------------------------------------------------
 
-        candidate_predictions = [
+        positive_predictions = [
             p
             for p in predictions
             if float(
@@ -1819,10 +1840,10 @@ class SeasonChipPlanner:
             ) > 0
         ]
 
-        if len(candidate_predictions) < 11:
+        if len(positive_predictions) < 11:
             return (
                 None,
-                "Unavailable — insufficient Wildcard candidates",
+                "Unavailable — insufficient WC candidates",
                 {
                     "score_available": False,
                     "reason_code": "INSUFFICIENT_WC_CANDIDATES",
@@ -1830,313 +1851,257 @@ class SeasonChipPlanner:
             )
 
         # ------------------------------------------------------------
-        # We need a 15-man squad, not just an XI.
+        # Build candidate list using the strongest target-GW players.
         #
-        # For the planner's purposes, construct the candidate squad
-        # by taking the strongest legal XI first and then add the
-        # strongest remaining players.
+        # Keep this bounded to avoid huge combinatorial searches.
         # ------------------------------------------------------------
 
-        wc_xi, wc_xi_xpts = self._select_best_xi(
-            candidate_predictions
-        )
+        by_position = {
+            1: [],
+            2: [],
+            3: [],
+            4: [],
+        }
 
-        if not wc_xi:
-            return (
-                None,
-                "Unavailable — could not build Wildcard XI",
-                {
-                    "score_available": False,
-                    "reason_code": "WC_XI_FAILED",
-                },
+        for player in positive_predictions:
+
+            position = player.get(
+                "position_id",
+                player.get("element_type"),
             )
 
-        wc_ids = [
-            p.get("player_id")
-            for p in wc_xi
+            try:
+                position = int(position)
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
+
+            if position in by_position:
+                by_position[position].append(player)
+
+        for position in by_position:
+
+            by_position[position].sort(
+                key=lambda p: float(
+                    p.get(
+                        "predicted_points",
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                reverse=True,
+            )
+
+        # FPL squad structure:
+        #
+        # 2 GK
+        # 5 DEF
+        # 5 MID
+        # 3 FWD
+        #
+        # We take a bounded candidate set and select the best XI
+        # after combining the positions.
+
+        wc_candidates = []
+
+        for position, count in (
+            (1, 2),
+            (2, 5),
+            (3, 5),
+            (4, 3),
+        ):
+
+            wc_candidates.extend(
+                by_position[position][:count]
+            )
+
+        # ------------------------------------------------------------
+        # Ensure we have enough players.
+        # ------------------------------------------------------------
+
+        if len(wc_candidates) < 15:
+
+            fallback = sorted(
+                positive_predictions,
+                key=lambda p: float(
+                    p.get(
+                        "predicted_points",
+                        0.0,
+                    )
+                    or 0.0
+                ),
+                reverse=True,
+            )
+
+            existing_ids = {
+                p.get("player_id")
+                for p in wc_candidates
+            }
+
+            for player in fallback:
+
+                pid = player.get("player_id")
+
+                if pid in existing_ids:
+                    continue
+
+                wc_candidates.append(player)
+                existing_ids.add(pid)
+
+                if len(wc_candidates) >= 15:
+                    break
+
+        # ------------------------------------------------------------
+        # Project candidate WC squad.
+        # ------------------------------------------------------------
+
+        wc_player_ids = [
+            p["player_id"]
+            for p in wc_candidates
             if p.get("player_id") is not None
         ]
 
-        # ------------------------------------------------------------
-        # Add four bench players.
-        #
-        # Prefer high-xPts candidates while maintaining basic
-        # squad diversity. The XI already satisfies the main
-        # positional and club constraints.
-        # ------------------------------------------------------------
-
-        used_ids = set(wc_ids)
-        used_teams = {}
-
-        for player in wc_xi:
-            team_id = player.get("team")
-
-            if team_id is None:
-                continue
-
-            used_teams[team_id] = (
-                used_teams.get(team_id, 0) + 1
-            )
-
-        remaining_candidates = sorted(
-            (
-                p
-                for p in candidate_predictions
-                if p.get("player_id") not in used_ids
-            ),
-            key=lambda p: float(
-                p.get("predicted_points", 0.0) or 0.0
-            ),
-            reverse=True,
-        )
-
-        for player in remaining_candidates:
-            if len(wc_ids) >= 15:
-                break
-
-            pid = player.get("player_id")
-
-            if pid is None:
-                continue
-
-            team_id = player.get("team")
-
-            if team_id is not None:
-                if used_teams.get(team_id, 0) >= 3:
-                    continue
-
-            wc_ids.append(pid)
-            used_ids.add(pid)
-
-            if team_id is not None:
-                used_teams[team_id] = (
-                    used_teams.get(team_id, 0) + 1
-                )
-
-        if len(wc_ids) < 15:
-            return (
-                None,
-                "Unavailable — could not build 15-man Wildcard squad",
-                {
-                    "score_available": False,
-                    "reason_code": "WC_SQUAD_FAILED",
-                    "players_found": len(wc_ids),
-                },
-            )
-
-        # ------------------------------------------------------------
-        # Project Wildcard squad over next four GWs
-        # ------------------------------------------------------------
-
-        wildcard_4gw_xpts = self._project_squad_over_gws(
-            wc_ids,
+        wildcard_xpts = self._project_squad_over_gws(
+            wc_player_ids,
             gw,
             num_gws=4,
         )
 
         wc_gain = max(
             0.0,
-            wildcard_4gw_xpts - current_4gw_xpts,
+            wildcard_xpts - current_xpts,
         )
 
         # ------------------------------------------------------------
-        # Core score
+        # Convert actual xPts gain to score.
         #
-        # 0 xPts gain  -> 0
-        # 10 xPts      -> 30
-        # 20 xPts      -> 60
-        # 30 xPts      -> 80
-        # 40+ xPts     -> 100
+        # 0 gain     = 0
+        # 10 xPts    = 35
+        # 20 xPts    = 70
+        # 28+ xPts   = 100
         #
-        # This is a 4-GW improvement, so the scale is deliberately
-        # different from FH.
+        # This prevents WC=100 simply because there are difficult
+        # fixtures in the current squad.
         # ------------------------------------------------------------
 
-        if wc_gain <= 0:
-            core_score = 0.0
-
-        elif wc_gain <= 10:
-            core_score = wc_gain * 3.0
-
-        elif wc_gain <= 20:
-            core_score = 30.0 + (
-                (wc_gain - 10.0) * 3.0
-            )
-
-        elif wc_gain <= 30:
-            core_score = 60.0 + (
-                (wc_gain - 20.0) * 2.0
-            )
-
-        elif wc_gain <= 40:
-            core_score = 80.0 + (
-                (wc_gain - 30.0) * 2.0
-            )
-
-        else:
-            core_score = 100.0
-
-        score = core_score
+        score = min(
+            100.0,
+            wc_gain * 3.5,
+        )
 
         reasons = []
 
         if wc_gain > 0:
+
             reasons.append(
                 f"+{wc_gain:.1f} xPts over 4 GWs"
             )
-        else:
-            reasons.append(
-                "Little projected gain from Wildcard"
-            )
-
-        details = {
-            "current_4gw_xpts": round(
-                current_4gw_xpts,
-                2,
-            ),
-            "wildcard_4gw_xpts": round(
-                wildcard_4gw_xpts,
-                2,
-            ),
-            "wildcard_gain_xpts": round(
-                wc_gain,
-                2,
-            ),
-            "core_score": round(
-                core_score,
-                1,
-            ),
-            "wildcard_xi": [
-                p.get("name", "Unknown")
-                for p in wc_xi
-            ],
-        }
 
         # ------------------------------------------------------------
-        # Current squad fixture problems
-        # ------------------------------------------------------------
-
-        poor_players = 0
-        blank_players = 0
-
-        for pid in current_squad_ids:
-            player = self.engine.players.get(pid)
-
-            if not player:
-                continue
-
-            team_id = player.get("team")
-
-            if not team_id:
-                continue
-
-            has_fixture = False
-            has_good_fixture = False
-
-            for check_gw in range(
-                gw,
-                min(gw + 4, 39),
-            ):
-                fixtures = get_player_fixtures(
-                    team_id,
-                    check_gw,
-                    self.fixtures,
-                )
-
-                for fixture in fixtures:
-                    has_fixture = True
-
-                    if fixture.get("fdr", 3) <= 2:
-                        has_good_fixture = True
-
-            if not has_fixture:
-                blank_players += 1
-
-            elif not has_good_fixture:
-                poor_players += 1
-
-        details["blank_players"] = blank_players
-        details["poor_fixture_players"] = poor_players
-
-        if blank_players >= 4:
-            score += 10
-
-            reasons.append(
-                f"{blank_players} players have no fixture coverage"
-            )
-
-        elif blank_players >= 2:
-            score += 5
-
-            reasons.append(
-                f"{blank_players} players have no fixture coverage"
-            )
-
-        if poor_players >= 6:
-            score += 8
-
-            reasons.append(
-                f"{poor_players} players lack good fixtures"
-            )
-
-        elif poor_players >= 4:
-            score += 4
-
-            reasons.append(
-                f"{poor_players} players lack good fixtures"
-            )
-
-        # ------------------------------------------------------------
-        # Upcoming DGW
+        # Future DGW gives Wildcard some additional strategic value,
+        # but only as a modest modifier.
         # ------------------------------------------------------------
 
         future_dgw = []
 
         for future_gw in range(
-            gw + 1,
-            min(gw + 5, 39),
+            gw,
+            min(gw + 4, 39),
         ):
-            dgw = get_dgw_teams(
+
+            dgw_teams = get_dgw_teams(
                 future_gw,
                 self.fixtures,
             )
 
-            if len(dgw) >= 4:
+            if len(dgw_teams) >= 4:
+
                 future_dgw.append(
                     (
                         future_gw,
-                        len(dgw),
+                        len(dgw_teams),
                     )
                 )
 
         if future_dgw:
-            target_gw, dgw_count = future_dgw[0]
 
-            details["target_dgw"] = target_gw
-            details["target_dgw_count"] = dgw_count
+            target_dgw, dgw_count = future_dgw[0]
 
+            details = {
+                "current_xpts_4gw": round(
+                    current_xpts,
+                    2,
+                ),
+                "wildcard_xpts_4gw": round(
+                    wildcard_xpts,
+                    2,
+                ),
+                "wildcard_gain_xpts": round(
+                    wc_gain,
+                    2,
+                ),
+                "target_dgw": target_dgw,
+                "target_dgw_count": dgw_count,
+            }
+
+            # Small strategic bonus only.
             score += min(
-                8,
+                8.0,
                 max(
                     0,
-                    (dgw_count - 3) * 2,
+                    dgw_count - 3,
+                ) * 2.0,
+            )
+
+            reasons.append(
+                f"GW{target_dgw} has {dgw_count}-team DGW ahead"
+            )
+
+        else:
+
+            details = {
+                "current_xpts_4gw": round(
+                    current_xpts,
+                    2,
                 ),
-            )
-
-            reasons.append(
-                f"GW{target_gw} has "
-                f"{dgw_count}-team DGW ahead"
-            )
+                "wildcard_xpts_4gw": round(
+                    wildcard_xpts,
+                    2,
+                ),
+                "wildcard_gain_xpts": round(
+                    wc_gain,
+                    2,
+                ),
+            }
 
         # ------------------------------------------------------------
-        # Late season
+        # Fixture deterioration modifier.
+        #
+        # Keep this small because actual xPts gain is the primary signal.
         # ------------------------------------------------------------
 
-        if gw >= 30:
-            score += 3
+        current_fixture_ease = (
+            self._lightweight_fixture_ease(
+                gw,
+                current_squad_ids,
+            )
+        )
+
+        details[
+            "current_fixture_ease"
+        ] = round(
+            current_fixture_ease,
+            3,
+        )
+
+        if current_fixture_ease < -0.6:
+
+            score += 5
 
             reasons.append(
-                "Late season — final-push flexibility"
+                "Current squad faces a difficult fixture run"
             )
 
         # ------------------------------------------------------------
@@ -2151,15 +2116,23 @@ class SeasonChipPlanner:
             ),
         )
 
-        details["score"] = score
+        if score < 20:
 
-        details["recommendation_strength"] = (
+            reasons = [
+                "Current squad does not justify a Wildcard yet"
+            ]
+
+        details[
+            "recommendation_strength"
+        ] = (
             "strong"
             if score >= 70
             else "consider"
             if score >= 40
             else "save"
         )
+
+        details["score_available"] = True
 
         return (
             score,
