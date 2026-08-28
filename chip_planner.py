@@ -269,22 +269,29 @@ class SeasonChipPlanner:
             {}
         )
 
-        if gw in cache:
-            return cache[gw]
+        cache_key = (gw, tuple(sorted(candidate_ids))
+            if candidate_ids
+            else None
+        )
+
+        if cache_key in cache:
+            return cache[cache_key]
 
         # ============================================================
         # FULL ENGINE MODE
         # ============================================================
 
         if hasattr(self.engine, "predict_player"):
-            results = []
+            player_ids = (
+                candidate_ids
+                if candidate_ids
+                else self.engine.players.keys()
+            )
 
-            for pid in self.engine.players:
+            results = []
+            for pid in player_ids:
                 try:
-                    pred = self.engine.predict_player(
-                        pid,
-                        gw,
-                    )
+                    pred = self.engine.predict_player(pid, gw)
 
                     if pred and not pred.get("error"):
                         results.append(pred)
@@ -294,15 +301,12 @@ class SeasonChipPlanner:
                         f"[CHIP] Target prediction failed "
                         f"GW{gw} player={pid}: {exc}"
                     )
-
-            cache[gw] = results
+            cache[cache_key] = results
             self._target_prediction_cache = cache
-
             print(
                 f"[CHIP] Target predictions GW{gw}: "
                 f"{len(results)} players"
             )
-
             return results
 
         # ============================================================
@@ -614,14 +618,28 @@ class SeasonChipPlanner:
 
         for gw in remaining_gws:
             meta = gw_meta[gw]
-            predictions = self._get_target_predictions(gw)
             gw_info = meta
+            # Normal 616-player projections for BB/FH/WC
+            predictions = self._get_target_predictions(gw)
+
             for chip in chips_available:
+
+                chip_predictions = predictions
+
+                # TC needs genuinely recalculated
+                # target-GW predictions for the current squad.
+                if chip == "TC" and current_squad_ids:
+
+                    chip_predictions = self._get_target_predictions(
+                        gw,
+                        candidate_ids=current_squad_ids,
+                    )
+
                 score_data = self._score_chip_for_gw(
                     chip,
                     gw,
                     meta,
-                    predictions,
+                    chip_predictions,
                     gw_info,
                     current_squad_ids,
                     bank,
@@ -810,19 +828,10 @@ class SeasonChipPlanner:
             "gameweek": gw,
             "score": score_value,
             "reason": reason,
-
             "is_dgw": meta["is_dgw"],
             "is_bgw": meta["is_bgw"],
-
-            "dgw_teams": meta.get(
-                "dgw_team_count",
-                0
-            ),
-
-            "fixtures": meta[
-                "total_fixtures"
-            ],
-
+            "dgw_teams": meta.get("dgw_team_count", 0),
+            "fixtures": meta["total_fixtures"],
             **details,
         }
 
