@@ -204,20 +204,64 @@ class SeasonChipPlanner:
 
         return total / count if count else 0.0
 
-    def _get_target_predictions(self, gw):
+    def _get_target_predictions(self, gw, candidate_ids=None):
         """
         Get target-GW player projections.
-
         Full PredictionEngine mode:
             Uses engine.predict_player(pid, gw).
-
         Lightweight mode:
             Uses cached baseline predictions and projects them onto
             the target GW using that GW's fixtures/FDR.
-
         This avoids constructing a second expensive PredictionEngine
         during /api/season-chips.
         """
+        # Targeted prediction mode
+        if candidate_ids:
+            candidate_ids = list(dict.fromkeys(candidate_ids))
+
+            cache_key = (
+                "targeted",
+                int(gw),
+                tuple(sorted(candidate_ids)),
+            )
+
+            cache = getattr(
+                self,
+                "_target_prediction_cache",
+                {},
+            )
+
+            if cache_key in cache:
+                return cache[cache_key]
+
+            results = []
+
+            if hasattr(self.engine, "predict_player"):
+                for pid in candidate_ids:
+                    try:
+                        pred = self.engine.predict_player(
+                            pid,
+                            gw,
+                        )
+
+                        if pred and not pred.get("error"):
+                            results.append(pred)
+
+                    except Exception as exc:
+                        print(
+                            f"[CHIP] Target prediction failed "
+                            f"GW{gw} player={pid}: {exc}"
+                        )
+
+            cache[cache_key] = results
+            self._target_prediction_cache = cache
+
+            print(
+                f"[CHIP] Targeted TC predictions GW{gw}: "
+                f"{len(results)} players"
+            )
+
+            return results
 
         cache = getattr(
             self,
@@ -719,10 +763,15 @@ class SeasonChipPlanner:
             )
 
         elif chip == "TC":
+            tc_predictions = self._get_target_predictions(
+                gw,
+                candidate_ids=current_squad_ids,
+            )
+
             score, reason, details = self._score_tc(
                 gw,
                 meta,
-                predictions,
+                tc_predictions,
                 current_squad_ids,
             )
 
@@ -1237,60 +1286,28 @@ class SeasonChipPlanner:
         ]
 
         for gk in goalkeepers:
-
-            for defender_count, midfielder_count, forward_count in (
-                valid_formations
-            ):
-
+            for defender_count, midfielder_count, forward_count in (valid_formations):
                 team_counts = {}
-
                 gk_team = team_id(gk)
-
                 if gk_team is not None:
                     team_counts[gk_team] = 1
 
-                selected_defs = add_best(
-                    defenders,
-                    defender_count,
-                    team_counts,
-                )
-
+                selected_defs = add_best(defenders, defender_count, team_counts)
                 if len(selected_defs) != defender_count:
                     continue
-
-                selected_mids = add_best(
-                    midfielders,
-                    midfielder_count,
-                    team_counts,
-                )
-
+                selected_mids = add_best(midfielders, midfielder_count, team_counts)
                 if len(selected_mids) != midfielder_count:
                     continue
-
-                selected_fwds = add_best(
-                    forwards,
-                    forward_count,
-                    team_counts,
-                )
-
+                selected_fwds = add_best(forwards, forward_count, team_counts)
                 if len(selected_fwds) != forward_count:
                     continue
-
-                xi = (
-                    [gk]
-                    + selected_defs
-                    + selected_mids
-                    + selected_fwds
-                )
-
+                xi = ([gk] + selected_defs + selected_mids + selected_fwds)
                 if len(xi) != 11:
                     continue
-
                 total = sum(
                     xpts(player)
                     for player in xi
                 )
-
                 if total > best_points:
                     best_points = total
                     best_xi = xi
@@ -1311,7 +1328,6 @@ class SeasonChipPlanner:
         """
         Score Free Hit for a specific GW.
         Core value:
-
             optimal FH XI
             -
             current squad XI
@@ -1417,22 +1433,10 @@ class SeasonChipPlanner:
         # 20 xPts is extremely large FH upside.
         # ------------------------------------------------------------
 
-        score = round(
-            min(
-                100.0,
-                max(
-                    0.0,
-                    fh_gain * 5.0,
-                ),
-            )
-        )
-
+        score = round(min(100.0, max(0.0, fh_gain * 5.0)))
         reasons = []
-
         if fh_gain > 0:
-            reasons.append(
-                f"+{fh_gain:.1f} xPts vs current XI"
-            )
+            reasons.append(f"+{fh_gain:.1f} xPts vs current XI")
 
         # ------------------------------------------------------------
         # BGW
@@ -1459,18 +1463,9 @@ class SeasonChipPlanner:
                 blanking += 1
 
         details = {
-            "current_xi_xpts": round(
-                current_xi_xpts,
-                2,
-            ),
-            "fh_xi_xpts": round(
-                fh_xi_xpts,
-                2,
-            ),
-            "fh_gain_xpts": round(
-                fh_gain,
-                2,
-            ),
+            "current_xi_xpts": round(current_xi_xpts, 2),
+            "fh_xi_xpts": round(fh_xi_xpts, 2),
+            "fh_gain_xpts": round(fh_gain, 2),
             "blanking_players": blanking,
             "current_xi": [
                 p["name"]
