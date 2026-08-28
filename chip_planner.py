@@ -1055,6 +1055,28 @@ class SeasonChipPlanner:
             "tc_ev_xpts": round(tc_ev, 2),
         }
 
+        top_candidates = sorted(
+            candidates,
+            key=lambda p: float(
+                p.get("predicted_points", 0.0) or 0.0
+            ),
+            reverse=True,
+        )[:5]
+
+        details["top_tc_candidates"] = [
+            {
+                "name": p.get("name"),
+                "xpts": round(
+                    float(
+                        p.get("predicted_points", 0.0) or 0.0
+                    ),
+                    2,
+                ),
+                "fixtures": p.get("num_fixtures", 0),
+            }
+            for p in top_candidates
+        ]
+
         reasons = [
             f"{best['name']} ~{captain_xpts:.1f} xPts"
         ]
