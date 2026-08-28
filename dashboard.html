@@ -3016,6 +3016,19 @@ function confBar(val) {
 // ── Chip Strategy Page ──
 function renderChipPage(chips, gwInfo) {
   const dgwCount = Object.keys(gwInfo.dgw_teams || {}).length;
+  const currentGw = Number(gwInfo.gameweek);
+  const currentGwScores = {};
+  ['BB', 'TC', 'FH', 'WC'].forEach(chip => {
+    const scores = chips?.[chip]?.all_scores || [];
+    const current = scores.find(
+      s => Number(s.gameweek) === currentGw
+    );
+    if (current && Number.isFinite(Number(current.score))) {
+      currentGwScores[chip] = Number(current.score);
+    }
+  });
+  const bestCurrentChip = Object.entries(currentGwScores)
+    .sort((a, b) => b[1] - a[1])[0] || null;
   document.getElementById('chip-gw-info').innerHTML = `
     <h3 style="margin-bottom:8px;">Current GW${gwInfo.gameweek} Summary</h3>
     <div style="display:flex;gap:20px;flex-wrap:wrap;">
@@ -3023,7 +3036,7 @@ function renderChipPage(chips, gwInfo) {
       <div><span style="color:var(--text3);font-size:12px;">Fixtures</span><br><strong style="font-size:20px;">${gwInfo.total_fixtures}</strong></div>
       <div><span style="color:var(--text3);font-size:12px;">Type</span><br><strong style="font-size:20px;color:${gwInfo.is_dgw ? 'var(--dgw)' : 'var(--text2)'};">${gwInfo.is_dgw ? 'DOUBLE GW' : 'Standard'}</strong></div>
       <div><span style="color:var(--text3);font-size:12px;">DGW Teams</span><br><strong style="font-size:20px;color:var(--dgw);">${dgwCount}</strong></div>
-      <div><span style="color:var(--text3);font-size:12px;">Best Chip (this GW)</span><br><strong style="font-size:20px;color:var(--accent);">${chips.best_chip ? chips.best_chip.code + ' (' + chips.best_chip.score + '/100)' : 'SAVE'}</strong></div>
+      <div><span style="color:var(--text3);font-size:12px;">Best Chip (this GW)</span><br><strong style="font-size:20px;color:var(--accent);">${bestCurrentChip ? bestCurrentChip[0] + ' (' + Math.round(bestCurrentChip[1]) + '/100)' : 'SAVE'}</strong></div>
     </div>
     <p style="margin-top:12px;font-size:12px;color:var(--text3);">Current GW recommendation. Click "Analyze Season" to evaluate chip timing across all remaining GWs.</p>
   `;

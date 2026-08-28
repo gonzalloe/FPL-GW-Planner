@@ -1136,11 +1136,12 @@ class SeasonChipPlanner:
         # Final clamp
         # ------------------------------------------------------------
 
-        score = 100.0 * (1.0 - math.exp(
-                -(captain_xpts - 3.0) / 7.0
+        score = round(
+            min(
+                100.0,
+                max(0.0, score),
             )
         )
-        score = round(max(0.0, score))
 
         details["score_available"] = True
 
