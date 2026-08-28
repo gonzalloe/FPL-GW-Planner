@@ -207,37 +207,91 @@ class SeasonChipPlanner:
     def _get_target_predictions(self, gw, candidate_ids=None):
         """
         Get target-GW player projections.
+
+        Targeted mode:
+            Used by Triple Captain analysis.
+            Returns only the requested player IDs.
+
+        Full mode:
+            Returns projections for the complete player pool.
+
         Full PredictionEngine mode:
             Uses engine.predict_player(pid, gw).
+
         Lightweight mode:
             Uses cached baseline predictions and projects them onto
             the target GW using that GW's fixtures/FDR.
-        This avoids constructing a second expensive PredictionEngine
-        during /api/season-chips.
-        """
-        # Targeted prediction mode
-        if candidate_ids:
-            candidate_ids = list(dict.fromkeys(candidate_ids))
 
+        IMPORTANT:
+            If targeted engine prediction returns no usable players,
+            targeted mode falls back to lightweight baseline projection.
+            This prevents:
+                [CHIP] Targeted TC predictions GWx: 0 players
+        """
+
+        # ================================================================
+        # 1. NORMALISE INPUT
+        # ================================================================
+
+        try:
+            gw = int(gw)
+        except (TypeError, ValueError):
+            return []
+
+        if candidate_ids:
+            candidate_ids = list(
+                dict.fromkeys(
+                    int(pid)
+                    for pid in candidate_ids
+                    if pid is not None
+                )
+            )
+        else:
+            candidate_ids = None
+
+        # ================================================================
+        # 2. CACHE
+        # ================================================================
+
+        cache = getattr(
+            self,
+            "_target_prediction_cache",
+            {},
+        )
+
+        if candidate_ids is not None:
             cache_key = (
                 "targeted",
-                int(gw),
+                gw,
                 tuple(sorted(candidate_ids)),
             )
-
-            cache = getattr(
-                self,
-                "_target_prediction_cache",
-                {},
+        else:
+            cache_key = (
+                "full",
+                gw,
             )
 
-            if cache_key in cache:
-                return cache[cache_key]
+        if cache_key in cache:
+            return cache[cache_key]
+
+        # ================================================================
+        # 3. TARGETED ENGINE MODE
+        #
+        # Try the full prediction engine first.
+        #
+        # IMPORTANT:
+        # If it returns zero usable predictions, DO NOT return [].
+        # Fall through to lightweight mode.
+        # ================================================================
+
+        if candidate_ids:
 
             results = []
 
             if hasattr(self.engine, "predict_player"):
+
                 for pid in candidate_ids:
+
                     try:
                         pred = self.engine.predict_player(
                             pid,
@@ -245,100 +299,97 @@ class SeasonChipPlanner:
                         )
 
                         if pred and not pred.get("error"):
+
+                            if pred.get("player_id") is None:
+                                pred["player_id"] = pid
+
                             results.append(pred)
 
                     except Exception as exc:
+
                         print(
                             f"[CHIP] Target prediction failed "
                             f"GW{gw} player={pid}: {exc}"
                         )
 
-            cache[cache_key] = results
-            self._target_prediction_cache = cache
+            # Only return here if the targeted engine actually
+            # produced usable predictions.
+
+            if results:
+
+                cache[cache_key] = results
+                self._target_prediction_cache = cache
+
+                print(
+                    f"[CHIP] Targeted TC predictions GW{gw}: "
+                    f"{len(results)} players"
+                )
+
+                return results
 
             print(
-                f"[CHIP] Targeted TC predictions GW{gw}: "
-                f"{len(results)} players"
+                f"[CHIP] Targeted engine returned no usable "
+                f"predictions GW{gw}; falling back to lightweight mode."
             )
 
-            return results
-
-        cache = getattr(
-            self,
-            "_target_prediction_cache",
-            {}
-        )
-
-        cache_key = (gw, tuple(sorted(candidate_ids))
-            if candidate_ids
-            else None
-        )
-
-        if cache_key in cache:
-            return cache[cache_key]
-
-        # ============================================================
-        # FULL ENGINE MODE
-        # ============================================================
-
-        if hasattr(self.engine, "predict_player"):
-            player_ids = (
-                candidate_ids
-                if candidate_ids
-                else self.engine.players.keys()
-            )
-
-            results = []
-            for pid in player_ids:
-                try:
-                    pred = self.engine.predict_player(pid, gw)
-
-                    if pred and not pred.get("error"):
-                        results.append(pred)
-
-                except Exception as exc:
-                    print(
-                        f"[CHIP] Target prediction failed "
-                        f"GW{gw} player={pid}: {exc}"
-                    )
-            cache[cache_key] = results
-            self._target_prediction_cache = cache
-            print(
-                f"[CHIP] Target predictions GW{gw}: "
-                f"{len(results)} players"
-            )
-            return results
-
-        # ============================================================
-        # LIGHTWEIGHT MODE
-        # ============================================================
+        # ================================================================
+        # 4. BASELINE PREDICTIONS
+        # ================================================================
 
         baseline = getattr(
             self,
             "_baseline_predictions",
-            []
+            [],
         )
 
         if not baseline:
-            cache[gw] = []
-            self._target_prediction_cache = cache
 
             print(
                 f"[CHIP] No baseline predictions available for GW{gw}"
             )
 
+            cache[cache_key] = []
+            self._target_prediction_cache = cache
+
             return []
+
+        # ================================================================
+        # 5. FILTER BASELINE FOR TARGETED MODE
+        # ================================================================
+
+        if candidate_ids:
+
+            candidate_set = set(candidate_ids)
+
+            baseline_to_project = [
+                base
+                for base in baseline
+                if base.get("player_id") in candidate_set
+            ]
+
+        else:
+
+            baseline_to_project = baseline
+
+        # ================================================================
+        # 6. LIGHTWEIGHT PROJECTION
+        # ================================================================
 
         results = []
 
-        for base in baseline:
+        for base in baseline_to_project:
+
             try:
+
                 pid = base.get("player_id")
 
                 if pid is None:
                     continue
 
-                player = self.engine.players.get(pid)
+                player = self.engine.players.get(
+                    pid,
+                    {},
+                )
 
                 if not player:
                     continue
@@ -354,13 +405,15 @@ class SeasonChipPlanner:
                     self.fixtures,
                 )
 
-                # ----------------------------------------------------
+                # ========================================================
                 # BGW
-                # ----------------------------------------------------
+                # ========================================================
 
                 if not fixtures:
+
                     projected = dict(base)
 
+                    projected["player_id"] = pid
                     projected["predicted_points"] = 0.0
                     projected["raw_xpts"] = 0.0
                     projected["num_fixtures"] = 0
@@ -368,58 +421,96 @@ class SeasonChipPlanner:
                     projected["fixtures"] = []
 
                     results.append(projected)
+
                     continue
 
-                # ----------------------------------------------------
-                # Project each fixture
-                # ----------------------------------------------------
+                # ========================================================
+                # BASELINE XPTS
+                # ========================================================
 
                 base_xpts = float(
                     base.get(
                         "raw_xpts",
-                        base.get("predicted_points", 0.0)
-                    ) or 0.0
+                        base.get(
+                            "predicted_points",
+                            0.0,
+                        ),
+                    )
+                    or 0.0
                 )
 
-                # Avoid negative/invalid projections.
-                base_xpts = max(base_xpts, 0.0)
+                base_xpts = max(
+                    base_xpts,
+                    0.0,
+                )
+
+                # ========================================================
+                # POSITION
+                # ========================================================
+
+                position_id = int(
+                    base.get(
+                        "position_id",
+                        player.get(
+                            "position_id",
+                            player.get(
+                                "element_type",
+                                3,
+                            ),
+                        ),
+                    )
+                    or 3
+                )
+
+                # ========================================================
+                # PROJECT EACH FIXTURE
+                # ========================================================
 
                 fixture_values = []
 
                 for fixture in fixtures:
+
                     fdr = int(
-                        fixture.get("fdr", 3) or 3
+                        fixture.get(
+                            "fdr",
+                            3,
+                        )
+                        or 3
                     )
 
                     is_home = bool(
-                        fixture.get("is_home", False)
-                    )
-
-                    # Position-aware FDR modifier.
-                    position_id = int(
-                        base.get(
-                            "position_id",
-                            player.get(
-                                "position_id",
-                                3
-                            )
-                        ) or 3
+                        fixture.get(
+                            "is_home",
+                            False,
+                        )
                     )
 
                     try:
-                        modifier = self._position_fdr_modifier(position_id, fdr, is_home)
+
+                        modifier = self._position_fdr_modifier(
+                            position_id,
+                            fdr,
+                            is_home,
+                        )
+
                     except Exception as exc:
+
                         print(
                             f"[CHIP] FDR modifier failed "
                             f"GW{gw} player={pid} "
                             f"fdr={fdr}: {exc}"
                         )
+
                         modifier = 1.0
 
-                    # The baseline prediction is a per-fixture estimate.
-                    # Apply the target fixture difficulty and home/away adjustment.
-                    fixture_xpts = base_xpts * modifier
-                    fixture_xpts = max(0.0, fixture_xpts)
+                    fixture_xpts = (
+                        base_xpts * modifier
+                    )
+
+                    fixture_xpts = max(
+                        fixture_xpts,
+                        0.0,
+                    )
 
                     fixture_values.append(
                         {
@@ -428,34 +519,71 @@ class SeasonChipPlanner:
                         }
                     )
 
+                # ========================================================
+                # TOTAL TARGET-GW XPTS
+                # ========================================================
 
                 projected_xpts = sum(
                     item["xpts"]
                     for item in fixture_values
-                )             
+                )
 
                 projected = dict(base)
-                projected["predicted_points"] = round(projected_xpts, 3)
-                projected["raw_xpts"] = round(projected_xpts, 3)
-                projected["num_fixtures"] = len(fixtures)
-                projected["is_dgw"] = (len(fixtures) >= 2)
+
+                projected["player_id"] = pid
+                projected["position_id"] = position_id
+
+                projected["predicted_points"] = round(
+                    projected_xpts,
+                    3,
+                )
+
+                projected["raw_xpts"] = round(
+                    projected_xpts,
+                    3,
+                )
+
+                projected["num_fixtures"] = len(
+                    fixtures
+                )
+
+                projected["is_dgw"] = (
+                    len(fixtures) >= 2
+                )
+
                 projected["fixtures"] = fixtures
+
                 results.append(projected)
 
             except Exception as exc:
+
                 print(
                     f"[CHIP] Lightweight projection failed "
                     f"GW{gw} player={base.get('player_id')}: "
                     f"{exc}"
                 )
 
-        cache[gw] = results
+        # ================================================================
+        # 7. CACHE
+        # ================================================================
+
+        cache[cache_key] = results
+
         self._target_prediction_cache = cache
 
-        print(
-            f"[CHIP] Lightweight target projections GW{gw}: "
-            f"{len(results)} players"
-        )
+        if candidate_ids:
+
+            print(
+                f"[CHIP] Targeted TC predictions GW{gw}: "
+                f"{len(results)} players"
+            )
+
+        else:
+
+            print(
+                f"[CHIP] Lightweight target projections GW{gw}: "
+                f"{len(results)} players"
+            )
 
         return results
 
@@ -968,18 +1096,28 @@ class SeasonChipPlanner:
     # Triple Captain
     # ------------------------------------------------------------------
 
-    def _score_tc(self, gw, meta, predictions, current_squad_ids=None):
+    def _score_tc(self, gw, meta, predictions, current_squad_ids=None,):
         """
         Score Triple Captain for one GW.
-        TC should primarily reward:
-            - high captain xPts
-            - DGW captain
-            - strong DGW opportunity
-            - captain reliability
-        DGW captain naturally receives higher xPts because
-        predicted_points already includes all fixtures in the GW.
-        No additional DGW bonus is applied.
+
+        TC should not simply select the player with the highest raw
+        predicted_points. It should consider:
+
+        - Expected points
+        - Number of fixtures
+        - DGW opportunity
+        - Attacking ceiling
+        - Difference versus the next-best captain
+        - Whether the candidate is a weak SGW opportunity
+
+        This prevents defenders such as Calafiori from becoming the
+        automatic TC candidate every GW simply because their raw xPts
+        are slightly higher.
         """
+
+        # --------------------------------------------------------------
+        # 1. Validate inputs
+        # --------------------------------------------------------------
 
         if not current_squad_ids:
             return (
@@ -1023,89 +1161,478 @@ class SeasonChipPlanner:
                 },
             )
 
-        # ------------------------------------------------------------
-        # Best captain
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 2. Helpers
+        # --------------------------------------------------------------
 
-        best = max(
-            candidates,
-            key=lambda p: float(
-                p.get("predicted_points", 0.0) or 0.0
-            ),
-        )
+        def safe_float(value, default=0.0):
+            try:
+                return float(value or default)
+            except (TypeError, ValueError):
+                return default
 
-        captain_xpts = float(
-            best.get("predicted_points", 0.0) or 0.0
-        )
+        def get_position(player):
+            position = player.get("position_id")
 
-        fixture_count = int(
-            best.get("num_fixtures", 0) or 0
-        )
+            if position is None:
+                position = player.get("element_type")
 
-        if captain_xpts <= 0:
+            if position is None:
+                engine_player = self.engine.players.get(
+                    player.get("player_id"),
+                    {},
+                )
+
+                position = engine_player.get("position_id")
+
+                if position is None:
+                    position = engine_player.get("element_type")
+
+            try:
+                return int(position)
+            except (TypeError, ValueError):
+                return 0
+
+        def get_fixtures(player):
+            try:
+                return int(
+                    player.get("num_fixtures", 0) or 0
+                )
+            except (TypeError, ValueError):
+                return 0
+
+        # --------------------------------------------------------------
+        # 3. Score every possible captain
+        # --------------------------------------------------------------
+
+        scored_candidates = []
+
+        for player in candidates:
+
+            xpts = safe_float(
+                player.get("predicted_points", 0.0)
+            )
+
+            if xpts <= 0:
+                continue
+
+            position = get_position(player)
+            fixtures = get_fixtures(player)
+
+            is_goalkeeper = position == 1
+            is_defender = position == 2
+            is_midfielder = position == 3
+            is_forward = position == 4
+            is_attacker = position in (3, 4)
+
+            # ----------------------------------------------------------
+            # DGW multiplier
+            #
+            # We want DGW to matter, but not allow a mediocre player
+            # to automatically beat a genuinely elite captain.
+            # ----------------------------------------------------------
+
+            if fixtures >= 3:
+                dgw_bonus = 1.18
+            elif fixtures >= 2:
+                dgw_bonus = 1.12
+            else:
+                dgw_bonus = 1.00
+
+            # ----------------------------------------------------------
+            # Attacking ceiling
+            #
+            # TC is a high-upside chip.
+            #
+            # We give forwards/midfielders a modest advantage while
+            # still allowing an exceptional defender to win.
+            # ----------------------------------------------------------
+
+            if is_forward:
+                ceiling_bonus = 1.08
+            elif is_midfielder:
+                ceiling_bonus = 1.06
+            elif is_defender:
+                ceiling_bonus = 0.97
+            elif is_goalkeeper:
+                ceiling_bonus = 0.94
+            else:
+                ceiling_bonus = 1.00
+
+            # ----------------------------------------------------------
+            # TC candidate value
+            # ----------------------------------------------------------
+
+            tc_value = (
+                xpts
+                * dgw_bonus
+                * ceiling_bonus
+            )
+
+            scored_candidates.append(
+                {
+                    "player": player,
+                    "xpts": xpts,
+                    "position": position,
+                    "fixtures": fixtures,
+                    "is_attacker": is_attacker,
+                    "is_forward": is_forward,
+                    "is_midfielder": is_midfielder,
+                    "is_defender": is_defender,
+                    "is_goalkeeper": is_goalkeeper,
+                    "dgw_bonus": dgw_bonus,
+                    "ceiling_bonus": ceiling_bonus,
+                    "tc_value": tc_value,
+                }
+            )
+
+        if not scored_candidates:
             return (
                 None,
-                "Unavailable — captain has no expected points",
+                "Unavailable — no valid captain projections",
                 {
                     "score_available": False,
-                    "reason_code": "ZERO_CAPTAIN_XPTS",
+                    "reason_code": "NO_VALID_CAPTAIN_PROJECTIONS",
                 },
             )
 
-        # ------------------------------------------------------------
-        # ------------------------------------------------------------
-        # Triple Captain EV
-        #
-        # Normal captain = 2x captain points
-        # Triple Captain = 3x captain points
-        #
-        # Therefore the incremental TC value is exactly:
-        #     3x - 2x = 1x captain xPts
-        #
-        # DGW value is already included in captain_xpts because
-        # predicted_points contains the player's expected points
-        # across all fixtures in this GW.
-        # ------------------------------------------------------------
+        # --------------------------------------------------------------
+        # 4. Sort by TC value
+        # --------------------------------------------------------------
 
-        tc_ev = captain_xpts
-        details = {
-            "best_captain": best["name"],
-            "captain_xpts": round(captain_xpts, 2),
-            "captain_fixture_count": fixture_count,
-            "is_dgw_captain": fixture_count >= 2,
-            "tc_ev_xpts": round(tc_ev, 2),
-        }
-
-        top_candidates = sorted(
-            candidates,
-            key=lambda p: float(
-                p.get("predicted_points", 0.0) or 0.0
-            ),
+        scored_candidates.sort(
+            key=lambda item: item["tc_value"],
             reverse=True,
-        )[:5]
+        )
 
-        details["top_tc_candidates"] = [
-            {
-                "name": p.get("name"),
-                "xpts": round(float(p.get("predicted_points", 0.0) or 0.0), 2),
-                "fixtures": p.get("num_fixtures", 0),
-            }
-            for p in top_candidates
+        best = scored_candidates[0]
+
+        best_player = best["player"]
+        captain_xpts = best["xpts"]
+        fixture_count = best["fixtures"]
+        best_tc_value = best["tc_value"]
+
+        # --------------------------------------------------------------
+        # 5. Second-best captain
+        # --------------------------------------------------------------
+
+        if len(scored_candidates) > 1:
+            second_best = scored_candidates[1]
+            second_tc_value = second_best["tc_value"]
+
+            captain_edge = max(
+                0.0,
+                best_tc_value - second_tc_value,
+            )
+        else:
+            second_best = None
+            second_tc_value = 0.0
+            captain_edge = 0.0
+
+        # --------------------------------------------------------------
+        # 6. Best attacking option
+        #
+        # This is the important protection against the Calafiori issue.
+        # --------------------------------------------------------------
+
+        attacking_candidates = [
+            item
+            for item in scored_candidates
+            if item["is_attacker"]
         ]
 
+        best_attacker = None
+
+        if attacking_candidates:
+            best_attacker = max(
+                attacking_candidates,
+                key=lambda item: item["tc_value"],
+            )
+
+        # --------------------------------------------------------------
+        # 7. Minimum quality threshold
+        #
+        # A 6.x xPts player in a normal SGW should not be considered
+        # a strong TC opportunity.
+        # --------------------------------------------------------------
+
+        if fixture_count >= 2:
+            minimum_xpts = 6.5
+        else:
+            minimum_xpts = 7.5
+
+        weak_tc = captain_xpts < minimum_xpts
+
+        # --------------------------------------------------------------
+        # 8. TC expected value
+        #
+        # Triple captain gives:
+        #
+        # Normal captain = 2x
+        # Triple captain = 3x
+        #
+        # Therefore the incremental value of TC is approximately one
+        # additional copy of the captain's expected points.
+        # --------------------------------------------------------------
+
+        tc_ev = captain_xpts
+
+        # --------------------------------------------------------------
+        # 9. Base score
+        #
+        # Deliberately nonlinear.
+        #
+        # 7 xPts should NOT automatically equal 70/100.
+        # --------------------------------------------------------------
+
+        if tc_ev < 5.5:
+            score = 25.0
+        elif tc_ev < 6.0:
+            score = 35.0
+        elif tc_ev < 6.5:
+            score = 45.0
+        elif tc_ev < 7.0:
+            score = 52.0
+        elif tc_ev < 7.5:
+            score = 60.0
+        elif tc_ev < 8.0:
+            score = 68.0
+        elif tc_ev < 8.5:
+            score = 76.0
+        elif tc_ev < 9.0:
+            score = 84.0
+        elif tc_ev < 9.5:
+            score = 91.0
+        else:
+            score = 96.0
+
+        # --------------------------------------------------------------
+        # 10. DGW bonus
+        # --------------------------------------------------------------
+
+        if fixture_count >= 2:
+            score += 8.0
+
+        if fixture_count >= 3:
+            score += 4.0
+
+        # --------------------------------------------------------------
+        # 11. Position / attacking ceiling
+        # --------------------------------------------------------------
+
+        if best["is_forward"]:
+            score += 6.0
+        elif best["is_midfielder"]:
+            score += 4.0
+        elif best["is_defender"]:
+            score -= 3.0
+        elif best["is_goalkeeper"]:
+            score -= 5.0
+
+        # --------------------------------------------------------------
+        # 12. Captain advantage
+        # --------------------------------------------------------------
+
+        if captain_edge >= 2.0:
+            score += 8.0
+        elif captain_edge >= 1.0:
+            score += 4.0
+        elif captain_edge >= 0.5:
+            score += 2.0
+
+        # --------------------------------------------------------------
+        # 13. Normal SGW penalty
+        #
+        # This is critical.
+        #
+        # A player with 7.0 xPts in a normal GW should NOT routinely
+        # receive a 70/100 TC recommendation.
+        # --------------------------------------------------------------
+
+        if fixture_count < 2:
+
+            if tc_ev < 7.0:
+                score -= 15.0
+            elif tc_ev < 7.5:
+                score -= 10.0
+            elif tc_ev < 8.0:
+                score -= 5.0
+
+        # --------------------------------------------------------------
+        # 14. Weak TC penalty
+        # --------------------------------------------------------------
+
+        if weak_tc:
+            score -= 10.0
+
+        # --------------------------------------------------------------
+        # 15. Defender protection
+        #
+        # Specific fix for the Calafiori problem.
+        #
+        # If a defender is technically first but an attacker is within
+        # 0.75 TC-value points, choose the attacker.
+        #
+        # We do NOT ban defenders.
+        # --------------------------------------------------------------
+
+        if (
+            best["is_defender"]
+            and best_attacker is not None
+        ):
+
+            attacker_gap = (
+                best["tc_value"]
+                - best_attacker["tc_value"]
+            )
+
+            if attacker_gap < 0.75:
+
+                best = best_attacker
+
+                best_player = best["player"]
+                captain_xpts = best["xpts"]
+                fixture_count = best["fixtures"]
+                best_tc_value = best["tc_value"]
+
+                # Recalculate the captain edge.
+                alternatives = [
+                    item
+                    for item in scored_candidates
+                    if item["player"].get("player_id")
+                    != best_player.get("player_id")
+                ]
+
+                if alternatives:
+                    alternatives.sort(
+                        key=lambda item: item["tc_value"],
+                        reverse=True,
+                    )
+
+                    second_best = alternatives[0]
+
+                    second_tc_value = (
+                        second_best["tc_value"]
+                    )
+
+                    captain_edge = max(
+                        0.0,
+                        best_tc_value - second_tc_value,
+                    )
+
+        # --------------------------------------------------------------
+        # 16. Final score bounds
+        # --------------------------------------------------------------
+
+        score = round(
+            min(
+                100.0,
+                max(
+                    0.0,
+                    score,
+                ),
+            )
+        )
+
+        # --------------------------------------------------------------
+        # 17. Top candidates for debugging/UI
+        # --------------------------------------------------------------
+
+        top_candidates = scored_candidates[:5]
+
+        details = {
+            "best_captain": best_player.get("name"),
+            "captain_xpts": round(
+                captain_xpts,
+                2,
+            ),
+            "captain_fixture_count": fixture_count,
+            "is_dgw_captain": fixture_count >= 2,
+            "tc_ev_xpts": round(
+                tc_ev,
+                2,
+            ),
+            "tc_value": round(
+                best_tc_value,
+                2,
+            ),
+            "captain_edge_xpts": round(
+                captain_edge,
+                2,
+            ),
+            "score_available": True,
+            "tc_model": (
+                "expected_points_plus_dgw_plus_ceiling"
+            ),
+            "top_tc_candidates": [
+                {
+                    "name": item["player"].get("name"),
+                    "xpts": round(
+                        item["xpts"],
+                        2,
+                    ),
+                    "fixtures": item["fixtures"],
+                    "position": item["position"],
+                    "tc_value": round(
+                        item["tc_value"],
+                        2,
+                    ),
+                    "dgw_bonus": round(
+                        item["dgw_bonus"],
+                        3,
+                    ),
+                    "ceiling_bonus": round(
+                        item["ceiling_bonus"],
+                        3,
+                    ),
+                }
+                for item in top_candidates
+            ],
+        }
+
+        # --------------------------------------------------------------
+        # 18. Human-readable reason
+        # --------------------------------------------------------------
+
         reasons = [
-            f"{best['name']} ~{captain_xpts:.1f} xPts"
+            f"{best_player.get('name')} ~{captain_xpts:.1f} xPts"
         ]
 
         if fixture_count >= 2:
             reasons.append(
-                f"DGW captain ({fixture_count} fixtures)"
+                f"DGW ({fixture_count} fixtures)"
+            )
+        else:
+            reasons.append(
+                "single fixture"
             )
 
-        details["score_available"] = True
+        if best["is_forward"]:
+            reasons.append(
+                "high attacking ceiling"
+            )
+        elif best["is_midfielder"]:
+            reasons.append(
+                "strong attacking ceiling"
+            )
+        elif best["is_defender"]:
+            reasons.append(
+                "defensive candidate"
+            )
 
-        # Temporary display score. The underlying value is tc_ev_xpts.
-        score = round(min(100.0, max(0.0, (tc_ev / 10.0) * 100.0)))
+        if captain_edge >= 1.0:
+            reasons.append(
+                f"+{captain_edge:.1f} vs next captain"
+            )
+
+        if score < 60:
+            reasons.append(
+                "weak TC opportunity"
+            )
+        elif score >= 85:
+            reasons.append(
+                "elite TC opportunity"
+            )
 
         return (
             score,
