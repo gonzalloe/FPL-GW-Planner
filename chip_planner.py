@@ -991,28 +991,6 @@ class SeasonChipPlanner:
             ),
         )
 
-        top_candidates = sorted(
-            candidates,
-            key=lambda p: float(
-                p.get("predicted_points", 0.0) or 0.0
-            ),
-            reverse=True,
-        )[:5]
-
-        details["top_tc_candidates"] = [
-            {
-                "name": p.get("name"),
-                "xpts": round(
-                    float(
-                        p.get("predicted_points", 0.0) or 0.0
-                    ),
-                    2,
-                ),
-                "fixtures": p.get("num_fixtures", 0),
-            }
-            for p in top_candidates
-        ]
-
         captain_xpts = float(
             best.get("predicted_points", 0.0) or 0.0
         )
@@ -1066,12 +1044,7 @@ class SeasonChipPlanner:
         details["top_tc_candidates"] = [
             {
                 "name": p.get("name"),
-                "xpts": round(
-                    float(
-                        p.get("predicted_points", 0.0) or 0.0
-                    ),
-                    2,
-                ),
+                "xpts": round(float(p.get("predicted_points", 0.0) or 0.0), 2),
                 "fixtures": p.get("num_fixtures", 0),
             }
             for p in top_candidates
@@ -1452,11 +1425,6 @@ class SeasonChipPlanner:
                     fh_gain * 5.0,
                 ),
             )
-        )
-
-        details["fh_ev_xpts"] = round(
-            fh_gain,
-            2,
         )
 
         reasons = []
