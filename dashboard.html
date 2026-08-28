@@ -387,7 +387,7 @@ h2 .dgw-alert {
   border-radius:var(--radius); padding:20px;
   position:relative; transition:var(--transition-bounce);
   backdrop-filter:blur(12px);
-  overflow:hidden;
+  overflow:visible;
 }
 .chip-card::before {
   content:''; position:absolute; top:0; left:0; right:0; height:3px;
@@ -424,10 +424,18 @@ h2 .dgw-alert {
   background:rgba(0,230,118,.15); border-radius:50%; font-size:10px;
 }
 .chip-card.recommended .rec-label {
-  position:absolute; top:-10px; left:18px;
-  background:var(--gradient-accent); color:#000;
-  font-size:10px; font-weight:800; padding:3px 12px; border-radius:10px;
-  letter-spacing:.5px; box-shadow:0 4px 12px var(--accent-glow);
+  position:absolute;
+  top:-10px;
+  left:18px;
+  z-index:2;
+  background:var(--gradient-accent);
+  color:#000;
+  font-size:10px;
+  font-weight:800;
+  padding:3px 12px;
+  border-radius:10px;
+  letter-spacing:.5px;
+  box-shadow:0 4px 12px var(--accent-glow);
 }
 
 /* Pitch view */
