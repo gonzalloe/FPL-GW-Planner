@@ -625,16 +625,6 @@ class SeasonChipPlanner:
             for chip in chips_available:
 
                 chip_predictions = predictions
-
-                # TC needs genuinely recalculated
-                # target-GW predictions for the current squad.
-                if chip == "TC" and current_squad_ids:
-
-                    chip_predictions = self._get_target_predictions(
-                        gw,
-                        candidate_ids=current_squad_ids,
-                    )
-
                 score_data = self._score_chip_for_gw(
                     chip,
                     gw,
@@ -781,15 +771,10 @@ class SeasonChipPlanner:
             )
 
         elif chip == "TC":
-            tc_predictions = self._get_target_predictions(
-                gw,
-                candidate_ids=current_squad_ids,
-            )
-
             score, reason, details = self._score_tc(
                 gw,
                 meta,
-                tc_predictions,
+                predictions,
                 current_squad_ids,
             )
 
