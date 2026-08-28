@@ -781,135 +781,10 @@ class SeasonChipPlanner:
     # Bench Boost
     # ------------------------------------------------------------------
 
-    def _score_bb(
-        self,
-        gw,
-        meta,
-        predictions,
-        gw_info,
-        current_squad_ids=None,
-    ):
-        """Score Bench Boost for a GW."""
+    def _score_bb(self, gw, meta, predictions, gw_info, current_squad_ids=None):
+        """Score Bench Boost using expected incremental bench points."""
 
-        score = 0
-        reasons = []
-        details = {}
-
-        # ------------------------------------------------------------
-        # DGW strength
-        # ------------------------------------------------------------
-
-        if meta["is_dgw"]:
-            dgw_count = meta[
-                "dgw_team_count"
-            ]
-
-            score += min(
-                40,
-                dgw_count * 7
-            )
-
-            reasons.append(
-                f"{dgw_count} DGW teams"
-            )
-
-            details[
-                "dgw_team_count"
-            ] = dgw_count
-
-        # ------------------------------------------------------------
-        # Current squad / bench quality
-        # ------------------------------------------------------------
-
-        baseline = getattr(
-            self.engine,
-            "_baseline_predictions",
-            []
-        )
-
-        if current_squad_ids and baseline:
-
-            pred_map = {
-                p["player_id"]: p
-                for p in baseline
-            }
-
-            squad_preds = [
-                pred_map[pid]
-                for pid in current_squad_ids
-                if pid in pred_map
-            ]
-
-            squad_preds.sort(
-                key=lambda p: p.get(
-                    "predicted_points",
-                    0
-                ),
-                reverse=True
-            )
-
-            # Approximation:
-            # top 11 = starters
-            # remaining 4 = bench
-            bench_preds = squad_preds[11:15]
-
-            bench_xpts = sum(
-                p.get(
-                    "predicted_points",
-                    0
-                )
-                for p in bench_preds
-            )
-
-            bench_dgw = sum(
-                1
-                for p in bench_preds
-                if p.get("is_dgw")
-            )
-
-            details["bench_xpts"] = round(
-                bench_xpts,
-                1
-            )
-
-            details[
-                "bench_dgw_count"
-            ] = bench_dgw
-
-            if bench_xpts >= 20:
-                score += 30
-                reasons.append(
-                    f"Strong bench ({bench_xpts:.1f} xPts)"
-                )
-
-            elif bench_xpts >= 15:
-                score += 20
-                reasons.append(
-                    f"Good bench ({bench_xpts:.1f} xPts)"
-                )
-
-            elif bench_xpts >= 10:
-                score += 10
-                reasons.append(
-                    f"Decent bench ({bench_xpts:.1f} xPts)"
-                )
-
-            if bench_dgw >= 3:
-                score += 20
-                reasons.append(
-                    f"{bench_dgw}/4 bench have DGW"
-                )
-
-            elif bench_dgw >= 2:
-                score += 10
-                reasons.append(
-                    f"{bench_dgw}/4 bench have DGW"
-                )
-
-        elif not current_squad_ids:
-
-            # Normally only reachable if squad data unexpectedly
-            # disappears during the season.
+        if not current_squad_ids:
             return (
                 None,
                 "Unavailable — current squad missing",
@@ -919,31 +794,130 @@ class SeasonChipPlanner:
                 },
             )
 
-        elif not baseline:
-
+        if not predictions:
             return (
                 None,
-                "Unavailable — baseline predictions missing",
+                "Unavailable — no target-GW predictions",
                 {
                     "score_available": False,
-                    "reason_code": "NO_BASELINE",
+                    "reason_code": "NO_TARGET_PREDICTIONS",
+                },
+            )
+
+        pred_map = {
+            p["player_id"]: p
+            for p in predictions
+            if p.get("player_id") is not None
+        }
+
+        squad_preds = [
+            pred_map[pid]
+            for pid in current_squad_ids
+            if pid in pred_map
+        ]
+
+        if len(squad_preds) < 15:
+            return (
+                None,
+                "Unavailable — incomplete squad predictions",
+                {
+                    "score_available": False,
+                    "reason_code": "INCOMPLETE_SQUAD",
                 },
             )
 
         # ------------------------------------------------------------
-        # Large fixture count
+        # Find the best legal starting XI for this target GW.
         # ------------------------------------------------------------
 
-        if meta["total_fixtures"] >= 12:
-            score += 10
+        best_xi, xi_xpts = self._select_best_xi(squad_preds)
 
-            reasons.append(
-                f"{meta['total_fixtures']} fixtures"
+        if not best_xi:
+            return (
+                None,
+                "Unavailable — could not build legal XI",
+                {
+                    "score_available": False,
+                    "reason_code": "XI_FAILED",
+                },
             )
+
+        # ------------------------------------------------------------
+        # Bench Boost value =
+        # all 15 expected points
+        # minus
+        # best legal XI expected points.
+        # ------------------------------------------------------------
+
+        total_15_xpts = sum(
+            float(
+                p.get("predicted_points", 0.0) or 0.0
+            )
+            for p in squad_preds
+        )
+
+        bb_ev = max(
+            0.0,
+            total_15_xpts - xi_xpts,
+        )
+
+        bench_preds = [
+            p
+            for p in squad_preds
+            if p not in best_xi
+        ]
+
+        bench_dgw = sum(
+            1
+            for p in bench_preds
+            if p.get("num_fixtures", 0) >= 2
+        )
+
+        # ------------------------------------------------------------
+        # Details
+        # ------------------------------------------------------------
+
+        details = {
+            "bb_ev_xpts": round(bb_ev, 2),
+            "bench_xpts": round(bb_ev, 2),
+            "normal_xi_xpts": round(xi_xpts, 2),
+            "bb_total_15_xpts": round(total_15_xpts, 2),
+            "bench_dgw_count": bench_dgw,
+            "bench_players": [
+                p.get("name")
+                for p in bench_preds
+            ],
+            "score_available": True,
+        }
+
+        # ------------------------------------------------------------
+        # Linear 0-100 BB score.
+        #
+        # 20 xPts = 100.
+        # This is a calibration scale, not raw FPL points.
+        # ------------------------------------------------------------
+
+        score = round(
+            min(
+                100.0,
+                max(
+                    0.0,
+                    (bb_ev / 20.0) * 100.0,
+                ),
+            )
+        )
+
+        reason = (
+            f"+{bb_ev:.1f} xPts from bench"
+            f" · {meta['total_fixtures']} fixtures"
+        )
+
+        if bench_dgw:
+            reason += f" · {bench_dgw}/4 bench have DGW"
 
         return (
             score,
-            " · ".join(reasons),
+            reason,
             details,
         )
 
@@ -959,18 +933,9 @@ class SeasonChipPlanner:
             - DGW captain
             - strong DGW opportunity
             - captain reliability
-        The score is deliberately NOT allowed to hit 100 merely because
-        a normal single-gameweek captain has ~7 xPts.
-        A normal SGW captain around 7 xPts is a decent captaincy option,
-        but it is not automatically a Triple Captain opportunity.
-        Approximate interpretation:
-            < 6.0 xPts       -> weak TC
-            6.0-7.0          -> moderate
-            7.0-8.0          -> strong SGW / moderate TC
-            8.0-9.0          -> very strong
-            9.0+             -> elite
-        DGW captain receives a substantial bonus because the captain has
-        multiple scoring opportunities.
+        DGW captain naturally receives higher xPts because
+        predicted_points already includes all fixtures in the GW.
+        No additional DGW bonus is applied.
         """
 
         if not current_squad_ids:
@@ -1026,6 +991,28 @@ class SeasonChipPlanner:
             ),
         )
 
+        top_candidates = sorted(
+            candidates,
+            key=lambda p: float(
+                p.get("predicted_points", 0.0) or 0.0
+            ),
+            reverse=True,
+        )[:5]
+
+        details["top_tc_candidates"] = [
+            {
+                "name": p.get("name"),
+                "xpts": round(
+                    float(
+                        p.get("predicted_points", 0.0) or 0.0
+                    ),
+                    2,
+                ),
+                "fixtures": p.get("num_fixtures", 0),
+            }
+            for p in top_candidates
+        ]
+
         captain_xpts = float(
             best.get("predicted_points", 0.0) or 0.0
         )
@@ -1045,105 +1032,42 @@ class SeasonChipPlanner:
             )
 
         # ------------------------------------------------------------
-        # Base captain quality
+        # ------------------------------------------------------------
+        # Triple Captain EV
         #
-        # This deliberately uses a much softer curve than the previous
-        # implementation.
+        # Normal captain = 2x captain points
+        # Triple Captain = 3x captain points
         #
-        # A 7.0 xPts SGW captain should NOT be 100/100.
+        # Therefore the incremental TC value is exactly:
+        #     3x - 2x = 1x captain xPts
+        #
+        # DGW value is already included in captain_xpts because
+        # predicted_points contains the player's expected points
+        # across all fixtures in this GW.
         # ------------------------------------------------------------
 
-        score = 10.0 + max(0.0, captain_xpts - 5.0) * 16.0
-        score = min(95.0, score)
-
-        reasons = [
-            f"{best['name']} ~{captain_xpts:.1f} xPts"
-        ]
-
+        tc_ev = captain_xpts
         details = {
             "best_captain": best["name"],
             "captain_xpts": round(captain_xpts, 2),
             "captain_fixture_count": fixture_count,
             "is_dgw_captain": fixture_count >= 2,
+            "tc_ev_xpts": round(tc_ev, 2),
         }
 
-        # ------------------------------------------------------------
-        # Fixture opportunity
-        # ------------------------------------------------------------
+        reasons = [
+            f"{best['name']} ~{captain_xpts:.1f} xPts"
+        ]
 
         if fixture_count >= 2:
-            # A genuine DGW is the strongest TC signal.
-            #
-            # 2 fixtures = +25
-            # 3 fixtures = +35
-            #
-            # Cap the bonus so fixture count cannot overwhelm
-            # captain quality.
-            fixture_bonus = 25.0
-
-            if fixture_count >= 3:
-                fixture_bonus += 10.0
-
-            score += fixture_bonus
-
             reasons.append(
                 f"DGW captain ({fixture_count} fixtures)"
             )
 
-        else:
-            # SGW TC is possible, but requires an exceptional captain.
-            #
-            # Give a small bonus only when captain xPts are genuinely elite.
-            if captain_xpts >= 10.0:
-                score += 10.0
-                reasons.append("Elite SGW captain")
-
-            elif captain_xpts >= 9.0:
-                score += 5.0
-                reasons.append("Very strong SGW captain")
-
-        # ------------------------------------------------------------
-        # Overall DGW strength
-        # ------------------------------------------------------------
-
-        dgw_count = int(
-            meta.get("dgw_team_count", 0) or 0
-        )
-
-        details["dgw_team_count"] = dgw_count
-
-        if fixture_count >= 2:
-
-            if dgw_count >= 8:
-                score += 10.0
-                reasons.append(
-                    f"Major DGW: {dgw_count} teams"
-                )
-
-            elif dgw_count >= 6:
-                score += 7.0
-                reasons.append(
-                    f"Strong DGW: {dgw_count} teams"
-                )
-
-            elif dgw_count >= 4:
-                score += 4.0
-                reasons.append(
-                    f"DGW: {dgw_count} teams"
-                )
-
-        # ------------------------------------------------------------
-        # Final clamp
-        # ------------------------------------------------------------
-
-        score = round(
-            min(
-                100.0,
-                max(0.0, score),
-            )
-        )
-
         details["score_available"] = True
+
+        # Temporary display score. The underlying value is tc_ev_xpts.
+        score = round(min(100.0, max(0.0, (tc_ev / 10.0) * 100.0)))
 
         return (
             score,
@@ -1498,9 +1422,19 @@ class SeasonChipPlanner:
         # 20 xPts is extremely large FH upside.
         # ------------------------------------------------------------
 
-        score = min(
-            70.0,
-            fh_gain * 3.5,
+        score = round(
+            min(
+                100.0,
+                max(
+                    0.0,
+                    fh_gain * 5.0,
+                ),
+            )
+        )
+
+        details["fh_ev_xpts"] = round(
+            fh_gain,
+            2,
         )
 
         reasons = []
@@ -1574,24 +1508,6 @@ class SeasonChipPlanner:
                 f"BGW: {bgw_count} teams missing"
             )
 
-            if blanking >= 6:
-                score += 15
-                reasons.append(
-                    f"{blanking} squad players blank"
-                )
-
-            elif blanking >= 4:
-                score += 10
-                reasons.append(
-                    f"{blanking} squad players blank"
-                )
-
-            elif blanking >= 2:
-                score += 5
-                reasons.append(
-                    f"{blanking} squad players blank"
-                )
-
         # ------------------------------------------------------------
         # DGW
         #
@@ -1603,11 +1519,6 @@ class SeasonChipPlanner:
 
             dgw_count = int(
                 meta.get("dgw_team_count", 0) or 0
-            )
-
-            score += min(
-                8.0,
-                dgw_count * 0.8,
             )
 
             reasons.append(
