@@ -780,8 +780,14 @@ class GWPlanner:
             chips_available=chips_available,
         )
 
+        chips_used = set()
+        for half_usage in chip_usage.values():
+            for chip, used in half_usage.items():
+                if used:
+                    chips_used.add(chip)
+
         plan["team_info"] = team_data.get("info", {})
-        plan["chips_used_this_season"] = list(chips_used)
+        plan["chips_used_this_season"] = sorted(chips_used)
         plan["chips_remaining"] = chips_available
         plan["estimated_free_transfers"] = ft
 
