@@ -676,6 +676,7 @@ select option:checked, select option:hover {
 .form-W { color:var(--accent); text-shadow:0 0 8px rgba(0,230,118,.5); }
 .form-D { color:var(--orange); text-shadow:0 0 8px rgba(255,167,38,.4); }
 .form-L { color:var(--red); text-shadow:0 0 8px rgba(255,82,82,.4); }
+.form-empty { color: var(--text3); opacity: .45; }
 .momentum-bar { width:40px; height:6px; background:var(--surface3); border-radius:3px; overflow:hidden; display:inline-block; vertical-align:middle; position:relative; }
 .momentum-bar .fill { height:100%; border-radius:3px; position:absolute; top:0; }
 .momentum-positive { background:var(--accent); left:50%; }
@@ -2833,9 +2834,19 @@ function renderPitch(squad) {
     const isDoubtful = avail.status === 'doubtful';
     const chance = avail.chance != null ? avail.chance : 100;
     const injuryDot = isDoubtful ? `<div class="injury-dot" title="${p.news || 'Doubtful'}">!</div>` : '';
-    const formStr = (p.team_last5_form || '').split('').map(c =>
-      `<span class="form-${c}">${c}</span>`
-    ).join('');
+    const rawL5 = String(p.team_last5_form || '')
+      .toUpperCase()
+      .replace(/[^WDL]/g, '')
+      .slice(-5);
+    const l5Results = Array(5 - rawL5.length)
+      .fill('—')
+      .concat(rawL5.split(''));
+    const formStr = l5Results.map(c => {
+      if (c === '—') {
+        return `<span class="form-empty">${c}</span>`;
+      }
+      return `<span class="form-${c}">${c}</span>`;
+    }).join('');
     return `<div class="pitch-player">
       <div class="shirt ${posClass}" ${isDoubtful ? 'style="opacity:0.7;border-color:var(--orange);"' : ''}>
         ${p.team || '???'}
