@@ -672,11 +672,28 @@ select option:checked, select option:hover {
 .fix-xg strong { color:var(--accent); font-weight:800; }
 
 /* Team form indicators */
-.form-str { font-size:12px; font-family:'Courier New',monospace; letter-spacing:2px; font-weight:700; }
-.form-W { color:var(--accent); text-shadow:0 0 8px rgba(0,230,118,.5); }
-.form-D { color:var(--orange); text-shadow:0 0 8px rgba(255,167,38,.4); }
-.form-L { color:var(--red); text-shadow:0 0 8px rgba(255,82,82,.4); }
-.form-empty { color: var(--text3); opacity: .45; }
+.form-str {
+  font-size:12px;
+  font-family:'Courier New',monospace;
+  letter-spacing:2px;
+  font-weight:700;
+}
+.form-W {
+  color:var(--accent);
+  text-shadow:0 0 8px rgba(0,230,118,.5);
+}
+.form-D {
+  color:var(--orange);
+  text-shadow:0 0 8px rgba(255,167,38,.4);
+}
+.form-L {
+  color:var(--red);
+  text-shadow:0 0 8px rgba(255,82,82,.4);
+}
+.form-empty {
+  color:var(--text3);
+  opacity:.45;
+}
 .momentum-bar { width:40px; height:6px; background:var(--surface3); border-radius:3px; overflow:hidden; display:inline-block; vertical-align:middle; position:relative; }
 .momentum-bar .fill { height:100%; border-radius:3px; position:absolute; top:0; }
 .momentum-positive { background:var(--accent); left:50%; }
@@ -2915,6 +2932,25 @@ function renderSquadTables(squad) {
   document.getElementById('tbl-bench').innerHTML = playerTableHTML(bench);
 }
 
+function renderTeamL5(form) {
+  const results = String(form || '')
+    .toUpperCase()
+    .replace(/[^WDL]/g, '')
+    .slice(-5);
+
+  const slots = Array(5 - results.length)
+    .fill('—')
+    .concat(results.split(''));
+
+  return slots.map(result => {
+    if (result === '—') {
+      return `<span class="form-empty">${result}</span>`;
+    }
+    return `<span class="form-${result}">${result}</span>`;
+  }).join('');
+}
+
+
 function playerTableHTML(players, captain, vice) {
   let html = `<thead><tr><th>Pos</th><th>Player</th><th>Team</th><th>Status</th><th>Fixtures</th><th>Win Prob</th><th>xPts</th><th>Price</th><th>Tier</th><th>Form</th><th>Team L5</th><th>WR</th><th>Starting XI</th></tr></thead><tbody>`;
   players.forEach(p => {
@@ -2957,9 +2993,7 @@ function playerTableHTML(players, captain, vice) {
     }
 
     // Team last 5 form string with colored letters
-    const formStr = (p.team_last5_form || '').split('').map(c =>
-      `<span class="form-${c}">${c}</span>`
-    ).join('');
+    const formStr = renderTeamL5(p.team_last5_form);
 
     // Win rate badge
     const wr = p.team_season_wr;
@@ -3010,7 +3044,7 @@ function playerTableHTML(players, captain, vice) {
       <td>&pound;${p.price}m</td>
       <td>${tierHtml}</td>
       <td>${p.form || '--'}</td>
-      <td><span class="form-str">${formStr || '--'}</span></td>
+      <td><span class="form-str">${formStr}</span></td>
       <td>${wrHtml}</td>
       <td>${confHtml}</td>
     </tr>`;
