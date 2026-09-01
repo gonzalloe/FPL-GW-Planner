@@ -459,9 +459,14 @@ def _refresh_data():
         is_first_run = (_last_refresh == 0)
         cache_dir = BASE_DIR / "cache"
         if cache_dir.exists() and not is_first_run:
-            for f in cache_dir.glob("*.json"):
-                try: f.unlink()
-                except: pass
+            volatile_cache_files = ("bootstrap.json", "fixtures.json")
+            for filename in volatile_cache_files:
+                f = cache_dir / filename
+                try:
+                    if f.exists():
+                        f.unlink()
+                except Exception:
+                    pass
         print(f"  [REFRESH] {datetime.now().strftime('%H:%M:%S')} — Running predictions...")
         _run_predictions()
         _last_refresh = time.time()

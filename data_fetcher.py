@@ -15,7 +15,7 @@ CACHE_DIR.mkdir(exist_ok=True)
 
 # Rate limiting: be polite to the API
 REQUEST_DELAY = 0.3  # seconds between requests
-
+_PLAYER_DETAIL_MEMO = {}
 
 def _get(url: str, cache_key: str | None = None, cache_ttl: int = 300) -> dict | list:
     """GET with optional file-based cache (TTL in seconds). Falls back to stale cache on network error."""
@@ -55,8 +55,14 @@ def fetch_fixtures() -> list:
 
 def fetch_player_detail(player_id: int) -> dict:
     """Fetch detailed history for a single player."""
+    player_id = int(player_id)
+    cached = _PLAYER_DETAIL_MEMO.get(player_id)
+    if cached is not None:
+        return cached
     url = FPL_ENDPOINTS["player_detail"].format(player_id=player_id)
-    return _get(url, cache_key=f"player_{player_id}", cache_ttl=900)
+    detail = _get(url, cache_key=f"player_{player_id}", cache_ttl=86400)
+    _PLAYER_DETAIL_MEMO[player_id] = detail
+    return detail
 
 
 def get_promoted_team_priors(bootstrap: dict, teams: dict, real_priors: dict) -> dict:
