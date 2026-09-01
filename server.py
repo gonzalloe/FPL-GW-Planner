@@ -474,7 +474,7 @@ def _refresh_data():
 
 
 def _auto_refresh_loop():
-    global _last_refresh, _last_known_gw
+    global _last_refresh, _last_known_gw, _last_known_gw_finished, _current_refresh_interval
     # PERF: if there are NO predictions on disk (cold Render container), kick
     # off the first generation IMMEDIATELY so users don't stare at the
     # "server just started up, 1-2 minutes" card for 90s of idle sleep.
@@ -523,8 +523,6 @@ def _auto_refresh_loop():
         pass
 
     while True:
-        global _current_refresh_interval, _last_known_gw, _last_known_gw_finished
-
         try:
             refresh_interval = NORMAL_REFRESH_INTERVAL
             try:
@@ -599,8 +597,7 @@ def _auto_refresh_loop():
                     f"({refresh_interval/3600:.0f}h)"
                 )
                 _refresh_data()
-
-                _refresh_data()
+                
             time.sleep(60)
         except Exception as e:
             print(f"  [AUTO-REFRESH] Error: {e}")
