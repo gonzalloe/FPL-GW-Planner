@@ -2851,19 +2851,11 @@ function renderPitch(squad) {
     const isDoubtful = avail.status === 'doubtful';
     const chance = avail.chance != null ? avail.chance : 100;
     const injuryDot = isDoubtful ? `<div class="injury-dot" title="${p.news || 'Doubtful'}">!</div>` : '';
-    const rawL5 = String(p.team_last5_form || '')
+    const formStr = String(p.team_last5_form || '')
       .toUpperCase()
       .replace(/[^WDL]/g, '')
       .slice(-5);
-    const l5Results = Array(5 - rawL5.length)
-      .fill('—')
-      .concat(rawL5.split(''));
-    const formStr = l5Results.map(c => {
-      if (c === '—') {
-        return `<span class="form-empty">${c}</span>`;
-      }
-      return `<span class="form-${c}">${c}</span>`;
-    }).join('');
+
     return `<div class="pitch-player">
       <div class="shirt ${posClass}" ${isDoubtful ? 'style="opacity:0.7;border-color:var(--orange);"' : ''}>
         ${p.team || '???'}

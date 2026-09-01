@@ -67,6 +67,7 @@ FINAL_DEADLINE_WINDOW = 2 * 3600
 _current_refresh_interval = NORMAL_REFRESH_INTERVAL
 _last_refresh = 0
 _last_known_gw = None
+_last_known_gw_finished = None
 _refresh_lock = threading.Lock()
 _refresh_thread_started = False
 _prediction_status = {"running": False, "started_at": None, "finished_at": None, "last_error": None,}
@@ -499,12 +500,31 @@ def _auto_refresh_loop():
         time.sleep(20)
     try:
         from data_fetcher import get_current_gameweek, fetch_bootstrap
-        _last_known_gw = get_current_gameweek()
-        print("[AUTO-REFRESH] Starting GW:", _last_known_gw)
+
+        bootstrap = fetch_bootstrap()
+        _last_known_gw = get_current_gameweek(bootstrap)
+        current_event = next(
+            (
+                e for e in bootstrap.get("events", [])
+                if e.get("id") == _last_known_gw
+            ),
+            None
+        )
+        _last_known_gw_finished = bool(
+            current_event and current_event.get("finished")
+        )
+        print(
+            "[AUTO-REFRESH] Starting GW:",
+            _last_known_gw,
+            "finished:",
+            _last_known_gw_finished
+        )
     except Exception:
         pass
+
     while True:
-        global _current_refresh_interval
+        global _current_refresh_interval, _last_known_gw, _last_known_gw_finished
+
         try:
             refresh_interval = NORMAL_REFRESH_INTERVAL
             try:
@@ -538,15 +558,48 @@ def _auto_refresh_loop():
             except Exception as e:
                 print("[AUTO-REFRESH] GW check failed:", e)
                 current_gw = _last_known_gw
-            if current_gw != _last_known_gw:
-                print(f"[AUTO-REFRESH] GW changed {_last_known_gw}->{current_gw}")
+            current_event = next(
+                (
+                    e for e in bootstrap.get("events", [])
+                    if e.get("id") == current_gw
+                ),
+                None
+            )
+
+            current_gw_finished = bool(
+                current_event and current_event.get("finished")
+            )
+
+            gw_changed = current_gw != _last_known_gw
+            gw_finished_changed = (
+                current_gw == _last_known_gw
+                and current_gw_finished != _last_known_gw_finished
+            )
+
+            if gw_changed:
+                print(
+                    f"[AUTO-REFRESH] GW changed "
+                    f"{_last_known_gw}->{current_gw}"
+                )
                 _last_known_gw = current_gw
+                _last_known_gw_finished = current_gw_finished
                 _refresh_data()
+
+            elif gw_finished_changed:
+                print(
+                    f"[AUTO-REFRESH] GW{current_gw} finished "
+                    f"({_last_known_gw_finished}->{current_gw_finished})"
+                )
+                _last_known_gw_finished = current_gw_finished
+                _refresh_data()
+
             elif time.time() - _last_refresh >= refresh_interval:
                 print(
                     f"[AUTO-REFRESH] Interval reached "
                     f"({refresh_interval/3600:.0f}h)"
                 )
+                _refresh_data()
+
                 _refresh_data()
             time.sleep(60)
         except Exception as e:

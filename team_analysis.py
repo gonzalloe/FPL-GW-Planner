@@ -45,7 +45,15 @@ def build_team_stats(fixtures: list, teams: dict,
         }
 
     finished = sorted(
-        [f for f in fixtures if f.get("finished") and f.get("team_h_score") is not None],
+        [
+            f for f in fixtures
+            if (
+                f.get("finished")
+                or f.get("finished_provisional")
+            )
+            and f.get("team_h_score") is not None
+            and f.get("team_a_score") is not None
+        ],
         key=lambda f: (f.get("event", 0), f.get("id", 0))
     )
     for f in finished:
