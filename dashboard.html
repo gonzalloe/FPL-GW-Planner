@@ -3430,9 +3430,7 @@ function getSimulatorFreeTransfers() {
   if (Number.isFinite(ft)) {
     return Math.max(1, Math.min(5, ft));
   }
-  const summaryFT = Number(
-    MY_TEAM_DATA.gw_summary?.free_transfers
-  );
+  const summaryFT = Number(MY_TEAM_DATA.gw_summary?.free_transfers);
   if (Number.isFinite(summaryFT)) {
     return Math.max(1, Math.min(5, summaryFT));
   }
