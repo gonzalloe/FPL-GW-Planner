@@ -48,7 +48,15 @@ def fetch_my_team(team_id: int) -> dict:
             "team_value": (entry.get("last_deadline_value") or 0) / 10,
             "started_event": entry.get("started_event", 1),
             "favourite_team": entry.get("favourite_team"),
+            "transfers_limit": entry.get("transfers_limit"),
+            "free_transfers": entry.get("free_transfers"),
         }
+        # dubug print
+        print("[FPL ENTRY TRANSFERS]", {
+            k: v for k, v in entry.items()
+            if "transfer" in k.lower()
+        })
+
     except Exception as e:
         result["error"] = f"Could not fetch team info: {str(e)}"
         return result

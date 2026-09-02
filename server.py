@@ -1501,9 +1501,11 @@ def api_my_team():
         enriched = enrich_my_team(team_data, player_map, preds)
         suggestions = generate_transfer_suggestions(enriched, preds)
         return jsonify({
-            "team_id": team_id, "info": enriched.get("info", {}),
+            "team_id": team_id,
+            "info": enriched.get("info", {}),
             "gw_summary": enriched.get("gw_summary", {}),
-            "starters": enriched.get("starters", []), "bench": enriched.get("bench", []),
+            "starters": enriched.get("starters", []),
+            "bench": enriched.get("bench", []),
             "squad_value": enriched.get("squad_value", 0),
             "predicted_points": enriched.get("predicted_points", 0),
             "weakest_links": enriched.get("weakest_links", []),
@@ -1512,6 +1514,7 @@ def api_my_team():
             "active_chip": enriched.get("active_chip"),
             "recent_transfers": enriched.get("transfers", [])[:10],
             "history": enriched.get("history", [])[-10:],
+            "free_transfers": team_data.get("free_transfers", 1),
         })
     except ValueError:
         return jsonify({"error": "Invalid team ID"}), 400
@@ -1539,7 +1542,8 @@ def api_transfers():
         if not preds: return jsonify({"error": "Predictions not ready"}), 503
         player_map = {p["player_id"]: p for p in preds if "player_id" in p}
         enriched = enrich_my_team(team_data, player_map, preds)
-        suggestions = generate_transfer_suggestions(enriched, preds, free_transfers=2)
+        free_transfers = team_data.get("free_transfers", 1)
+        suggestions = generate_transfer_suggestions(enriched, preds, free_transfers=free_transfers)
         return jsonify({"team_id": int(team_id), "suggestions": suggestions,
                         "bank": enriched.get("gw_summary", {}).get("bank", 0),
                         "squad_value": enriched.get("squad_value", 0)})
