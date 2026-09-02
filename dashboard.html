@@ -3424,6 +3424,29 @@ function applyAISuggestion(outId, inId) {
   setTimeout(() => { selectSellPlayer(parseInt(outId)); searchReplacementById(parseInt(inId)); }, 300);
 }
 
+function getSimulatorFreeTransfers() {
+  if (!MY_TEAM_DATA) return 1;
+  
+  // If the API/backend already supplied the value, use it.
+  if (Number.isFinite(Number(MY_TEAM_DATA.free_transfers))) {
+    return Math.max(1, Math.min(5, Number(MY_TEAM_DATA.free_transfers)));
+  }
+  if (Number.isFinite(Number(MY_TEAM_DATA.estimated_free_transfers))) {
+    return Math.max(1, Math.min(5, Number(MY_TEAM_DATA.estimated_free_transfers)));
+  }
+  // Infer rollover from completed GW history.
+  const history = MY_TEAM_DATA.history || [];
+  if (history.length) {
+    const lastGW = history[history.length - 1];
+    const lastTransfers = Number(lastGW.event_transfers || 0);
+
+    if (lastTransfers === 0) {
+      return 2;
+    }
+  }
+  return 1;
+}
+
 // ── Simulator: FPL-style pitch ──
 function initSimulator() {
   if (!MY_TEAM_DATA) return;
@@ -3509,7 +3532,12 @@ function initSimulator() {
   SIM_CURRENT_GW = parseInt(gwSel?.value || DATA?.gameweek || 33);
   const bank = MY_TEAM_DATA.gw_summary?.bank || 0;
   const budgetEl = document.getElementById('sim-budget-display');
-  if (budgetEl) budgetEl.textContent = 'Bank: \u00A3' + bank + 'm';
+  if (budgetEl) { budgetEl.textContent = 'Bank: £' + bank + 'm'; }
+  const ftEl = document.getElementById('sim-ft-display');
+  if (ftEl) {
+    const ft = getSimulatorFreeTransfers();
+    ftEl.textContent = ft + ' Free Transfer' + (ft !== 1 ? 's' : '');
+  }
   // Restore any saved transfer state
   if (TRANSFER_QUEUE.length === 0) loadSimState();
 }
@@ -4211,8 +4239,10 @@ function renderTransferQueue() {
   const totalMultiGW = TRANSFER_QUEUE.reduce((s, t) => s + (t.multi_gw_gain || 0), 0);
   const totalCost = TRANSFER_QUEUE.reduce((s, t) => s + t.in_price - t.out_price, 0);
   const activeChip = document.getElementById('sim-chip-select')?.value || '';
-  const unlimitedFreeTransfers = (activeChip === 'FH' || activeChip === 'WC');
-  const freeTransfers = unlimitedFreeTransfers ? TRANSFER_QUEUE.length : 1;
+  const unlimitedFreeTransfers = activeChip === 'FH' || activeChip === 'WC';
+  const freeTransfers = unlimitedFreeTransfers
+    ? TRANSFER_QUEUE.length
+    : getSimulatorFreeTransfers();
   const hits = Math.max(0, TRANSFER_QUEUE.length - freeTransfers);
   const chipLabel = activeChip === 'FH' ? 'Free Hit' : activeChip === 'WC' ? 'Wildcard' : '';
 
