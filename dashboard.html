@@ -896,6 +896,9 @@ select option:checked, select option:hover {
 .planner-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin-bottom:20px; }
 .planner-summary .stat-box .value { font-size:20px; }
 
+.sim-summary-value {font-size: 18px; font-weight: 800; color: var(--text); white-space: nowrap;}
+#sim-ft-display {color: var(--accent);}
+
 /* Sub-tabs */
 .mtab { display:none; } .mtab.active { display:block; }
 
@@ -1439,8 +1442,8 @@ table tr:hover { background:var(--surface2); }
           <select id="sim-chip-select" onchange="onChipChange()" style="width:120px;">
             <option value="">None</option>
           </select>
-          <span style="font-size:12px;color:var(--text3);" id="sim-budget-display"></span>
-          <span style="font-size:12px;color:var(--text3);" id="sim-ft-display"></span>
+          <span class="sim-summary-value" id="sim-budget-display"></span>
+          <span class="sim-summary-value" id="sim-ft-display"></span>
         </div>
       </div>
 
