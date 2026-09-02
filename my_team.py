@@ -11,6 +11,53 @@ from config import FPL_API_BASE
 CACHE_DIR = Path(__file__).parent / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
+def calculate_free_transfers(history: list, chips: list | None = None) -> int:
+    """
+    Calculate the number of free transfers available for the next/current GW.
+
+    FPL gives 1 FT per GW and unused FTs roll over, capped at 5.
+    Wildcard/Free Hit transfers do not consume banked FTs.
+
+    `history` should contain the FPL entry history rows, one per completed GW.
+    """
+    chips = chips or []
+
+    # Start of GW1 = 1 free transfer.
+    free_transfers = 1
+
+    # Map chips by GW so we can identify Wildcard / Free Hit weeks.
+    chip_by_gw = {}
+    for chip in chips:
+        if not isinstance(chip, dict):
+            continue
+
+        gw = chip.get("event") or chip.get("gw")
+        name = str(chip.get("name", "")).lower()
+
+        if gw is not None:
+            chip_by_gw[int(gw)] = name
+
+    for row in sorted(
+        history or [],
+        key=lambda x: int(x.get("event", 0))
+    ):
+        gw = int(row.get("event", 0))
+        transfers = int(row.get("event_transfers", 0) or 0)
+        chip = chip_by_gw.get(gw)
+
+        # Wildcard / Free Hit preserves the banked FT.
+        # Do not consume the saved transfers for those transfers.
+        if chip in ("wildcard", "freehit"):
+            transfers = 0
+
+        # Unused FTs roll over, while each completed GW gives +1.
+        free_transfers = min(
+            5,
+            max(1, free_transfers + 1 - transfers)
+        )
+
+    return free_transfers
+
 
 def fetch_my_team(team_id: int) -> dict:
     """
@@ -25,6 +72,7 @@ def fetch_my_team(team_id: int) -> dict:
         "transfers": [],
         "history": [],
         "chips": [],
+        "free_transfers": 1,
         "error": None,
     }
 
@@ -49,7 +97,6 @@ def fetch_my_team(team_id: int) -> dict:
             "started_event": entry.get("started_event", 1),
             "favourite_team": entry.get("favourite_team"),
             "transfers_limit": entry.get("transfers_limit"),
-            "free_transfers": entry.get("free_transfers"),
         }
         # Keep the actual FPL value at the top level too.
         result["free_transfers"] = entry.get("free_transfers")
@@ -74,6 +121,10 @@ def fetch_my_team(team_id: int) -> dict:
             hist_resp.raise_for_status()
             hist_data = hist_resp.json()
             chips_used = hist_data.get("chips", [])
+            hist_data = hist_resp.json()
+            chips_used = hist_data.get("chips", [])
+            history_rows = hist_data.get("current", [])
+            result["free_transfers"] = calculate_free_transfers(history_rows, chips_used)
             
             # Check if FH was used in the previous GW (current_event - 1 is the last completed GW)
             # If current_event is 34, last completed is 33
@@ -122,7 +173,7 @@ def fetch_my_team(team_id: int) -> dict:
                 "event_transfers": eh.get("event_transfers", 0),
                 "event_transfers_cost": eh.get("event_transfers_cost", 0),
                 "points_on_bench": eh.get("points_on_bench", 0),
-                "free_transfers": result.get("free_transfers"),
+                "free_transfers": result["free_transfers"],
             }
             
             # Store chips for later use (already fetched)

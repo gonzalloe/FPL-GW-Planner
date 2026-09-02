@@ -3426,26 +3426,20 @@ function applyAISuggestion(outId, inId) {
 
 function getSimulatorFreeTransfers() {
   if (!MY_TEAM_DATA) return 1;
-  
-  // If the API/backend already supplied the value, use it.
-  if (Number.isFinite(Number(MY_TEAM_DATA.free_transfers))) {
-    return Math.max(1, Math.min(5, Number(MY_TEAM_DATA.free_transfers)));
+  const ft = Number(MY_TEAM_DATA.free_transfers);
+  if (Number.isFinite(ft)) {
+    return Math.max(1, Math.min(5, ft));
   }
-  if (Number.isFinite(Number(MY_TEAM_DATA.estimated_free_transfers))) {
-    return Math.max(1, Math.min(5, Number(MY_TEAM_DATA.estimated_free_transfers)));
+  const summaryFT = Number(
+    MY_TEAM_DATA.gw_summary?.free_transfers
+  );
+  if (Number.isFinite(summaryFT)) {
+    return Math.max(1, Math.min(5, summaryFT));
   }
-  // Infer rollover from completed GW history.
-  const history = MY_TEAM_DATA.history || [];
-  if (history.length) {
-    const lastGW = history[history.length - 1];
-    const lastTransfers = Number(lastGW.event_transfers || 0);
 
-    if (lastTransfers === 0) {
-      return 2;
-    }
-  }
   return 1;
 }
+
 
 // ── Simulator: FPL-style pitch ──
 function initSimulator() {
