@@ -1499,7 +1499,14 @@ def api_my_team():
             return jsonify({"error": "Predictions not ready yet. Please wait for data refresh."}), 503
         player_map = {p["player_id"]: p for p in preds if "player_id" in p}
         enriched = enrich_my_team(team_data, player_map, preds)
-        suggestions = generate_transfer_suggestions(enriched, preds)
+        free_transfers = enriched.get("free_transfers")
+        if free_transfers is None:
+            free_transfers = enriched.get("gw_summary", {}).get("free_transfers")
+        if free_transfers is None:
+            free_transfers = 1
+        free_transfers = int(free_transfers)
+        suggestions = generate_transfer_suggestions(enriched, preds, free_transfers=free_transfers)
+
         return jsonify({
             "team_id": team_id,
             "info": enriched.get("info", {}),
@@ -1542,11 +1549,21 @@ def api_transfers():
         if not preds: return jsonify({"error": "Predictions not ready"}), 503
         player_map = {p["player_id"]: p for p in preds if "player_id" in p}
         enriched = enrich_my_team(team_data, player_map, preds)
-        free_transfers = team_data.get("free_transfers", 1)
+        free_transfers = team_data.get("free_transfers")
+        if free_transfers is None:
+            free_transfers = team_data.get("info", {}).get("free_transfers")
+        if free_transfers is None:
+            free_transfers = 1
+        free_transfers = int(free_transfers)
         suggestions = generate_transfer_suggestions(enriched, preds, free_transfers=free_transfers)
-        return jsonify({"team_id": int(team_id), "suggestions": suggestions,
-                        "bank": enriched.get("gw_summary", {}).get("bank", 0),
-                        "squad_value": enriched.get("squad_value", 0)})
+        return jsonify({
+            "team_id": int(team_id),
+            "suggestions": suggestions,
+            "bank": enriched.get("gw_summary", {}).get("bank", 0),
+            "squad_value": enriched.get("squad_value", 0),
+            "free_transfers": free_transfers,
+        })
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

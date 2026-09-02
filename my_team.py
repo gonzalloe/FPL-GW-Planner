@@ -51,11 +51,8 @@ def fetch_my_team(team_id: int) -> dict:
             "transfers_limit": entry.get("transfers_limit"),
             "free_transfers": entry.get("free_transfers"),
         }
-        # dubug print
-        print("[FPL ENTRY TRANSFERS]", {
-            k: v for k, v in entry.items()
-            if "transfer" in k.lower()
-        })
+        # Keep the actual FPL value at the top level too.
+        result["free_transfers"] = entry.get("free_transfers")
 
     except Exception as e:
         result["error"] = f"Could not fetch team info: {str(e)}"
@@ -125,6 +122,7 @@ def fetch_my_team(team_id: int) -> dict:
                 "event_transfers": eh.get("event_transfers", 0),
                 "event_transfers_cost": eh.get("event_transfers_cost", 0),
                 "points_on_bench": eh.get("points_on_bench", 0),
+                "free_transfers": result.get("free_transfers"),
             }
             
             # Store chips for later use (already fetched)
