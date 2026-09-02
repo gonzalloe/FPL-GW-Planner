@@ -1504,9 +1504,8 @@ def api_my_team():
             free_transfers = enriched.get("gw_summary", {}).get("free_transfers")
         if free_transfers is None:
             free_transfers = 1
-        free_transfers = int(team_data.get("free_transfers", 1))
+        free_transfers = int(team_data.get("free_transfers" or 1))
         suggestions = generate_transfer_suggestions(enriched, preds, free_transfers=free_transfers)
-
         return jsonify({
             "team_id": team_id,
             "info": enriched.get("info", {}),
@@ -1554,7 +1553,7 @@ def api_transfers():
             free_transfers = team_data.get("info", {}).get("free_transfers")
         if free_transfers is None:
             free_transfers = 1
-        free_transfers = int(team_data.get("free_transfers", 1))
+        free_transfers = int(team_data.get("free_transfers") or 1)
         suggestions = generate_transfer_suggestions(enriched, preds, free_transfers=free_transfers)
         return jsonify({
             "team_id": int(team_id),

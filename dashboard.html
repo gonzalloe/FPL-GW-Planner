@@ -3434,8 +3434,15 @@ function getSimulatorFreeTransfers() {
   if (Number.isFinite(summaryFT)) {
     return Math.max(1, Math.min(5, summaryFT));
   }
-
   return 1;
+}
+
+function updateSimulatorFreeTransferDisplay() {
+  const ftEl = document.getElementById('sim-ft-display');
+  if (!ftEl) return;
+  const ft = getSimulatorFreeTransfers();
+  ftEl.textContent =
+    ft + ' Free Transfer' + (ft !== 1 ? 's' : '');
 }
 
 
@@ -3525,11 +3532,7 @@ function initSimulator() {
   const bank = MY_TEAM_DATA.gw_summary?.bank || 0;
   const budgetEl = document.getElementById('sim-budget-display');
   if (budgetEl) { budgetEl.textContent = 'Bank: £' + bank + 'm'; }
-  const ftEl = document.getElementById('sim-ft-display');
-  if (ftEl) {
-    const ft = getSimulatorFreeTransfers();
-    ftEl.textContent = ft + ' Free Transfer' + (ft !== 1 ? 's' : '');
-  }
+  updateSimulatorFreeTransferDisplay();
   // Restore any saved transfer state
   if (TRANSFER_QUEUE.length === 0) loadSimState();
 }

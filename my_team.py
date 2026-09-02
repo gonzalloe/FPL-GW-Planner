@@ -13,50 +13,49 @@ CACHE_DIR.mkdir(exist_ok=True)
 
 def calculate_free_transfers(history: list, chips: list | None = None) -> int:
     """
-    Calculate the number of free transfers available for the next/current GW.
+    Return free transfers available for the upcoming gameweek.
 
-    FPL gives 1 FT per GW and unused FTs roll over, capped at 5.
-    Wildcard/Free Hit transfers do not consume banked FTs.
-
-    `history` should contain the FPL entry history rows, one per completed GW.
+    We start with 1 FT for GW1.
+    Each completed GW rolls unused FT into the next GW, capped at 5.
     """
     chips = chips or []
 
-    # Start of GW1 = 1 free transfer.
-    free_transfers = 1
-
-    # Map chips by GW so we can identify Wildcard / Free Hit weeks.
     chip_by_gw = {}
     for chip in chips:
         if not isinstance(chip, dict):
             continue
 
-        gw = chip.get("event") or chip.get("gw")
+        event = chip.get("event")
         name = str(chip.get("name", "")).lower()
 
-        if gw is not None:
-            chip_by_gw[int(gw)] = name
+        if event is not None:
+            chip_by_gw[int(event)] = name
 
-    for row in sorted(
+    free_transfers = 1
+
+    rows = sorted(
         history or [],
-        key=lambda x: int(x.get("event", 0))
-    ):
-        gw = int(row.get("event", 0))
+        key=lambda row: int(row.get("event", 0))
+    )
+
+    for row in rows:
         transfers = int(row.get("event_transfers", 0) or 0)
+        gw = int(row.get("event", 0))
+
         chip = chip_by_gw.get(gw)
 
-        # Wildcard / Free Hit preserves the banked FT.
-        # Do not consume the saved transfers for those transfers.
+        # Wildcard / Free Hit do not consume the banked FT.
         if chip in ("wildcard", "freehit"):
             transfers = 0
 
-        # Unused FTs roll over, while each completed GW gives +1.
-        free_transfers = min(
-            5,
-            max(1, free_transfers + 1 - transfers)
-        )
+        # First transfer is free; subsequent transfers are hits.
+        used_free = min(transfers, free_transfers)
+        free_transfers -= used_free
 
-    return free_transfers
+        # Move to the next GW.
+        free_transfers = min(5, free_transfers + 1)
+
+    return max(1, min(5, free_transfers))
 
 
 def fetch_my_team(team_id: int) -> dict:
@@ -124,7 +123,11 @@ def fetch_my_team(team_id: int) -> dict:
             hist_data = hist_resp.json()
             chips_used = hist_data.get("chips", [])
             history_rows = hist_data.get("current", [])
-            result["free_transfers"] = calculate_free_transfers(history_rows, chips_used)
+            completed_history = [
+                row for row in history_rows
+                if int(row.get("event", 0)) < current_event
+            ]
+            result["free_transfers"] = calculate_free_transfers(completed_history, chips_used)
             
             # Check if FH was used in the previous GW (current_event - 1 is the last completed GW)
             # If current_event is 34, last completed is 33
