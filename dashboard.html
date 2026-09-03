@@ -2946,8 +2946,28 @@ function renderTeamL5(form) {
 }
 
 
-function playerTableHTML(players, captain, vice) {
-  let html = `<thead><tr><th>Pos</th><th>Player</th><th>Team</th><th>Status</th><th>Fixtures</th><th>Win Prob</th><th>xPts</th><th>Price</th><th>Tier</th><th>Form</th><th>Team L5</th><th>WR</th><th>Starting XI</th></tr></thead><tbody>`;
+function playerTableHTML(players, captain, vice, sortable = false) {
+    const sortArrow = (key) => {
+    if (_playersSortKey !== key) return '';
+    return _playersSortDir === 'asc' ? ' ▲' : ' ▼';
+  };
+  const sortClass = sortable ? ' sortable-th' : '';
+  let html = `<thead><tr>
+    <th>Pos</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('name')"` : ''}>Player${sortArrow('name')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('team')"` : ''}>Team${sortArrow('team')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('status')"` : ''}>Status${sortArrow('status')}</th>
+    <th>Fixtures</th>
+    <th>Win Prob</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('xpts')"` : ''}>xPts${sortArrow('xpts')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('price')"` : ''}>Price${sortArrow('price')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('tier')"` : ''}>Tier${sortArrow('tier')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('form')"` : ''}>Form${sortArrow('form')}</th>
+    <th>Team L5</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('wr')"` : ''}>WR${sortArrow('wr')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('confidence')"` : ''}>Starting XI${sortArrow('confidence')}</th>
+  </tr></thead><tbody>`;
+
   players.forEach(p => {
     const isCap = captain && captain.player_id === p.player_id;
     const isVice = vice && vice.player_id === p.player_id;
@@ -3115,6 +3135,9 @@ function renderChipPage(chips, gwInfo) {
 // ── Unified Players Page ──
 let _playersMode = 'top30';
 let _playersStatusFilters = new Set();
+// Players table sorting
+let _playersSortKey = null;
+let _playersSortDir = 'desc';
 
 function renderPlayersPage(players, gwInfo) {
   window._allPlayersData = players;
@@ -3209,15 +3232,71 @@ function filterPlayers(clickedBtn) {
 let _playersPage = 1;
 const PLAYERS_PER_PAGE = 50;
 
+function sortPlayersTable(players) {
+  if (!_playersSortKey) return players;
+  const key = _playersSortKey;
+  const dir = _playersSortDir === 'asc' ? 1 : -1;
+  const getValue = (p) => {
+    switch (key) {
+      case 'position':
+        return Number(p.position_id || 0);
+      case 'name':
+        return String(p.name || '').toLowerCase();
+      case 'team':
+        return String(p.team_name || p.team || '').toLowerCase();
+      case 'status':
+        return String(p.availability?.status || 'available').toLowerCase();
+      case 'xpts':
+        return Number(p.predicted_points) || 0;
+      case 'price':
+        return Number(p.price) || 0;
+      case 'tier':
+        return String(p.starter_quality?.tier || '').toLowerCase();
+      case 'form':
+        return Number(p.form) || 0;
+      case 'wr':
+        return Number(p.team_season_wr) || 0;
+      case 'confidence':
+        return Number(p.confidence) || 0;
+      default:
+        return '';
+    }
+  };
+  return [...players].sort((a, b) => {
+    const av = getValue(a);
+    const bv = getValue(b);
+    if (typeof av === 'string' && typeof bv === 'string') {
+      return av.localeCompare(bv) * dir;
+    }
+    return (av - bv) * dir;
+  });
+}
+
+function sortPlayersBy(key) {
+  if (_playersSortKey === key) {
+    // Clicking the same header reverses the order
+    _playersSortDir = _playersSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _playersSortKey = key;
+  
+    // text columns start A-Z
+    // numeric columns start highest -> lowest
+    const textKeys = ['name', 'team', 'status', 'tier'];
+    _playersSortDir = textKeys.includes(key) ? 'asc' : 'desc';
+  }
+  renderPlayersTable();
+}
+
+
 function renderPlayersTable() {
-  const filtered = window._playersFiltered || [];
+  const filtered = sortPlayersTable(window._playersFiltered || []);
   const totalPages = Math.max(1, Math.ceil(filtered.length / PLAYERS_PER_PAGE));
   _playersPage = Math.min(Math.max(1, _playersPage), totalPages);
 
   const start = (_playersPage - 1) * PLAYERS_PER_PAGE;
   const shown = filtered.slice(start, start + PLAYERS_PER_PAGE);
 
-  document.getElementById('tbl-players').innerHTML = playerTableHTML(shown);
+  document.getElementById('tbl-players').innerHTML = playerTableHTML(shown, null, null, true);
   document.getElementById('players-count').textContent =
     filtered.length > 0
       ? `Showing ${start + 1}-${start + shown.length} of ${filtered.length} players`
