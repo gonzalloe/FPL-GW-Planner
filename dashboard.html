@@ -458,25 +458,61 @@ h2 .dgw-alert {
 
 /* Table */
 .tbl-wrap {
-  overflow-x:auto; border-radius:var(--radius-sm);
-  background:var(--input-bg); border:1px solid var(--card-border);
+  overflow-x: auto;
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  border: 1px solid var(--card-border);
 }
-table { width:100%; border-collapse:collapse; font-size:13px; }
+table {width: 100%; border-collapse: collapse; font-size: 13px;}
 th {
-  background:var(--surface2);
-  padding:12px 10px; text-align:left; font-size:10px; text-transform:uppercase;
-  color:var(--text3); letter-spacing:.8px; font-weight:700;
-  position:sticky; top:0; z-index:1; cursor:pointer; white-space:nowrap;
-  border-bottom:1px solid var(--border);
-  transition:var(--transition);
+  background: var(--surface2);
+  padding: 12px 28px 12px 10px;
+  text-align: left;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text3);
+  letter-spacing: .8px;
+  font-weight: 700;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+  transition: var(--transition);
 }
-th:hover { color:var(--accent); background:var(--accent-dim); }
-td { padding:10px 10px; border-bottom:1px solid var(--border); vertical-align:middle; transition:var(--transition); color:var(--text); }
-tbody tr:nth-child(even) td { background:var(--hover-bg); }
-tbody tr:hover td {
-  background:linear-gradient(90deg, var(--accent-dim), var(--blue-dim));
-  color:var(--text);
+/* Sort indicator */
+th::after {
+  content: "↕";
+  position: absolute;
+  right: 10px;
+  color: var(--text3);
+  font-size: 11px;
+  opacity: .5;
+  transition: all .2s ease;
 }
+/* Hover */
+th:hover {color: var(--accent); background: var(--accent-dim);}
+/* Sorted ascending */
+th.sort-asc {color: var(--accent); background: var(--accent-dim);}
+th.sort-asc::after {content: "↑"; color: var(--accent); opacity: 1;}
+/* Sorted descending */
+th.sort-desc {color: var(--accent); background: var(--accent-dim);}
+th.sort-desc::after {content: "↓"; color: var(--accent); opacity: 1;}
+/* Non-sortable headers */
+th.no-sort {cursor: default;}
+th.no-sort::after {content: none;}
+td {
+  padding: 10px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  transition: var(--transition);
+  color: var(--text);
+}
+tbody tr:nth-child(even) td {background: var(--hover-bg);}
+tbody tr:hover td {background: linear-gradient(90deg, var(--accent-dim), var(--blue-dim)); color: var(--text);}
+
 .pos-badge {
   display:inline-block; padding:3px 8px; border-radius:10px; font-size:10px; font-weight:800;
   letter-spacing:.5px; box-shadow:0 2px 6px rgba(0,0,0,.2);
