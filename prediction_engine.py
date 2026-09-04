@@ -1040,8 +1040,7 @@ class PredictionEngine:
             expected_dc = base_dc_rate * mins_fraction * dc_fixture_mod
             other_ev += (expected_dc / 3.0) * 1.0 * 0.35
         
-        return {"appearance": appearance_pts, "other": max(other_ev, 0.0)}
-
+        return {"appearance": appearance_pts, "other": other_ev,}
 
     # ══════════════════════════════════════════════════════════
     #  Starter Quality (DGW-aware)
@@ -1500,8 +1499,8 @@ class PredictionEngine:
             current_starts = int(p.get("_current_season_starts", 0) or 0)
 
         if current_minutes > 0:
-            current_start_rate = min(current_starts / max(current_minutes / 90.0, 1.0),1.0)
-            current_avg_mins = min(current_minutes / gws_played, 90.0)
+            current_start_rate = min(current_starts / max(gws_played, 1), 1.0)
+            current_avg_mins = min(current_minutes / max(gws_played, 1), 90.0)
 
         # ============================================================
         # 3. RECENT ROLE EVIDENCE
@@ -1637,11 +1636,17 @@ class PredictionEngine:
         has_current_season_evidence = (current_minutes > 0 and observed_start_rate is not None)
 
         if has_current_season_evidence:
-            # --------------------------------------------------------
-            # CURRENT-SEASON EVIDENCE
-            # --------------------------------------------------------
-            current_weight = min(current_minutes / 900.0, 1.0)
+            # Current-season starts are much more informative than old-club role.
+            # Give recent actual starts strong weight after even 2 matches.
+            current_games = max(gws_played, 1)
+            if current_games <= 2:
+                current_weight = 0.75
+            elif current_games <= 4:
+                current_weight = 0.85
+            else:
+                current_weight = 0.90
             start_rate = (prior_start_rate * (1.0 - current_weight) + observed_start_rate * current_weight)
+
         elif (
             pos_id == 1
             and competition_score is not None
@@ -1743,7 +1748,23 @@ class PredictionEngine:
         mins_volatility = min(max(mins_volatility, 0.0), 1.0)
 
         # ============================================================
-        # 9. P(60+)
+        # 9. INJURY / TEAM ROLE BOOST
+        # ============================================================
+        if teammates_out >= 1:
+            injured_was_starter = (out_minutes > gws_played * 30)
+            if p.get("position_id") != 1:
+                boost = 0.0
+
+                if injured_was_starter:
+                    boost = (
+                        0.15
+                        if teammates_out == 1
+                        else 0.25
+                    )
+                p_start = min(p_start + boost, 1.0)        
+
+        # ============================================================
+        # 10. P(60+)
         # ============================================================
 
         if p.get("position_id") == 1:
@@ -1759,22 +1780,6 @@ class PredictionEngine:
         if current_minutes > 0:
             p_plays_60 *= (1.0 - mins_volatility * 0.30)
         p_plays_60 = min(max(p_plays_60, 0.0), 1.0)
-
-        # ============================================================
-        # 10. INJURY / TEAM ROLE BOOST
-        # ============================================================
-        if teammates_out >= 1:
-            injured_was_starter = (out_minutes > gws_played * 30)
-            if p.get("position_id") != 1:
-                boost = 0.0
-
-                if injured_was_starter:
-                    boost = (
-                        0.15
-                        if teammates_out == 1
-                        else 0.25
-                    )
-                p_start = min(p_start + boost, 1.0)
 
         # ============================================================
         # 11. ROTATION RISK

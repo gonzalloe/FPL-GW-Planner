@@ -3292,7 +3292,7 @@ function sortPlayersTable(players) {
       case 'wr':
         return Number(p.team_season_wr) || 0;
       case 'confidence':
-        return Number(p.confidence) || 0;
+        return Number(p.starter_quality?.p_start) || 0;
       default:
         return '';
     }
