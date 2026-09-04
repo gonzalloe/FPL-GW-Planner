@@ -1705,14 +1705,14 @@ class PredictionEngine:
         if observed_avg_mins is not None and current_minutes > 0:
             current_games = max(gws_played, 1)
             if current_games <= 2:
-                current_weight = 0.90
+                current_weight = 0.65
             elif current_games <= 4:
-                current_weight = 0.95
+                current_weight = 0.85
             else:
-                current_weight = 0.95
-            # New transfers: current-club minutes are especially informative.
+                current_weight = 0.90
+            # New transfers: current-club minutes are more informative
             if is_new_environment:
-                current_weight = min(current_weight + 0.05, 1.0)
+                current_weight = min(current_weight + 0.10, 0.90)
             avg_mins = (prior_avg_mins * (1.0 - current_weight) + observed_avg_mins * current_weight)
         elif (is_new_environment and competition_score is not None):
             # GKP: If selected, normally plays close to 90.
