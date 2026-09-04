@@ -2999,8 +2999,8 @@ function playerTableHTML(players, captain, vice, sortable = false) {
     <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('tier')"` : ''}>Tier${sortArrow('tier')}</th>
     <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('form')"` : ''}>Form${sortArrow('form')}</th>
     <th>Team L5</th>
-    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('wr')"` : ''}>WR${sortArrow('wr')}</th>
-    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('confidence')"` : ''}>Starting XI${sortArrow('confidence')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('wr')"` : ''}>Team WR${sortArrow('wr')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('start_prob')"` : ''}>Start %${sortArrow('start_prob')}</th>
   </tr></thead><tbody>`;
 
   players.forEach(p => {
@@ -3080,8 +3080,11 @@ function playerTableHTML(players, captain, vice, sortable = false) {
       ? lockCell('Tier')
       : `<span class="tier-badge tier-${tier || 'unknown'}">${tier || '?'}</span>`;
 
-    // Confidence
-    const confHtml = isLocked(p.confidence) ? lockCell('Conf') : confBar(p.confidence);
+    // Starting probability
+    const startProb = p.starter_quality?.p_start;
+    const startHtml = isLocked(startProb)
+      ? lockCell('Start %')
+      : confBar(startProb);
 
     html += `<tr>
       <td><span class="pos-badge pos-${p.position}">${p.position}</span></td>
@@ -3096,7 +3099,7 @@ function playerTableHTML(players, captain, vice, sortable = false) {
       <td>${p.form || '--'}</td>
       <td><span class="form-str">${formStr}</span></td>
       <td>${wrHtml}</td>
-      <td>${confHtml}</td>
+      <td>${startHtml}</td>
     </tr>`;
   });
   return html + '</tbody>';
@@ -3291,7 +3294,7 @@ function sortPlayersTable(players) {
         return Number(p.form) || 0;
       case 'wr':
         return Number(p.team_season_wr) || 0;
-      case 'confidence':
+      case 'start_prob':
         return Number(p.starter_quality?.p_start) || 0;
       default:
         return '';
