@@ -1882,12 +1882,12 @@ def api_top_transfers():
             }
 
         rows = [build_row(p) for p in bootstrap.get("elements", [])]
-        top_in = sorted(rows, key=lambda x: x["transfers_in_event"], reverse=True)[:15]
-        top_out = sorted(rows, key=lambda x: x["transfers_out_event"], reverse=True)[:15]
-        top_net_in = sorted(rows, key=lambda x: x["net_transfers"], reverse=True)[:15]
-        top_net_out = sorted(rows, key=lambda x: x["net_transfers"])[:15]
-        price_risers = sorted([r for r in rows if r["price_change_prediction"] > 0], key=lambda x: x["price_change_prediction"], reverse=True)[:10]
-        price_fallers = sorted([r for r in rows if r["price_change_prediction"] < 0], key=lambda x: x["price_change_prediction"])[:10]
+        top_in = sorted(rows, key=lambda x: x["transfers_in_event"], reverse=True)[:20]
+        top_out = sorted(rows, key=lambda x: x["transfers_out_event"], reverse=True)[:20]
+        top_net_in = sorted(rows, key=lambda x: x["net_transfers"], reverse=True)[:20]
+        top_net_out = sorted(rows, key=lambda x: x["net_transfers"])[:20]
+        price_risers = sorted([r for r in rows if r["price_change_prediction"] > 0], key=lambda x: x["price_change_prediction"], reverse=True)[:20]
+        price_fallers = sorted([r for r in rows if r["price_change_prediction"] < 0], key=lambda x: x["price_change_prediction"])[:20]
         price_change_next_update = get_next_price_change_time()
 
         return jsonify({
@@ -1899,6 +1899,7 @@ def api_top_transfers():
             "price_risers": price_risers,
             "price_fallers": price_fallers,
             "price_change_next_update": price_change_next_update,
+            "all_players": rows,
         })
         
     except Exception as e:

@@ -4688,182 +4688,210 @@ function renderTransfersTab() {
   if (_transfersTab === 'prices') {
     const risers = _transfersData.price_risers || [];
     const fallers = _transfersData.price_fallers || [];
+    const allPlayers = _transfersData.all_players || [];
+    const searchHtml = `
+      <div style="margin-bottom:16px;">
+        <input
+          id="pricePlayerSearch"
+          type="text"
+          placeholder="Search player..."
+          autocomplete="off"
+          style="
+            width:100%;
+            max-width:420px;
+            padding:10px 12px;
+            border-radius:8px;
+            border:1px solid var(--border);
+            background:var(--surface2);
+            color:var(--text);
+            font-size:14px;
+          "
+        >
+      </div>
+    `;
     const priceRow = (p, i, dir) => {
-      const color = dir === 'up'
-        ? 'var(--accent)'
-        : 'var(--red)';
+      const color = dir === 'up' ? 'var(--accent)' : 'var(--red)';
       const arrow = dir === 'up' ? '↑' : '↓';
-      const progress = Math.abs(Number(p.price_change_percent || 0));
-      // Official FPL next projection.
+      const progress = Number(p.price_change_percent || 0);
       const prediction = Number(p.price_change_prediction || 0);
       const confidence = getPriceChangeConfidence(p.price_change_likelihood);
-      const progressWidth = Math.min(progress, 100);
-      const confidenceColor =
-        confidence === 'High'
-          ? 'var(--accent)'
-          : confidence === 'Medium'
-            ? 'var(--yellow)'
-            : 'var(--text3)'
+
       return `<tr>
-        <td style="text-align:center;color:var(--text3);">
-          ${i}
-        </td>
+        <td style="text-align:center;color:var(--text3);">${i}</td>
         <td>
           <span class="pos-badge pos-${p.position}">
             ${p.position}
           </span>
         </td>
-        <td>
-          <strong>${p.name}</strong>
-        </td>
+        <td><strong>${p.name}</strong></td>
         <td>${p.team}</td>
         <td>£${p.price}m</td>
-        <td>
-          <div style="
-            display:flex;
-            align-items:center;
-            gap:8px;
-            min-width:120px;
-          ">
-            <div style="
-              width:70px;
-              height:6px;
-              background:var(--border);
-              border-radius:999px;
-              overflow:hidden;
-            ">
-              <div style="
-                width:${progressWidth}%;
-                height:100%;
-                background:${color};
-                border-radius:999px;
-              "></div>
-            </div>
-            <span style="
-              font-size:11px;
-              font-weight:700;
-              color:${color};
-            ">
-              ${progress.toFixed(1)}%
-            </span>
-          </div>
-        </td>
-
-        <td style="
-          text-align:right;
-          color:${color};
-          font-weight:800;
-        ">
+        <td style="text-align:right;">${progress.toFixed(1)}%</td>
+        <td style="text-align:right;color:${color};font-weight:800;">
           ${arrow} ${Math.abs(prediction).toFixed(1)}%
         </td>
-        <td style="
-          text-align:right;
-          color:${confidenceColor};
-          font-weight:700;
-        ">
-          ${confidence}
+        <td style="text-align:right;">
+          <span style="
+            color:${
+              confidence === 'High'
+                ? 'var(--accent)'
+                : confidence === 'Medium'
+                  ? 'var(--yellow)'
+                  : 'var(--text3)'
+            };
+            font-weight:700;
+          ">
+            ${confidence}
+          </span>
         </td>
       </tr>`;
     };
+
     const header = `<thead><tr>
       <th>#</th>
       <th>Pos</th>
       <th>Player</th>
       <th>Team</th>
       <th>Price</th>
-      <th>Progress</th>
+      <th style="text-align:right;">Progress</th>
       <th style="text-align:right;">Prediction</th>
       <th style="text-align:right;">Confidence</th>
     </tr></thead>`;
+
     content.innerHTML = `
       <div class="card">
-        <h3 style="
-          margin-bottom:12px;
-          color:var(--accent);
-        ">
-          📈 Price Risers (${risers.length})
+        <h3 style="margin-bottom:6px;color:var(--accent);">
+          💰 Price Change Prediction
         </h3>
-
-        ${
-          risers.length
-            ? `
-              <div class="tbl-wrap">
-                <table>
-                  ${header}
-                  <tbody>
-                    ${risers
-                      .map((p, i) =>
-                        priceRow(p, i + 1, 'up')
-                      )
-                      .join('')}
-                  </tbody>
-                </table>
-              </div>
-            `
-            : `
-              <p style="
-                color:var(--text3);
-                font-size:13px;
-                padding:12px 0;
-              ">
-                No price rises this GW yet.
-              </p>
-            `
-        }
-        <div style="
-          margin-top:10px;
-          color:var(--text3);
-          font-size:11px;
-        ">
-          Progress shows how close the player is to a price change.
-          Prediction is FPL's next projected progress value.
+        <div style="color:var(--text3);font-size:13px;margin-bottom:12px;">
+          Official FPL price-change predictor
         </div>
+        <div style="
+          font-size:13px;
+          margin-bottom:12px;
+          color:var(--text2);
+        ">
+          ⏱ <span id="priceChangeCountdown">Loading...</span>
+        </div>
+        ${searchHtml}
+        <div id="priceSearchResults" style="display:none;"></div>
       </div>
       <div class="card">
-        <h3 style="
-          margin-bottom:12px;
-          color:var(--red);
-        ">
+        <h3 style="margin-bottom:12px;color:var(--accent);">
+          📈 Price Risers (${risers.length})
+        </h3>
+        ${risers.length
+          ? `<div class="tbl-wrap">
+              <table>
+                ${header}
+                <tbody>
+                  ${risers.map((p,i) =>
+                    priceRow(p, i+1, 'up')
+                  ).join('')}
+                </tbody>
+              </table>
+            </div>`
+          : '<p style="color:var(--text3);font-size:13px;padding:12px 0;">No price rises this GW yet.</p>'
+        }
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:12px;color:var(--red);">
           📉 Price Fallers (${fallers.length})
         </h3>
-
-        ${
-          fallers.length
-            ? `
-              <div class="tbl-wrap">
-                <table>
-                  ${header}
-                  <tbody>
-                    ${fallers
-                      .map((p, i) =>
-                        priceRow(p, i + 1, 'down')
-                      )
-                      .join('')}
-                  </tbody>
-                </table>
-              </div>
-            `
-            : `
-              <p style="
-                color:var(--text3);
-                font-size:13px;
-                padding:12px 0;
-              ">
-                No price falls this GW yet.
-              </p>
-            `
+        ${fallers.length
+          ? `<div class="tbl-wrap">
+              <table>
+                ${header}
+                <tbody>
+                  ${fallers.map((p,i) =>
+                    priceRow(p, i+1, 'down')
+                  ).join('')}
+                </tbody>
+              </table>
+            </div>`
+          : '<p style="color:var(--text3);font-size:13px;padding:12px 0;">No price falls this GW yet.</p>'
         }
-
-        <div style="
-          margin-top:10px;
-          color:var(--text3);
-          font-size:11px;
-        ">
-          Progress shows how close the player is to a price change.
-          Prediction is FPL's next projected progress value.
-        </div>
       </div>
     `;
+
+    const searchInput = document.getElementById('pricePlayerSearch');
+    const searchResults = document.getElementById('priceSearchResults');
+
+    if (searchInput && searchResults) {
+      searchInput.addEventListener('input', () => {
+        const query = searchInput.value.trim().toLowerCase();
+
+        if (!query) {
+          searchResults.style.display = 'none';
+          searchResults.innerHTML = '';
+          return;
+        }
+
+        const matches = allPlayers
+          .filter(p =>
+            (p.name || '').toLowerCase().includes(query)
+          )
+          .slice(0, 20);
+
+        if (!matches.length) {
+          searchResults.style.display = 'block';
+          searchResults.innerHTML = `
+            <div style="
+              color:var(--text3);
+              padding:12px 0;
+              font-size:13px;
+            ">
+              No players found.
+            </div>
+          `;
+          return;
+        }
+
+        const searchHeader = `<thead><tr>
+          <th>#</th>
+          <th>Pos</th>
+          <th>Player</th>
+          <th>Team</th>
+          <th>Price</th>
+          <th style="text-align:right;">Progress</th>
+          <th style="text-align:right;">Prediction</th>
+          <th style="text-align:right;">Confidence</th>
+        </tr></thead>`;
+
+        searchResults.style.display = 'block';
+
+        searchResults.innerHTML = `
+          <div style="
+            font-size:13px;
+            color:var(--text2);
+            margin-bottom:8px;
+          ">
+            Search results (${matches.length})
+          </div>
+
+          <div class="tbl-wrap">
+            <table>
+              ${searchHeader}
+              <tbody>
+                ${matches.map((p, i) => {
+                  const prediction =
+                    Number(p.price_change_prediction || 0);
+
+                  const direction =
+                    prediction >= 0 ? 'up' : 'down';
+
+                  return priceRow(
+                    p,
+                    i + 1,
+                    direction
+                  );
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      });
+    }
 
     return;
   }
