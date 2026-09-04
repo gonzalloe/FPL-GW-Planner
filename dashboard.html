@@ -1362,8 +1362,27 @@ table tr:hover { background:var(--surface2); }
     <button class="filter-btn active" data-ttab="net" onclick="switchTransferTab(this,'net')">🔥 Net Movers</button>
     <button class="filter-btn" data-ttab="in" onclick="switchTransferTab(this,'in')">📈 Top Transfers In</button>
     <button class="filter-btn" data-ttab="out" onclick="switchTransferTab(this,'out')">📉 Top Transfers Out</button>
-    <button class="filter-btn" data-ttab="prices" onclick="switchTransferTab(this,'prices')">💰 Price Changes</button>
+    <button class="filter-btn" data-ttab="prices" onclick="switchTransferTab(this,'prices')">💰 Price Change Prediction</button>
   </div>
+
+  <div class="card" id="price-change-countdown-card"
+     style="margin-bottom:16px;padding:14px 18px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:13px;font-weight:800;color:var(--text);">
+        💰 Next Price Change
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:3px;">
+        Official FPL price-change predictor
+      </div>
+    </div>
+
+    <div id="priceChangeCountdown"
+         style="font-size:16px;font-weight:800;color:var(--accent);">
+      Loading...
+    </div>
+  </div>
+</div>
 
   <div id="transfers-loading" class="card" style="text-align:center;padding:60px 20px;">
     <div class="loading-spinner-lg"></div>
@@ -4546,6 +4565,42 @@ function renderFixturesTable() {
   document.getElementById('fixtures-ticker-table').innerHTML = html;
 }
 
+// ── FPL Price Change Countdown ──
+let priceChangeCountdownTimer = null;
+function startPriceChangeCountdown(targetTime) {
+  const el = document.getElementById("priceChangeCountdown");
+  if (!el || !targetTime) return;
+  if (priceChangeCountdownTimer) {clearInterval(priceChangeCountdownTimer);}
+  const target = new Date(targetTime).getTime();
+  if (Number.isNaN(target)) {
+    el.textContent = "Next update unavailable";
+    return;
+  }
+  function update() {
+    const remaining = target - Date.now();
+    if (remaining <= 0) {
+      el.textContent = "Price update due";
+      clearInterval(priceChangeCountdownTimer);
+      priceChangeCountdownTimer = null;
+      // Reload transfer/price data
+      loadTransfersPage();
+      return;
+    }
+    const totalSeconds = Math.floor(remaining / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      el.textContent = `Next update in ${hours}h ${minutes}m`;
+    } else {
+      el.textContent = `Next update in ${minutes}m ${seconds}s`;
+    }
+  }
+  update();
+  priceChangeCountdownTimer = setInterval(update, 1000);
+}
+
+
 // ── Top Transfers Page (free for all users) ──
 let _transfersData = null;
 let _transfersTab = 'net';
@@ -4566,7 +4621,10 @@ async function loadTransfersPage() {
     _transfersData = data;
     const gwBadge = document.getElementById('transfers-gw-badge');
     if (gwBadge) gwBadge.textContent = '— GW' + data.current_gw;
+    // Start official FPL price-change countdown
+    startPriceChangeCountdown(data.price_change_next_update);
     renderTransfersTab();
+
     if (loadingEl) loadingEl.style.display = 'none';
     if (contentEl) contentEl.style.display = 'block';
   } catch(e) {
@@ -4611,6 +4669,17 @@ function renderTransferRow(p, idx, mode) {
   </tr>`;
 }
 
+function getPriceChangeConfidence(likelihood) {
+  if (likelihood == null) return '—';
+  if (likelihood >= 5) return 'High';
+  if (likelihood >= 3) return 'Medium';
+  if (likelihood > 0) return 'Low';
+  if (likelihood <= -5) return 'High';
+  if (likelihood <= -3) return 'Medium';
+  if (likelihood < 0) return 'Low';
+  return '—';
+}
+
 function renderTransfersTab() {
   if (!_transfersData) return;
   const content = document.getElementById('transfers-content');
@@ -4619,35 +4688,183 @@ function renderTransfersTab() {
   if (_transfersTab === 'prices') {
     const risers = _transfersData.price_risers || [];
     const fallers = _transfersData.price_fallers || [];
-
     const priceRow = (p, i, dir) => {
-      const color = dir === 'up' ? 'var(--accent)' : 'var(--red)';
+      const color = dir === 'up'
+        ? 'var(--accent)'
+        : 'var(--red)';
       const arrow = dir === 'up' ? '↑' : '↓';
-      const change = Math.abs(p.price_change * 0.1).toFixed(1);
+      const progress = Math.abs(Number(p.price_change_percent || 0));
+      // Official FPL next projection.
+      const prediction = Number(p.price_change_prediction || 0);
+      const confidence = getPriceChangeConfidence(p.price_change_likelihood);
+      const progressWidth = Math.min(progress, 100);
+      const confidenceColor =
+        confidence === 'High'
+          ? 'var(--accent)'
+          : confidence === 'Medium'
+            ? 'var(--yellow)'
+            : 'var(--text3)'
       return `<tr>
-        <td style="text-align:center;color:var(--text3);">${i}</td>
-        <td><span class="pos-badge pos-${p.position}">${p.position}</span></td>
-        <td><strong>${p.name}</strong></td>
+        <td style="text-align:center;color:var(--text3);">
+          ${i}
+        </td>
+        <td>
+          <span class="pos-badge pos-${p.position}">
+            ${p.position}
+          </span>
+        </td>
+        <td>
+          <strong>${p.name}</strong>
+        </td>
         <td>${p.team}</td>
         <td>£${p.price}m</td>
-        <td style="text-align:right;color:${color};font-weight:800;">${arrow} £${change}m</td>
-        <td style="text-align:right;color:var(--accent);">+${fmtNumber(p.transfers_in_event)}</td>
-        <td style="text-align:right;color:var(--red);">−${fmtNumber(p.transfers_out_event)}</td>
+        <td>
+          <div style="
+            display:flex;
+            align-items:center;
+            gap:8px;
+            min-width:120px;
+          ">
+            <div style="
+              width:70px;
+              height:6px;
+              background:var(--border);
+              border-radius:999px;
+              overflow:hidden;
+            ">
+              <div style="
+                width:${progressWidth}%;
+                height:100%;
+                background:${color};
+                border-radius:999px;
+              "></div>
+            </div>
+            <span style="
+              font-size:11px;
+              font-weight:700;
+              color:${color};
+            ">
+              ${progress.toFixed(1)}%
+            </span>
+          </div>
+        </td>
+
+        <td style="
+          text-align:right;
+          color:${color};
+          font-weight:800;
+        ">
+          ${arrow} ${Math.abs(prediction).toFixed(1)}%
+        </td>
+        <td style="
+          text-align:right;
+          color:${confidenceColor};
+          font-weight:700;
+        ">
+          ${confidence}
+        </td>
       </tr>`;
     };
-
-    const header = `<thead><tr><th>#</th><th>Pos</th><th>Player</th><th>Team</th><th>Price</th><th style="text-align:right;">Change</th><th style="text-align:right;">In</th><th style="text-align:right;">Out</th></tr></thead>`;
-
+    const header = `<thead><tr>
+      <th>#</th>
+      <th>Pos</th>
+      <th>Player</th>
+      <th>Team</th>
+      <th>Price</th>
+      <th>Progress</th>
+      <th style="text-align:right;">Prediction</th>
+      <th style="text-align:right;">Confidence</th>
+    </tr></thead>`;
     content.innerHTML = `
       <div class="card">
-        <h3 style="margin-bottom:12px;color:var(--accent);">📈 Price Risers (${risers.length})</h3>
-        ${risers.length ? `<div class="tbl-wrap"><table>${header}<tbody>${risers.map((p,i) => priceRow(p, i+1, 'up')).join('')}</tbody></table></div>` : '<p style="color:var(--text3);font-size:13px;padding:12px 0;">No price rises this GW yet.</p>'}
+        <h3 style="
+          margin-bottom:12px;
+          color:var(--accent);
+        ">
+          📈 Price Risers (${risers.length})
+        </h3>
+
+        ${
+          risers.length
+            ? `
+              <div class="tbl-wrap">
+                <table>
+                  ${header}
+                  <tbody>
+                    ${risers
+                      .map((p, i) =>
+                        priceRow(p, i + 1, 'up')
+                      )
+                      .join('')}
+                  </tbody>
+                </table>
+              </div>
+            `
+            : `
+              <p style="
+                color:var(--text3);
+                font-size:13px;
+                padding:12px 0;
+              ">
+                No price rises this GW yet.
+              </p>
+            `
+        }
+        <div style="
+          margin-top:10px;
+          color:var(--text3);
+          font-size:11px;
+        ">
+          Progress shows how close the player is to a price change.
+          Prediction is FPL's next projected progress value.
+        </div>
       </div>
       <div class="card">
-        <h3 style="margin-bottom:12px;color:var(--red);">📉 Price Fallers (${fallers.length})</h3>
-        ${fallers.length ? `<div class="tbl-wrap"><table>${header}<tbody>${fallers.map((p,i) => priceRow(p, i+1, 'down')).join('')}</tbody></table></div>` : '<p style="color:var(--text3);font-size:13px;padding:12px 0;">No price falls this GW yet.</p>'}
+        <h3 style="
+          margin-bottom:12px;
+          color:var(--red);
+        ">
+          📉 Price Fallers (${fallers.length})
+        </h3>
+
+        ${
+          fallers.length
+            ? `
+              <div class="tbl-wrap">
+                <table>
+                  ${header}
+                  <tbody>
+                    ${fallers
+                      .map((p, i) =>
+                        priceRow(p, i + 1, 'down')
+                      )
+                      .join('')}
+                  </tbody>
+                </table>
+              </div>
+            `
+            : `
+              <p style="
+                color:var(--text3);
+                font-size:13px;
+                padding:12px 0;
+              ">
+                No price falls this GW yet.
+              </p>
+            `
+        }
+
+        <div style="
+          margin-top:10px;
+          color:var(--text3);
+          font-size:11px;
+        ">
+          Progress shows how close the player is to a price change.
+          Prediction is FPL's next projected progress value.
+        </div>
       </div>
     `;
+
     return;
   }
 

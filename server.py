@@ -21,12 +21,13 @@ import requests
 import traceback
 import psutil
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from data_fetcher import fetch_bootstrap
 from supabase import create_client
 
-_prediction_engine_lock = threading.Lock()
+
+#_prediction_engine_lock = threading.Lock()
 _prediction_run_lock = threading.Lock()
 GW_PLANNER_LOCK = threading.Lock()
 
@@ -81,12 +82,7 @@ app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
 
 # ── Rate Limiter (degrades gracefully if dependency missing) ──
 if _HAS_LIMITER:
-    limiter = Limiter(
-        get_remote_address,
-        app=app,
-        default_limits=["120 per minute"],  # Global default
-        storage_uri="memory://",
-    )
+    limiter = Limiter(get_remote_address, app=app, default_limits=["120 per minute"], storage_uri="memory://")
 else:
     # Stub limiter that does nothing
     class _NoopLimiter:
@@ -1837,6 +1833,13 @@ def api_fixture_ticker():
         import gc
         gc.collect()
 
+def get_next_price_change_time():
+    now = datetime.now(timezone.utc)
+    # FPL price changes typically occur around 01:00 UTC.
+    target = now.replace(hour=1, minute=0, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return target.isoformat()
 
 @app.route("/api/top-transfers")
 @cached_response(ttl_seconds=300, key_prefix="top-transfers")
@@ -1848,8 +1851,10 @@ def api_top_transfers():
         teams = {t["id"]: t for t in bootstrap.get("teams", [])}
         pos_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
         current_gw = get_current_gameweek(bootstrap)
-
+        
         def build_row(p):
+            projections = p.get("price_change_projections") or []
+            next_projection = projections[0] if projections else {}
             return {
                 "id": p["id"],
                 "name": p.get("web_name", "Unknown"),
@@ -1857,11 +1862,19 @@ def api_top_transfers():
                 "team_name": teams.get(p.get("team"), {}).get("name", "Unknown"),
                 "position": pos_map.get(p.get("element_type"), "?"),
                 "price": round(p.get("now_cost", 0) / 10, 1),
-                "price_change": p.get("cost_change_event", 0),  # × 0.1
+                "price_change": p.get("cost_change_event", 0),
                 "selected_by_percent": float(p.get("selected_by_percent", 0)),
                 "transfers_in_event": int(p.get("transfers_in_event", 0)),
                 "transfers_out_event": int(p.get("transfers_out_event", 0)),
-                "net_transfers": int(p.get("transfers_in_event", 0)) - int(p.get("transfers_out_event", 0)),
+
+                # FPL official price predictor
+                "price_change_percent": float(p.get("price_change_percent") or 0),
+                "price_change_hourly_rate": p.get("price_change_hourly_rate", 0),
+                "price_change_prediction": float(next_projection.get("projected_percent") or 0),
+                "price_change_likelihood": next_projection.get("likelihood"),
+                "price_change_calibrating": bool(p.get("price_change_calibrating", False)),
+                "price_change_locked_until": p.get("price_change_locked_until"),
+                "net_transfers": (int(p.get("transfers_in_event", 0)) - int(p.get("transfers_out_event", 0))),
                 "form": float(p.get("form", 0)),
                 "total_points": int(p.get("total_points", 0)),
                 "news": p.get("news", ""),
@@ -1869,15 +1882,13 @@ def api_top_transfers():
             }
 
         rows = [build_row(p) for p in bootstrap.get("elements", [])]
-
         top_in = sorted(rows, key=lambda x: x["transfers_in_event"], reverse=True)[:15]
         top_out = sorted(rows, key=lambda x: x["transfers_out_event"], reverse=True)[:15]
         top_net_in = sorted(rows, key=lambda x: x["net_transfers"], reverse=True)[:15]
         top_net_out = sorted(rows, key=lambda x: x["net_transfers"])[:15]
-        price_risers = sorted([r for r in rows if r["price_change"] > 0],
-                              key=lambda x: x["price_change"], reverse=True)[:10]
-        price_fallers = sorted([r for r in rows if r["price_change"] < 0],
-                               key=lambda x: x["price_change"])[:10]
+        price_risers = sorted([r for r in rows if r["price_change_prediction"] > 0], key=lambda x: x["price_change_prediction"], reverse=True)[:10]
+        price_fallers = sorted([r for r in rows if r["price_change_prediction"] < 0], key=lambda x: x["price_change_prediction"])[:10]
+        price_change_next_update = get_next_price_change_time()
 
         return jsonify({
             "current_gw": current_gw,
@@ -1887,7 +1898,9 @@ def api_top_transfers():
             "top_net_out": top_net_out,
             "price_risers": price_risers,
             "price_fallers": price_fallers,
+            "price_change_next_update": price_change_next_update,
         })
+        
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"error": "Internal server error"}), 500
