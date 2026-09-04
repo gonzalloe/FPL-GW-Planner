@@ -4760,19 +4760,6 @@ function renderTransfersTab() {
 
     content.innerHTML = `
       <div class="card">
-        <h3 style="margin-bottom:6px;color:var(--accent);">
-          💰 Price Change Prediction
-        </h3>
-        <div style="color:var(--text3);font-size:13px;margin-bottom:12px;">
-          Official FPL price-change predictor
-        </div>
-        <div style="
-          font-size:13px;
-          margin-bottom:12px;
-          color:var(--text2);
-        ">
-          ⏱ <span id="priceChangeCountdown">Loading...</span>
-        </div>
         ${searchHtml}
         <div id="priceSearchResults" style="display:none;"></div>
       </div>
@@ -4785,9 +4772,7 @@ function renderTransfersTab() {
               <table>
                 ${header}
                 <tbody>
-                  ${risers.map((p,i) =>
-                    priceRow(p, i+1, 'up')
-                  ).join('')}
+                  ${risers.map((p,i) => priceRow(p, i+1, 'up')).join('')}
                 </tbody>
               </table>
             </div>`
@@ -4803,9 +4788,7 @@ function renderTransfersTab() {
               <table>
                 ${header}
                 <tbody>
-                  ${fallers.map((p,i) =>
-                    priceRow(p, i+1, 'down')
-                  ).join('')}
+                  ${fallers.map((p,i) => priceRow(p, i+1, 'down')).join('')}
                 </tbody>
               </table>
             </div>`
@@ -4828,9 +4811,7 @@ function renderTransfersTab() {
         }
 
         const matches = allPlayers
-          .filter(p =>
-            (p.name || '').toLowerCase().includes(query)
-          )
+          .filter(p => (p.name || '').toLowerCase().includes(query))
           .slice(0, 20);
 
         if (!matches.length) {
@@ -4880,11 +4861,7 @@ function renderTransfersTab() {
                   const direction =
                     prediction >= 0 ? 'up' : 'down';
 
-                  return priceRow(
-                    p,
-                    i + 1,
-                    direction
-                  );
+                  return priceRow(p, i + 1, direction);
                 }).join('')}
               </tbody>
             </table>
