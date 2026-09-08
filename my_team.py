@@ -13,23 +13,25 @@ CACHE_DIR.mkdir(exist_ok=True)
 
 def calculate_free_transfers(history: list, chips: list | None = None) -> int:
     """
-    Calculate free transfers available at the start of the current GW.
-
-    History should contain completed gameweeks only.
+    Calculate free transfers available at the start of the next GW.
+    Start with 1 FT.
+    Unused FT rolls forward, capped at 5.
+    Transfers made during a GW consume available FT.
     """
     chips = chips or []
 
     chip_by_gw = {}
-
     for chip in chips:
         if not isinstance(chip, dict):
             continue
 
         event = chip.get("event")
-        name = str(chip.get("name", "")).lower()
+        if event is None:
+            continue
 
-        if event is not None:
-            chip_by_gw[int(event)] = name
+        chip_by_gw[int(event)] = str(
+            chip.get("name", "")
+        ).lower()
 
     free_transfers = 1
 
@@ -39,16 +41,18 @@ def calculate_free_transfers(history: list, chips: list | None = None) -> int:
     )
 
     for row in rows:
+        gw = int(row.get("event", 0))
         transfers = int(
             row.get("event_transfers", 0) or 0
         )
 
-        gw = int(row.get("event", 0))
         chip = chip_by_gw.get(gw)
 
-        if chip in ("wildcard", "freehit"):
+        # Free Hit / Wildcard do not consume FTs.
+        if chip in ("freehit", "wildcard"):
             transfers = 0
 
+        # Consume available FT with transfers made in this GW.
         used_free = min(
             transfers,
             free_transfers
@@ -56,21 +60,44 @@ def calculate_free_transfers(history: list, chips: list | None = None) -> int:
 
         free_transfers -= used_free
 
+        # One new FT is added for the next GW.
         free_transfers = min(
             5,
             free_transfers + 1
         )
 
-    return max(0, min(5, free_transfers))
-
+    return max(
+        1,
+        min(5, free_transfers)
+    )
 
 
 def fetch_my_team(team_id: int) -> dict:
     """
-    Fetch a user's current FPL team data.
-    Uses the public API endpoint (no auth needed for basic info).
-    Returns team info, picks, transfers, and chips.
+    Fetch a user's FPL team data.
+
+    Handles:
+    - Current/completed GW detection
+    - Early transfers made for the upcoming GW
+    - Correct upcoming-GW squad selection
+    - Free Transfer rollover
+    - Free Transfers already spent on the upcoming GW
+    - Transfer hits
+    - Free Hit squad reversion
+    - Wildcard / Free Hit FT preservation
+    - GW financial summary
+    - Transfer history
+    - Chips and season history
+
+    Important distinction:
+        completed_gw = latest finished GW
+        planning_gw  = GW currently being planned
+
+    The UI should use:
+        result["free_transfers"]
+    as the AVAILABLE FT for the planning GW.
     """
+
     result = {
         "team_id": team_id,
         "info": {},
@@ -78,440 +105,944 @@ def fetch_my_team(team_id: int) -> dict:
         "transfers": [],
         "history": [],
         "chips": [],
+        "past_seasons": [],
         "free_transfers": 1,
         "error": None,
     }
 
-    # 1. Team basic info + overall history
+    headers = {
+        "User-Agent": "FPL-Predictor/1.0"
+    }
+
+    # ================================================================
+    # 1. FETCH TEAM ENTRY
+    # ================================================================
+
     try:
         url = f"{FPL_API_BASE}/entry/{team_id}/"
-        resp = requests.get(url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
+
+        resp = requests.get(
+            url,
+            headers=headers,
+            timeout=15,
+        )
         resp.raise_for_status()
+
         entry = resp.json()
+
+        current_event = int(
+            entry.get("current_event") or 0
+        )
+
         result["info"] = {
-            "name": entry.get("name", "Unknown Team"),
-            "player_first_name": entry.get("player_first_name", ""),
-            "player_last_name": entry.get("player_last_name", ""),
-            "overall_points": entry.get("summary_overall_points", 0),
-            "overall_rank": entry.get("summary_overall_rank", 0),
-            "gameweek_points": entry.get("summary_event_points", 0),
-            "gameweek_rank": entry.get("summary_event_rank", 0),
-            "current_event": entry.get("current_event", 0),
-            "total_transfers": entry.get("last_deadline_total_transfers", 0),
-            "bank": (entry.get("last_deadline_bank") or 0) / 10,
-            "team_value": (entry.get("last_deadline_value") or 0) / 10,
-            "started_event": entry.get("started_event", 1),
-            "favourite_team": entry.get("favourite_team"),
-            "transfers_limit": entry.get("transfers_limit"),
+            "name": entry.get(
+                "name",
+                "Unknown Team",
+            ),
+            "player_first_name": entry.get(
+                "player_first_name",
+                "",
+            ),
+            "player_last_name": entry.get(
+                "player_last_name",
+                "",
+            ),
+            "overall_points": entry.get(
+                "summary_overall_points",
+                0,
+            ),
+            "overall_rank": entry.get(
+                "summary_overall_rank",
+                0,
+            ),
+            "gameweek_points": entry.get(
+                "summary_event_points",
+                0,
+            ),
+            "gameweek_rank": entry.get(
+                "summary_event_rank",
+                0,
+            ),
+            "current_event": current_event,
+            "total_transfers": entry.get(
+                "last_deadline_total_transfers",
+                0,
+            ),
+            "bank": (
+                entry.get("last_deadline_bank") or 0
+            ) / 10,
+            "team_value": (
+                entry.get("last_deadline_value") or 0
+            ) / 10,
+            "started_event": entry.get(
+                "started_event",
+                1,
+            ),
+            "favourite_team": entry.get(
+                "favourite_team"
+            ),
+            "transfers_limit": entry.get(
+                "transfers_limit"
+            ),
         }
-        # Keep the actual FPL value at the top level too.
-        result["free_transfers"] = entry.get("free_transfers")
 
     except Exception as e:
-        result["error"] = f"Could not fetch team info: {str(e)}"
+        result["error"] = (
+            f"Could not fetch team info: {str(e)}"
+        )
         return result
 
-    time.sleep(0.3)
+    if not current_event:
+        result["error"] = "Invalid current FPL gameweek."
+        return result
 
-    # 2. Squad selection
-    # IMPORTANT:
-    # current_event = the latest/current FPL GW
-    # planning_event = the GW the manager is currently planning for.
+    time.sleep(0.2)
+
+    # ================================================================
+    # 2. FETCH BOOTSTRAP TO DETERMINE GW STATE
+    # ================================================================
+
+    try:
+        bootstrap_url = (
+            f"{FPL_API_BASE}/bootstrap-static/"
+        )
+
+        bootstrap_resp = requests.get(
+            bootstrap_url,
+            headers=headers,
+            timeout=15,
+        )
+        bootstrap_resp.raise_for_status()
+
+        bootstrap_data = bootstrap_resp.json()
+        events = bootstrap_data.get("events", [])
+
+    except Exception:
+        events = []
+
+    # ------------------------------------------------
+    # Determine latest finished GW.
+    #
+    # Do NOT blindly assume entry.current_event is
+    # the planning GW.
+    # ------------------------------------------------
+
+    completed_gw = current_event
+
+    current_event_data = next(
+        (
+            e for e in events
+            if int(e.get("id", 0)) == current_event
+        ),
+        None,
+    )
+
+    if current_event_data:
+        if not current_event_data.get("finished", False):
+            # Current GW is still active.
+            completed_gw = max(
+                0,
+                current_event - 1,
+            )
+
+    # Find the highest explicitly finished GW.
+    finished_events = [
+        int(e.get("id", 0))
+        for e in events
+        if e.get("finished", False)
+    ]
+
+    if finished_events:
+        completed_gw = max(finished_events)
+
+    planning_gw = completed_gw + 1
+
+    result["info"]["completed_gw"] = completed_gw
+    result["info"]["planning_gw"] = planning_gw
+
+    # ================================================================
+    # 3. FETCH HISTORY + CHIPS
+    # ================================================================
+
+    history_rows = []
+    chips_used = []
+    past_seasons = []
+
+    try:
+        history_url = (
+            f"{FPL_API_BASE}/entry/"
+            f"{team_id}/history/"
+        )
+
+        hist_resp = requests.get(
+            history_url,
+            headers=headers,
+            timeout=15,
+        )
+        hist_resp.raise_for_status()
+
+        hist_data = hist_resp.json()
+
+        history_rows = hist_data.get(
+            "current",
+            []
+        )
+
+        chips_used = hist_data.get(
+            "chips",
+            []
+        )
+
+        past_seasons = hist_data.get(
+            "past",
+            []
+        )
+
+        result["history"] = history_rows
+        result["chips"] = chips_used
+        result["past_seasons"] = past_seasons
+
+    except Exception as e:
+        result["error"] = (
+            f"Could not fetch team history: {str(e)}"
+        )
+
+    time.sleep(0.2)
+
+    # ================================================================
+    # 4. FETCH TRANSFER HISTORY
+    #
+    # This MUST happen independently of entry_history.
+    #
+    # Why?
+    #
+    # A transfer made early for GW4 is not necessarily represented
+    # in GW3's entry_history.
+    # ================================================================
+
+    all_transfers = []
+
+    try:
+        transfers_url = (
+            f"{FPL_API_BASE}/entry/"
+            f"{team_id}/transfers/"
+        )
+
+        transfers_resp = requests.get(
+            transfers_url,
+            headers=headers,
+            timeout=15,
+        )
+        transfers_resp.raise_for_status()
+
+        transfer_data = transfers_resp.json()
+
+        if isinstance(transfer_data, list):
+            all_transfers = transfer_data
+
+        result["transfers"] = all_transfers[:20]
+
+    except Exception:
+        all_transfers = []
+
+    # ================================================================
+    # 5. CALCULATE FT ENTERING PLANNING GW
     #
     # Example:
-    #   GW3 just finished
-    #   current_event = 3
-    #   planning_event = 4
     #
-    # Early transfers made after GW3 belong to GW4, so the squad
-    # displayed by the planner must come from GW4 picks, not GW3.
+    # GW1: 1 FT, use 0
+    # GW2: 2 FT, use 0
+    # GW3: 3 FT, use 0
+    #
+    # Entering GW4 = 4 FT
+    #
+    # This is the FT bank BEFORE GW4 early transfers.
+    # ================================================================
 
-    current_event = result["info"]["current_event"]
+    completed_history = [
+        row
+        for row in history_rows
+        if int(row.get("event", 0)) <= completed_gw
+    ]
 
-    if current_event:
+    starting_free_transfers = calculate_free_transfers(
+        completed_history,
+        chips_used,
+    )
+
+    # ================================================================
+    # 6. IDENTIFY TRANSFERS FOR COMPLETED + PLANNING GW
+    # ================================================================
+
+    planning_transfers = [
+        t
+        for t in all_transfers
+        if int(t.get("event", 0)) == planning_gw
+    ]
+
+    completed_transfers = [
+        t
+        for t in all_transfers
+        if int(t.get("event", 0)) == completed_gw
+    ]
+
+    planning_transfer_count = len(
+        planning_transfers
+    )
+
+    # ================================================================
+    # 7. CALCULATE REMAINING FT + HITS
+    #
+    # This is the value the UI should display.
+    #
+    # Example:
+    #   starting = 4
+    #   used     = 3
+    #   remaining = 1
+    #
+    # Example:
+    #   starting = 2
+    #   used     = 3
+    #   remaining = 0
+    #   hits     = 1
+    #
+    # NOTE:
+    # Wildcard / Free Hit transfers are handled separately by
+    # calculate_free_transfers() for completed GWs.
+    # Early planning transfers are actual transfers for planning_gw.
+    # ================================================================
+
+    free_transfers_remaining = max(
+        0,
+        starting_free_transfers
+        - planning_transfer_count,
+    )
+
+    transfer_hits = max(
+        0,
+        planning_transfer_count
+        - starting_free_transfers,
+    )
+
+    # ================================================================
+    # 8. IMPORTANT:
+    # result["free_transfers"] MUST BE REMAINING FT
+    #
+    # NOT starting_free_transfers.
+    #
+    # This fixes the UI showing 4 after 3 early transfers.
+    # ================================================================
+
+    result["free_transfers"] = (
+        free_transfers_remaining
+    )
+
+    # Also expose both values explicitly so other code does not
+    # have to guess what "free_transfers" means.
+    result["starting_free_transfers"] = (
+        starting_free_transfers
+    )
+
+    result["free_transfers_remaining"] = (
+        free_transfers_remaining
+    )
+
+    result["transfer_hits"] = transfer_hits
+
+    # ================================================================
+    # 9. FETCH COMPLETED GW PICKS
+    #
+    # This is always useful as a fallback/baseline.
+    # ================================================================
+
+    completed_pick_list = []
+    completed_eh = {}
+
+    try:
+        completed_url = (
+            f"{FPL_API_BASE}/entry/"
+            f"{team_id}/event/"
+            f"{completed_gw}/picks/"
+        )
+
+        completed_resp = requests.get(
+            completed_url,
+            headers=headers,
+            timeout=15,
+        )
+        completed_resp.raise_for_status()
+
+        completed_picks_data = (
+            completed_resp.json()
+        )
+
+        completed_pick_list = (
+            completed_picks_data.get(
+                "picks",
+                []
+            )
+        )
+
+        completed_eh = (
+            completed_picks_data.get(
+                "entry_history",
+                {}
+            )
+        )
+
+    except Exception as e:
+        result["error"] = (
+            result["error"]
+            or
+            f"Could not fetch completed GW picks: {str(e)}"
+        )
+
+    time.sleep(0.2)
+
+    # ================================================================
+    # 10. FETCH PLANNING GW PICKS
+    #
+    # This is the critical part for early transfers.
+    #
+    # If GW3 has finished and GW4 transfers have already been made,
+    # GW4 picks should be the squad displayed by the planner.
+    #
+    # We do NOT require planning_transfer_count > 0.
+    #
+    # Even with zero transfers, GW4 picks are still the correct
+    # planning squad.
+    # ================================================================
+
+    planning_pick_list = []
+    planning_eh = {}
+    planning_resp_status = None
+    planning_success = False
+
+    try:
+        planning_url = (
+            f"{FPL_API_BASE}/entry/"
+            f"{team_id}/event/{planning_gw}/picks/"
+        )
+
+        planning_resp = requests.get(
+            planning_url,
+            headers=headers,
+            timeout=15,
+        )
+
+        planning_resp_status = (
+            planning_resp.status_code
+        )
+
+        if planning_resp.ok:
+            planning_picks_data = (
+                planning_resp.json()
+            )
+
+            planning_pick_list = (
+                planning_picks_data.get(
+                    "picks",
+                    []
+                )
+            )
+
+            planning_eh = (
+                planning_picks_data.get(
+                    "entry_history",
+                    {}
+                )
+            )
+
+            # A valid FPL picks response should contain 15 picks.
+            # Treat an empty/incomplete future response as unusable.
+            if len(planning_pick_list) >= 15:
+                planning_success = True
+
+    except Exception:
+        planning_success = False
+
+    # ================================================================
+    # 11. FREE HIT HANDLING
+    #
+    # Free Hit means:
+    #
+    # GW N = temporary FH squad
+    # GW N+1 = original squad restored
+    #
+    # Therefore, if the latest completed GW used Free Hit,
+    # the actual squad entering the planning GW is the squad
+    # from the GW before the Free Hit.
+    #
+    # IMPORTANT:
+    # Do NOT apply this rule to Wildcard.
+    # Wildcard permanently changes the squad.
+    # ================================================================
+
+    free_hit_gw = None
+
+    for chip in chips_used:
+        if not isinstance(chip, dict):
+            continue
+
+        chip_name = str(
+            chip.get("name", "")
+        ).lower()
+
+        chip_event = chip.get("event")
+
         try:
-            # =========================================================
-            # 2A. Determine completed GW and planning GW
-            # =========================================================
+            chip_event = int(chip_event)
+        except (TypeError, ValueError):
+            continue
 
-            completed_gw = current_event
-            planning_gw = current_event + 1
+        if (
+            chip_name == "freehit"
+            and chip_event == completed_gw
+        ):
+            free_hit_gw = chip_event
+            break
 
-            result["info"]["completed_gw"] = completed_gw
-            result["info"]["planning_gw"] = planning_gw
+    if free_hit_gw is not None:
+        # The actual squad entering the next GW is the squad
+        # from before the Free Hit.
+        revert_gw = max(
+            1,
+            completed_gw - 1,
+        )
 
-            # =========================================================
-            # 2B. Fetch season history + chips
-            # =========================================================
-
-            history_url = (
-                f"{FPL_API_BASE}/entry/{team_id}/history/"
-            )
-
-            hist_resp = requests.get(
-                history_url,
-                headers={"User-Agent": "FPL-Predictor/1.0"},
-                timeout=15,
-            )
-
-            hist_resp.raise_for_status()
-            hist_data = hist_resp.json()
-            chips_used = hist_data.get("chips", [])
-            history_rows = hist_data.get("current", [])
-
-            result["history"] = history_rows
-            result["chips"] = chips_used
-            result["past_seasons"] = hist_data.get("past", [])
-
-            # =========================================================
-            # 2C. Calculate FREE TRANSFERS AVAILABLE AFTER GW3
-            # =========================================================
-
-            completed_history = [
-                row
-                for row in history_rows
-                if int(row.get("event", 0)) <= completed_gw
-            ]
-
-            starting_free_transfers = calculate_free_transfers(completed_history, chips_used,)
-            result["free_transfers"] = starting_free_transfers
-
-            # =========================================================
-            # 2D. Fetch previous picks
-            #
-            # This is historical/current completed GW data.
-            # We use it as the baseline, NOT as the displayed squad.
-            # =========================================================
-
-            completed_url = (
+        try:
+            revert_url = (
                 f"{FPL_API_BASE}/entry/"
-                f"{team_id}/event/"
-                f"{completed_gw}/picks/"
+                f"{team_id}/event/{revert_gw}/picks/"
             )
 
-            completed_resp = requests.get(
-                completed_url,
-                headers={"User-Agent": "FPL-Predictor/1.0"},
+            revert_resp = requests.get(
+                revert_url,
+                headers=headers,
                 timeout=15,
             )
 
-            completed_resp.raise_for_status()
-            completed_picks_data = completed_resp.json()
-            completed_pick_list = completed_picks_data.get("picks",[])
-            completed_eh = completed_picks_data.get("entry_history",{})
+            if revert_resp.ok:
+                revert_data = revert_resp.json()
 
-            # =========================================================
-            # 2E. Fetch PLANNING GW picks
-            # If previous GW is finished and the manager has already made
-            # a new GW transfer, the FPL GW4 picks endpoint is the
-            # squad we want to display.
-            # =========================================================
-
-            planning_url = (
-                f"{FPL_API_BASE}/entry/"
-                f"{team_id}/event/"
-                f"{planning_gw}/picks/"
-            )
-
-            planning_resp = requests.get(
-                planning_url,
-                headers={"User-Agent": "FPL-Predictor/1.0"},
-                timeout=15,
-            )
-
-            if planning_resp.ok:
-                planning_picks_data = planning_resp.json()
-
-                planning_pick_list = planning_picks_data.get(
+                revert_picks = revert_data.get(
                     "picks",
                     []
                 )
 
-                planning_eh = planning_picks_data.get(
-                    "entry_history",
-                    {}
+                if len(revert_picks) >= 15:
+                    # Free Hit squad must NOT be displayed.
+                    result["picks"] = revert_picks
+                    result["active_chip"] = None
+                    result["auto_subs"] = []
+
+                    picks_event = revert_gw
+
+                    result["fh_revert_from"] = (
+                        completed_gw
+                    )
+                    result["fh_reverted_to"] = (
+                        revert_gw
+                    )
+
+                else:
+                    # Fall back to normal planning logic.
+                    if planning_success:
+                        result["picks"] = (
+                            planning_pick_list
+                        )
+                        result["active_chip"] = (
+                            planning_picks_data.get(
+                                "active_chip"
+                            )
+                        )
+                        result["auto_subs"] = (
+                            planning_picks_data.get(
+                                "automatic_subs",
+                                []
+                            )
+                        )
+                        picks_event = planning_gw
+                    else:
+                        result["picks"] = (
+                            completed_pick_list
+                        )
+                        result["active_chip"] = (
+                            completed_picks_data.get(
+                                "active_chip"
+                            )
+                        )
+                        result["auto_subs"] = (
+                            completed_picks_data.get(
+                                "automatic_subs",
+                                []
+                            )
+                        )
+                        picks_event = completed_gw
+
+            else:
+                if planning_success:
+                    result["picks"] = (
+                        planning_pick_list
+                    )
+                    result["active_chip"] = (
+                        planning_picks_data.get(
+                            "active_chip"
+                        )
+                    )
+                    result["auto_subs"] = (
+                        planning_picks_data.get(
+                            "automatic_subs",
+                            []
+                        )
+                    )
+                    picks_event = planning_gw
+                else:
+                    result["picks"] = (
+                        completed_pick_list
+                    )
+                    result["active_chip"] = (
+                        completed_picks_data.get(
+                            "active_chip"
+                        )
+                    )
+                    result["auto_subs"] = (
+                        completed_picks_data.get(
+                            "automatic_subs",
+                            []
+                        )
+                    )
+                    picks_event = completed_gw
+
+        except Exception:
+            # Safe fallback.
+            if planning_success:
+                result["picks"] = (
+                    planning_pick_list
                 )
-
-                # =====================================================
-                # NORMAL CASE:
-                # new GW exists -> use new GW squad.
-                # =====================================================
-
-                result["picks"] = planning_pick_list
-                result["active_chip"] = (planning_picks_data.get("active_chip"))
+                result["active_chip"] = (
+                    planning_picks_data.get(
+                        "active_chip"
+                    )
+                )
                 result["auto_subs"] = (
                     planning_picks_data.get(
                         "automatic_subs",
                         []
                     )
                 )
-
                 picks_event = planning_gw
-
             else:
-                # =====================================================
-                # FALLBACK:
-                # If FPL does not expose the next GW picks yet,
-                # use completed GW picks.
-                #
-                # This prevents the whole My Team request from failing.
-                # =====================================================
-
-                planning_picks_data = {}
-                planning_pick_list = []
-                planning_eh = {}
-
-                result["picks"] = completed_pick_list
-                result["active_chip"] = (completed_picks_data.get("active_chip"))
+                result["picks"] = (
+                    completed_pick_list
+                )
+                result["active_chip"] = (
+                    completed_picks_data.get(
+                        "active_chip"
+                    )
+                )
                 result["auto_subs"] = (
                     completed_picks_data.get(
                         "automatic_subs",
                         []
                     )
                 )
-
                 picks_event = completed_gw
 
-            # =========================================================
-            # 2F. Fetch TRANSFER HISTORY
-            #
-            # This is essential for early transfers.
-            # entry_history for GW3 cannot tell us about a transfer
-            # made for GW4.
-            # =========================================================
+    else:
+        # ============================================================
+        # NORMAL CASE
+        #
+        # Use planning GW picks whenever available.
+        # This handles:
+        #
+        # 0 early transfers
+        # 1 early transfer
+        # multiple early transfers
+        # wildcard
+        # normal rollover
+        # ============================================================
 
-            transfers_url = (
-                f"{FPL_API_BASE}/entry/"
-                f"{team_id}/transfers/"
+        if planning_success:
+            result["picks"] = (
+                planning_pick_list
             )
 
-            transfers_resp = requests.get(
-                transfers_url,
-                headers={"User-Agent": "FPL-Predictor/1.0"},
-                timeout=15,
-            )
-
-            transfers_resp.raise_for_status()
-
-            all_transfers = transfers_resp.json()
-
-            result["transfers"] = all_transfers[:20]
-
-            planning_transfers = [
-                t
-                for t in all_transfers
-                if int(t.get("event", 0)) == planning_gw
-            ]
-
-            completed_transfers = [
-                t
-                for t in all_transfers
-                if int(t.get("event", 0)) == completed_gw
-            ]
-
-            # =========================================================
-            # 2G. Count early transfers for the PLANNING GW
-            # =========================================================
-
-            planning_transfer_count = len(
-                planning_transfers
-            )
-
-            free_transfers_remaining = max(
-                0,
-                starting_free_transfers
-                - planning_transfer_count,
-            )
-
-            transfer_hits = max(
-                0,
-                planning_transfer_count
-                - starting_free_transfers,
-            )
-
-            # =========================================================
-            # 2H. Determine financial state
-            #
-            # Prefer the planning GW entry_history when available.
-            # Otherwise use completed GW.
-            # =========================================================
-
-            if planning_eh:
-                financial_eh = planning_eh
-            else:
-                financial_eh = completed_eh
-
-            bank_raw = financial_eh.get("bank")
-
-            value_raw = financial_eh.get("value")
-
-            if bank_raw is None:
-                bank_raw = entry.get(
-                    "last_deadline_bank",
-                    0,
+            result["active_chip"] = (
+                planning_picks_data.get(
+                    "active_chip"
                 )
+            )
 
-            if value_raw is None:
-                value_raw = entry.get(
-                    "last_deadline_value",
-                    0,
+            result["auto_subs"] = (
+                planning_picks_data.get(
+                    "automatic_subs",
+                    []
                 )
-
-            # =========================================================
-            # 2I. GW SUMMARY
-            # =========================================================
-
-            result["gw_summary"] = {
-                # Important: this is the GW being planned.
-                "event": planning_gw,
-
-                # GW3 completed information.
-                "completed_event": completed_gw,
-
-                # GW4 planning information.
-                "planning_event": planning_gw,
-
-                "points": financial_eh.get(
-                    "points",
-                    completed_eh.get("points", 0),
-                ),
-
-                "total_points": financial_eh.get(
-                    "total_points",
-                    completed_eh.get("total_points", 0),
-                ),
-
-                "rank": financial_eh.get(
-                    "rank",
-                    completed_eh.get("rank", 0),
-                ),
-
-                "overall_rank": financial_eh.get(
-                    "overall_rank",
-                    completed_eh.get(
-                        "overall_rank",
-                        0,
-                    ),
-                ),
-
-                "bank": float(
-                    bank_raw or 0
-                ) / 10,
-
-                "value": float(
-                    value_raw or 0
-                ) / 10,
-
-                # IMPORTANT:
-                # These are transfers made for GW4.
-                "event_transfers": planning_transfer_count,
-
-                "event_transfers_cost": int(
-                    financial_eh.get(
-                        "event_transfers_cost",
-                        0,
-                    ) or 0
-                ),
-
-                "starting_free_transfers": (
-                    starting_free_transfers
-                ),
-
-                "free_transfers_remaining": (
-                    free_transfers_remaining
-                ),
-
-                "transfer_hits": transfer_hits,
-
-                "points_on_bench": financial_eh.get(
-                    "points_on_bench",
-                    0,
-                ),
-            }
-
-            # =========================================================
-            # 2J. Convenience fields
-            # =========================================================
-
-            result["current_bank"] = (
-                result["gw_summary"]["bank"]
             )
 
-            result["current_team_value"] = (
-                result["gw_summary"]["value"]
+            picks_event = planning_gw
+
+        else:
+            # Future picks may not exist yet.
+            # Use the completed GW as the safe fallback.
+            result["picks"] = (
+                completed_pick_list
             )
 
-            result["current_event_transfers"] = (
-                planning_transfer_count
+            result["active_chip"] = (
+                completed_picks_data.get(
+                    "active_chip"
+                )
             )
 
-            result["current_transfer_cost"] = (
-                result["gw_summary"][
-                    "event_transfers_cost"
-                ]
+            result["auto_subs"] = (
+                completed_picks_data.get(
+                    "automatic_subs",
+                    []
+                )
             )
 
-            # =========================================================
-            # 2K. DEBUG
-            # =========================================================
+            picks_event = completed_gw
 
-            result["debug_fpl"] = {
-                "completed_gw": completed_gw,
+    # ================================================================
+    # 12. FINANCIAL STATE
+    #
+    # For the planning GW:
+    #
+    # - Future picks normally don't have a meaningful completed
+    #   entry_history.
+    # - Therefore, use the latest completed GW financial state.
+    #
+    # The important early-transfer information comes from the
+    # transfer-history endpoint, not entry_history.
+    # ================================================================
 
-                "planning_gw": planning_gw,
+    financial_eh = completed_eh
 
-                "picks_event_returned": picks_event,
+    if planning_success and planning_eh:
+        # Only use planning entry_history if it actually contains
+        # meaningful financial fields.
+        if (
+            planning_eh.get("bank") is not None
+            or
+            planning_eh.get("value") is not None
+        ):
+            financial_eh = planning_eh
 
-                "planning_response_status": (
-                    planning_resp.status_code
-                ),
+    bank_raw = financial_eh.get("bank")
 
-                "completed_pick_ids": [
-                    p.get("element")
-                    for p in completed_pick_list
-                ],
+    value_raw = financial_eh.get("value")
 
-                "planning_pick_ids": [
-                    p.get("element")
-                    for p in planning_pick_list
-                ],
+    if bank_raw is None:
+        bank_raw = entry.get(
+            "last_deadline_bank",
+            0,
+        )
 
-                "returned_pick_ids": [
-                    p.get("element")
-                    for p in result["picks"]
-                ],
+    if value_raw is None:
+        value_raw = entry.get(
+            "last_deadline_value",
+            0,
+        )
 
-                "completed_transfers": (
-                    completed_transfers
-                ),
+    # ================================================================
+    # 13. BUILD GW SUMMARY
+    # ================================================================
 
-                "planning_transfers": (
-                    planning_transfers
-                ),
+    result["gw_summary"] = {
+        # GW being planned.
+        "event": planning_gw,
 
-                "planning_transfer_count": (
-                    planning_transfer_count
-                ),
+        # Last completed GW.
+        "completed_event": completed_gw,
 
-                "starting_free_transfers": (
-                    starting_free_transfers
-                ),
+        # Explicit planning GW.
+        "planning_event": planning_gw,
 
-                "free_transfers_remaining": (
-                    free_transfers_remaining
-                ),
+        # Latest completed GW points.
+        "points": financial_eh.get(
+            "points",
+            completed_eh.get(
+                "points",
+                0,
+            ),
+        ),
 
-                "bank_raw": bank_raw,
+        "total_points": financial_eh.get(
+            "total_points",
+            completed_eh.get(
+                "total_points",
+                0,
+            ),
+        ),
 
-                "value_raw": value_raw,
-            }
+        "rank": financial_eh.get(
+            "rank",
+            completed_eh.get(
+                "rank",
+                0,
+            ),
+        ),
 
-        except Exception as e:
-            result["error"] = (
-                f"Could not fetch squad data: {str(e)}"
+        "overall_rank": financial_eh.get(
+            "overall_rank",
+            completed_eh.get(
+                "overall_rank",
+                0,
+            ),
+        ),
+
+        "bank": float(
+            bank_raw or 0
+        ) / 10,
+
+        "value": float(
+            value_raw or 0
+        ) / 10,
+
+        # Transfers made for the planning GW.
+        "event_transfers": (
+            planning_transfer_count
+        ),
+
+        "event_transfers_cost": int(
+            financial_eh.get(
+                "event_transfers_cost",
+                0,
+            ) or 0
+        ),
+
+        # FT before early planning transfers.
+        "starting_free_transfers": (
+            starting_free_transfers
+        ),
+
+        # FT remaining after early planning transfers.
+        "free_transfers_remaining": (
+            free_transfers_remaining
+        ),
+
+        # Number of transfers beyond available FT.
+        "transfer_hits": (
+            transfer_hits
+        ),
+
+        "points_on_bench": financial_eh.get(
+            "points_on_bench",
+            0,
+        ),
+    }
+
+    # ================================================================
+    # 14. CONVENIENCE FIELDS
+    # ================================================================
+
+    result["current_bank"] = (
+        result["gw_summary"]["bank"]
+    )
+
+    result["current_team_value"] = (
+        result["gw_summary"]["value"]
+    )
+
+    result["current_event_transfers"] = (
+        planning_transfer_count
+    )
+
+    result["current_transfer_cost"] = (
+        result["gw_summary"][
+            "event_transfers_cost"
+        ]
+    )
+
+    # ================================================================
+    # 15. DEBUG DATA
+    #
+    # This is intentionally verbose so you can inspect exactly
+    # what FPL returned in Network -> /api/my-team.
+    # ================================================================
+
+    result["debug_fpl"] = {
+        "current_event_from_entry": current_event,
+
+        "completed_gw": completed_gw,
+
+        "planning_gw": planning_gw,
+
+        "picks_event_returned": picks_event,
+
+        "planning_response_status": (
+            planning_resp_status
+        ),
+
+        "planning_success": (
+            planning_success
+        ),
+
+        "completed_pick_count": (
+            len(completed_pick_list)
+        ),
+
+        "planning_pick_count": (
+            len(planning_pick_list)
+        ),
+
+        "returned_pick_count": (
+            len(result.get("picks", []))
+        ),
+
+        "completed_pick_ids": [
+            p.get("element")
+            for p in completed_pick_list
+        ],
+
+        "planning_pick_ids": [
+            p.get("element")
+            for p in planning_pick_list
+        ],
+
+        "returned_pick_ids": [
+            p.get("element")
+            for p in result.get(
+                "picks",
+                []
             )
+        ],
+
+        "completed_transfers": (
+            completed_transfers
+        ),
+
+        "planning_transfers": (
+            planning_transfers
+        ),
+
+        "planning_transfer_count": (
+            planning_transfer_count
+        ),
+
+        "starting_free_transfers": (
+            starting_free_transfers
+        ),
+
+        "free_transfers_remaining": (
+            free_transfers_remaining
+        ),
+
+        "transfer_hits": (
+            transfer_hits
+        ),
+
+        "free_hit_gw": free_hit_gw,
+
+        "bank_raw": bank_raw,
+
+        "value_raw": value_raw,
+    }
 
     return result
+
 
 
 def enrich_my_team(team_data: dict, player_map: dict, predictions: list) -> dict:
