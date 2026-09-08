@@ -1480,28 +1480,110 @@ def api_my_team():
     team_id = request.args.get("id") or _load_settings().get("team_id")
     if not team_id:
         return jsonify({"error": "No team ID"}), 400
+
     try:
         team_id = int(team_id)
-        from my_team import fetch_my_team, enrich_my_team, generate_transfer_suggestions
+
+        from my_team import (
+            fetch_my_team,
+            enrich_my_team,
+            generate_transfer_suggestions,
+        )
+
         settings = _load_settings()
         settings["team_id"] = team_id
         _save_settings(settings)
+
+        # ============================================================
+        # FETCH FPL TEAM
+        # ============================================================
+
         team_data = fetch_my_team(team_id)
+
         if team_data.get("error"):
-            print(f"  [MY-TEAM] fetch failed for id={team_id}: {team_data.get('error')}") 
+            print(
+                f"  [MY-TEAM] fetch failed for id={team_id}: "
+                f"{team_data.get('error')}"
+            )
             return jsonify(team_data), 400
+
+        # ============================================================
+        # LOAD PREDICTIONS
+        # ============================================================
+
         preds, _, _ = _cached_predictions()
+
         if not preds:
-            return jsonify({"error": "Predictions not ready yet. Please wait for data refresh."}), 503
-        player_map = {p["player_id"]: p for p in preds if "player_id" in p}
-        enriched = enrich_my_team(team_data, player_map, preds)
-        free_transfers = enriched.get("free_transfers")
+            return jsonify({
+                "error": (
+                    "Predictions not ready yet. "
+                    "Please wait for data refresh."
+                )
+            }), 503
+
+        player_map = {
+            p["player_id"]: p
+            for p in preds
+            if "player_id" in p
+        }
+
+        # ============================================================
+        # ENRICH TEAM
+        # ============================================================
+
+        enriched = enrich_my_team(
+            team_data,
+            player_map,
+            preds,
+        )
+
+        # ============================================================
+        # FREE TRANSFERS
+        #
+        # Important:
+        #
+        # free_transfers
+        #     = known FT entering the planning GW
+        #
+        # free_transfers_remaining
+        #     = confirmed remaining FT after planning-GW transfers
+        #
+        # When FPL does not expose future transfers yet,
+        # free_transfers_remaining is None, but free_transfers
+        # is still valid and should be displayed.
+        # ============================================================
+
+        free_transfers = team_data.get("free_transfers")
+
         if free_transfers is None:
-            free_transfers = enriched.get("gw_summary", {}).get("free_transfers")
+            free_transfers = enriched.get("free_transfers")
+
+        if free_transfers is None:
+            free_transfers = (
+                team_data
+                .get("gw_summary", {})
+                .get("starting_free_transfers")
+            )
+
         if free_transfers is None:
             free_transfers = 1
-        free_transfers = int(team_data.get("free_transfers" or 1))
-        suggestions = generate_transfer_suggestions(enriched, preds, free_transfers=free_transfers)
+
+        free_transfers = int(free_transfers)
+
+        # ============================================================
+        # TRANSFER SUGGESTIONS
+        # ============================================================
+
+        suggestions = generate_transfer_suggestions(
+            enriched,
+            preds,
+            free_transfers=free_transfers,
+        )
+
+        # ============================================================
+        # RESPONSE
+        # ============================================================
+
         return jsonify({
             "team_id": team_id,
             "info": enriched.get("info", {}),
@@ -1517,13 +1599,25 @@ def api_my_team():
             "recent_transfers": enriched.get("transfers", [])[:10],
             "history": enriched.get("history", [])[-10:],
             "free_transfers": free_transfers,
+            "free_transfers_remaining": team_data.get("free_transfers_remaining"),
+            "early_transfers_known": team_data.get("early_transfers_known", False),
             "debug_fpl": team_data.get("debug_fpl"),
         })
+
+
     except ValueError:
-        return jsonify({"error": "Invalid team ID"}), 400
+        return jsonify({
+            "error": "Invalid team ID"
+        }), 400
+
     except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({"error": "Internal server error"}), 500
+        import traceback
+        traceback.print_exc()
+
+        return jsonify({
+            "error": "Internal server error"
+        }), 500
+
 
 @app.route("/api/news")
 def api_news():

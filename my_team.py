@@ -510,17 +510,8 @@ def fetch_my_team(team_id: int) -> dict:
             f"{FPL_API_BASE}/entry/"
             f"{team_id}/transfers/"
         )
-
-        transfers_resp = requests.get(
-            transfers_url,
-            headers=headers,
-            timeout=15,
-        )
-
-        transfer_endpoint_status = (
-            transfers_resp.status_code
-        )
-
+        transfers_resp = requests.get(transfers_url, headers=headers, timeout=15,)
+        transfer_endpoint_status = (transfers_resp.status_code)
         if transfers_resp.ok:
             transfer_data = transfers_resp.json()
 
@@ -616,7 +607,6 @@ def fetch_my_team(team_id: int) -> dict:
 
     completed_pick_list = []
     completed_entry_history = {}
-
     completed_picks_status = None
 
     try:
@@ -626,35 +616,13 @@ def fetch_my_team(team_id: int) -> dict:
             f"{completed_gw}/picks/"
         )
 
-        completed_resp = requests.get(
-            completed_url,
-            headers=headers,
-            timeout=15,
-        )
+        completed_resp = requests.get(completed_url, headers=headers, timeout=15)
 
-        completed_picks_status = (
-            completed_resp.status_code
-        )
-
+        completed_picks_status = (completed_resp.status_code)
         completed_resp.raise_for_status()
-
-        completed_data = (
-            completed_resp.json()
-        )
-
-        completed_pick_list = (
-            completed_data.get(
-                "picks",
-                [],
-            )
-        )
-
-        completed_entry_history = (
-            completed_data.get(
-                "entry_history",
-                {},
-            )
-        )
+        completed_data = (completed_resp.json())
+        completed_pick_list = (completed_data.get("picks", []))
+        completed_entry_history = (completed_data.get("entry_history", {}))
 
     except Exception as e:
         result["error"] = (
