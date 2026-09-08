@@ -588,50 +588,25 @@ def fetch_my_team(team_id: int) -> dict:
     # ================================================================
 
     if early_transfers_known:
-        free_transfers_remaining = max(
-            0,
-            starting_free_transfers
-            - planning_transfer_count,
-        )
-
-        transfer_hits = max(
-            0,
-            planning_transfer_count
-            - starting_free_transfers,
-        )
-
-        result["free_transfers"] = (
-            free_transfers_remaining
-        )
-
-        result["free_transfers_remaining"] = (
-            free_transfers_remaining
-        )
-
-        result["transfer_hits"] = (
-            transfer_hits
-        )
+        free_transfers_remaining = max(0, starting_free_transfers - planning_transfer_count,)
+        transfer_hits = max(0, planning_transfer_count - starting_free_transfers,)
 
     else:
         # We know the FT entering the planning GW,
-        # but we do NOT know whether early transfers have been made.
-        #
-        # Do not falsely report "0 used".
-        result["free_transfers"] = (
-            starting_free_transfers
-        )
+        # but the public API has not told us whether
+        # early transfers were made.
+        free_transfers_remaining = None
+        transfer_hits = None
 
-        result["free_transfers_remaining"] = (
-            None
-        )
+    # Expose the values consistently
+    if early_transfers_known:
+        result["free_transfers"] = free_transfers_remaining
+    else:
+        result["free_transfers"] = starting_free_transfers
 
-        result["transfer_hits"] = (
-            None
-        )
-
-    result["early_transfers_known"] = (
-        early_transfers_known
-    )
+    result["free_transfers_remaining"] = free_transfers_remaining
+    result["transfer_hits"] = transfer_hits
+    result["early_transfers_known"] = early_transfers_known
 
     # ================================================================
     # 7. FETCH COMPLETED GW PICKS
@@ -1083,6 +1058,131 @@ def fetch_my_team(team_id: int) -> dict:
             "event_transfers_cost"
         ]
     )
+
+    # ================================================================
+    # 14. DEBUG
+    #
+    # KEEP THIS FOR NOW.
+    #
+    # It tells us exactly what the FPL public API is exposing.
+    # Remove/reduce it only after the behavior has been verified.
+    # ================================================================
+
+    result["debug_fpl"] = {
+        "current_event_from_entry": (
+            current_event
+        ),
+
+        "completed_gw": (
+            completed_gw
+        ),
+
+        "planning_gw": (
+            planning_gw
+        ),
+
+        "completed_picks_status": (
+            completed_picks_status
+        ),
+
+        "planning_picks_status": (
+            planning_picks_status
+        ),
+
+        "planning_picks_available": (
+            planning_picks_available
+        ),
+
+        "planning_pick_count": (
+            len(planning_pick_list)
+        ),
+
+        "completed_pick_count": (
+            len(completed_pick_list)
+        ),
+
+        "picks_event_returned": (
+            picks_event
+        ),
+
+        "picks_are_planning_gw": (
+            result["picks_are_planning_gw"]
+        ),
+
+        "returned_pick_count": (
+            len(result.get("picks", []))
+        ),
+
+        "completed_pick_ids": [
+            pick.get("element")
+            for pick in completed_pick_list
+        ],
+
+        "planning_pick_ids": [
+            pick.get("element")
+            for pick in planning_pick_list
+        ],
+
+        "returned_pick_ids": [
+            pick.get("element")
+            for pick in result.get(
+                "picks",
+                [],
+            )
+        ],
+
+        "transfer_endpoint_status": (
+            transfer_endpoint_status
+        ),
+
+        "all_transfers_count": (
+            len(all_transfers)
+        ),
+
+        "all_transfers": (
+            all_transfers
+        ),
+
+        "completed_transfers": (
+            completed_transfers
+        ),
+
+        "planning_transfers": (
+            planning_transfers
+        ),
+
+        "planning_transfer_count": (
+            planning_transfer_count
+        ),
+
+        "early_transfers_known": (
+            early_transfers_known
+        ),
+
+        "starting_free_transfers": (
+            starting_free_transfers
+        ),
+
+        "free_transfers_remaining": (
+            free_transfers_remaining
+        ),
+
+        "transfer_hits": (
+            transfer_hits
+        ),
+
+        "free_hit_gw": (
+            free_hit_gw
+        ),
+
+        "bank_raw": (
+            bank_raw
+        ),
+
+        "value_raw": (
+            value_raw
+        ),
+    }
 
     return result
 
