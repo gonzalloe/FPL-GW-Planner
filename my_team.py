@@ -1058,16 +1058,12 @@ def fetch_my_team(team_id: int) -> dict:
 
     result["debug_fpl"] = {
         "current_event_from_entry": current_event,
-
         "completed_gw": completed_gw,
-
         "planning_gw": planning_gw,
-
         "picks_event_returned": picks_event,
-
-        "planning_response_status": (
-            planning_resp_status
-        ),
+        "all_transfers_count": len(all_transfers),
+        "all_transfers": all_transfers[:20],
+        "planning_response_status": (planning_resp_status),
 
         "planning_success": (
             planning_success
