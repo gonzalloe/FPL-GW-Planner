@@ -3496,11 +3496,13 @@ async function loadMyTeam() {
     MY_TEAM_DATA = data;
     MY_TEAM_ORIGINAL = JSON.parse(JSON.stringify(data));
 
+    SIM_BASE_BANK = Number(data.gw_summary?.bank ?? 0);
+    SIM_BASE_SQUAD_VALUE = Number(data.squad_value ?? data.gw_summary?.value ?? 0);
+
     // Detect preseason immediately after team import
     const preseason = isPreseasonTeam(data);
 
     console.log('[MY TEAM] Preseason:', preseason);
-
     loadingEl.style.display = 'none';
     content.style.display = 'none';
     loaded.style.display = '';
@@ -3520,15 +3522,67 @@ async function loadMyTeam() {
       preseasonMessage?.style.display
     );
 
-    // Stats
+    const bank = Number(data.gw_summary?.bank ?? 0);
+    const squadValue = Number(data.squad_value ?? data.gw_summary?.value ?? 0);
+    const remainingFT = Number(data.gw_summary?.free_transfers_remaining ?? data.gw_summary?.free_transfers ?? 0);
+    const transfersThisGW = Number(data.gw_summary?.event_transfers ?? 0);
+    const transferHits = Number(data.gw_summary?.transfer_hits ?? 0);
+
     document.getElementById('myteam-stats').innerHTML = `
-      <div class="stat-box"><div class="label">Team</div><div class="value" style="font-size:14px;">${data.info?.name || '?'}</div></div>
-      <div class="stat-box"><div class="label">Overall Rank</div><div class="value" style="font-size:16px;">${(data.gw_summary?.overall_rank || '--').toLocaleString()}</div></div>
-      <div class="stat-box"><div class="label">GW Points</div><div class="value">${data.gw_summary?.points || '--'}</div></div>
-      <div class="stat-box"><div class="label">Total Points</div><div class="value">${data.gw_summary?.total_points || '--'}</div></div>
-      <div class="stat-box"><div class="label">Bank</div><div class="value">&pound;${data.gw_summary?.bank || 0}m</div></div>
-      <div class="stat-box"><div class="label">Squad Value</div><div class="value">&pound;${data.squad_value || '?'}m</div></div>
+      <div class="stat-box">
+        <div class="label">Team</div>
+        <div class="value" style="font-size:14px;">
+          ${data.info?.name || '?'}
+        </div>
+      </div>
+
+      <div class="stat-box">
+        <div class="label">Overall Rank</div>
+        <div class="value" style="font-size:16px;">
+          ${(data.gw_summary?.overall_rank || '--').toLocaleString()}
+        </div>
+      </div>
+
+      <div class="stat-box">
+        <div class="label">GW Points</div>
+        <div class="value">
+          ${data.gw_summary?.points ?? '--'}
+        </div>
+      </div>
+
+      <div class="stat-box">
+        <div class="label">Total Points</div>
+        <div class="value">
+          ${data.gw_summary?.total_points ?? '--'}
+        </div>
+      </div>
+
+      <div class="stat-box">
+        <div class="label">Bank</div>
+        <div class="value">
+          &pound;${bank.toFixed(1)}m
+        </div>
+      </div>
+
+      <div class="stat-box">
+        <div class="label">Squad Value</div>
+        <div class="value">
+          &pound;${squadValue.toFixed(1)}m
+        </div>
+      </div>
+
+      <div class="stat-box">
+        <div class="label">Free Transfers</div>
+        <div class="value">
+          ${remainingFT}
+        </div>
+        <div class="sub">
+          ${transfersThisGW} used this GW
+          ${transferHits ? ` · ${transferHits} hit` : ''}
+        </div>
+      </div>
     `;
+
 
     // Squad tables
     if (data.starters?.length) document.getElementById('myteam-xi').innerHTML = playerTableHTML(data.starters);
@@ -3564,17 +3618,26 @@ function applyAISuggestion(outId, inId) {
 }
 
 function getSimulatorFreeTransfers() {
-  if (!MY_TEAM_DATA) return 1;
-  const ft = Number(MY_TEAM_DATA.free_transfers);
-  if (Number.isFinite(ft)) {
-    return Math.max(1, Math.min(5, ft));
+  if (!MY_TEAM_DATA) return 0;
+  // Preferred: current GW remaining free transfers.
+  const remaining = Number(MY_TEAM_DATA.gw_summary?.free_transfers_remaining);
+  if (Number.isFinite(remaining)) {
+    return Math.max(0, Math.min(5, remaining));
   }
+  // Backwards compatibility with the old backend.
   const summaryFT = Number(MY_TEAM_DATA.gw_summary?.free_transfers);
   if (Number.isFinite(summaryFT)) {
-    return Math.max(1, Math.min(5, summaryFT));
+    const transfersMade = Number(
+      MY_TEAM_DATA.gw_summary?.event_transfers || 0
+    );
+    return Math.max(
+      0,
+      Math.min(5, summaryFT - transfersMade)
+    );
   }
-  return 1;
+  return 0;
 }
+
 
 function updateSimulatorFreeTransferDisplay() {
   const ftEl = document.getElementById('sim-ft-display');
@@ -4111,8 +4174,16 @@ function searchReplacements() {
     if (SIM_SELL_ID && MY_TEAM_DATA) {
       const all = [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])];
       const sellP = all.find(x => x.player_id === SIM_SELL_ID);
-      const bank = MY_TEAM_DATA.gw_summary?.bank || 0;
-      if (sellP) budget = sellP.price + bank;
+      const bank = Number(MY_TEAM_DATA.gw_summary?.bank ?? 0);
+      if (sellP) {
+        const sellPrice = Number(
+          sellP.selling_price ??
+          sellP.price ??
+          0
+        );
+        budget = sellPrice + bank;
+      }
+
     }
     try {
       let url = '/api/search-players?q=' + encodeURIComponent(query || '');
@@ -4260,16 +4331,35 @@ function addToTransferQueue(simData) {
   const inPlayer = simData.in_player;
   const targetGW = simData.gameweek || SIM_CURRENT_GW;
 
+  const outSellPrice = Number(outPlayer.selling_price ?? outPlayer.sell_price ?? outPlayer.price ?? 0);
+  const inPurchasePrice = Number(inPlayer.purchase_price ?? inPlayer.price ?? 0);
   TRANSFER_QUEUE.push({
-    out_id: outPlayer.player_id, out_name: outPlayer.name,
-    out_team: outPlayer.team, out_price: outPlayer.price,
-    out_position_id: outPlayer.position_id || ({'GKP':1,'DEF':2,'MID':3,'FWD':4}[outPlayer.position] || 0),
-    in_id: inPlayer.player_id, in_name: inPlayer.name,
-    in_team: inPlayer.team, in_price: inPlayer.price,
+    out_id: outPlayer.player_id,
+    out_name: outPlayer.name,
+    out_team: outPlayer.team,
+
+    // Current market price — display only.
+    out_price: Number(outPlayer.price || 0),
+
+    // Actual FPL selling price — used for budget.
+    out_sell_price: outSellPrice,
+
+    out_position_id:
+      outPlayer.position_id ||
+      ({'GKP':1,'DEF':2,'MID':3,'FWD':4}[outPlayer.position] || 0),
+
+    in_id: inPlayer.player_id,
+    in_name: inPlayer.name,
+    in_team: inPlayer.team,
+
+    // Purchase price for this simulated transfer.
+    in_price: inPurchasePrice,
     in_player_full: inPlayer,
-    gain: simData.impact.this_gw_gain, multi_gw_gain: simData.total_multi_gw_gain,
+    gain: simData.impact.this_gw_gain,
+    multi_gw_gain: simData.total_multi_gw_gain,
     gw: targetGW,
   });
+
 
   // Apply transfer to MY_TEAM_DATA so the pitch updates
   if (MY_TEAM_DATA) {
@@ -4311,12 +4401,12 @@ function addToTransferQueue(simData) {
 
     // Update bank
     if (MY_TEAM_DATA.gw_summary) {
-      MY_TEAM_DATA.gw_summary.bank = (MY_TEAM_DATA.gw_summary.bank || 0) + outPlayer.price - inPlayer.price;
+      const currentBank = Number(MY_TEAM_DATA.gw_summary.bank ?? 0);
+      MY_TEAM_DATA.gw_summary.bank = currentBank + outSellPrice - inPurchasePrice;
     }
 
     // Recalculate squad value and predicted points
     const allPicks = [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])];
-    MY_TEAM_DATA.squad_value = Math.round(allPicks.reduce((s, p) => s + (p.price || 0), 0) * 10) / 10;
     MY_TEAM_DATA.predicted_points = Math.round(
       (MY_TEAM_DATA.starters || []).reduce((s, p) => s + (p.predicted_points || 0) * (p.is_captain ? 2 : 1), 0) * 10
     ) / 10;
@@ -4339,6 +4429,23 @@ function removeFromQueue(idx) {
   TRANSFER_QUEUE.splice(idx, 1);
   renderTransferQueue();
   renderSimSellList();
+}
+
+function getSimulatorBank() {
+  const baseBank = Number(SIM_BASE_BANK ?? MY_TEAM_DATA?.gw_summary?.bank ?? 0);
+  const transferCost = TRANSFER_QUEUE.reduce(
+    (sum, t) => {
+      const sellPrice = Number(
+        t.out_sell_price ??
+        t.out_price ??
+        0
+      );
+      const buyPrice = Number(t.in_price ?? 0);
+      return sum + buyPrice - sellPrice;
+    },
+    0
+  );
+  return baseBank - transferCost;
 }
 
 function renderTransferQueue() {
@@ -4371,20 +4478,42 @@ function renderTransferQueue() {
   // Summary
   const totalGain = TRANSFER_QUEUE.reduce((s, t) => s + t.gain, 0);
   const totalMultiGW = TRANSFER_QUEUE.reduce((s, t) => s + (t.multi_gw_gain || 0), 0);
-  const totalCost = TRANSFER_QUEUE.reduce((s, t) => s + t.in_price - t.out_price, 0);
+  const totalCost = TRANSFER_QUEUE.reduce((sum, t) => 
+    {
+      const sellPrice = Number(t.out_sell_price ?? t.out_price ?? 0);
+      const buyPrice = Number(t.in_price ?? 0);
+      return sum + buyPrice - sellPrice;
+    },
+    0
+  );
+
   const activeChip = document.getElementById('sim-chip-select')?.value || '';
   const unlimitedFreeTransfers = activeChip === 'FH' || activeChip === 'WC';
-  const freeTransfers = unlimitedFreeTransfers
-    ? TRANSFER_QUEUE.length
-    : getSimulatorFreeTransfers();
-  const hits = Math.max(0, TRANSFER_QUEUE.length - freeTransfers);
+  const availableFreeTransfers =unlimitedFreeTransfers ? TRANSFER_QUEUE.length : getSimulatorFreeTransfers();
+  const hits = Math.max(0, TRANSFER_QUEUE.length - availableFreeTransfers);
   const chipLabel = activeChip === 'FH' ? 'Free Hit' : activeChip === 'WC' ? 'Wildcard' : '';
 
   summary.style.display = '';
   summary.innerHTML = `<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12px;">
     <div><span style="color:var(--text3);">This GW gain:</span> <strong style="color:${totalGain >= 0 ? 'var(--accent)' : 'var(--red)'};">${totalGain >= 0 ? '+' : ''}${totalGain.toFixed(1)} xPts</strong></div>
     <div><span style="color:var(--text3);">Multi-GW value:</span> <strong style="color:var(--blue);">${totalMultiGW >= 0 ? '+' : ''}${totalMultiGW.toFixed(1)}</strong></div>
-    <div><span style="color:var(--text3);">Net cost:</span> <strong>&pound;${totalCost.toFixed(1)}m</strong></div>
+    <div>
+      <span style="color:var(--text3);">Net cost:</span>
+      <strong>
+        ${totalCost >= 0 ? '-' : '+'}&pound;${Math.abs(totalCost).toFixed(1)}m
+      </strong>
+    </div>
+    <div>
+      <span style="color:var(--text3);">Bank after plan:</span>
+      <strong style="color:${
+        getSimulatorBank() >= 0
+          ? 'var(--accent)'
+          : 'var(--red)'
+      };">
+        &pound;${getSimulatorBank().toFixed(1)}m
+      </strong>
+    </div>
+
     ${unlimitedFreeTransfers
       ? `<div style="color:var(--accent);font-weight:600;">🎯 ${chipLabel} active — all transfers FREE</div>`
       : hits > 0
@@ -4415,20 +4544,52 @@ function saveSimChanges() {
 
 function clearSimChanges() {
   if (!confirm('Clear all planned transfers?')) return;
+
   TRANSFER_QUEUE.length = 0;
   localStorage.removeItem('fpl_sim_state');
-  // Revert squad to original
-  if (MY_TEAM_ORIGINAL) {
-    MY_TEAM_DATA.starters = JSON.parse(JSON.stringify(MY_TEAM_ORIGINAL.starters));
-    MY_TEAM_DATA.bench = JSON.parse(JSON.stringify(MY_TEAM_ORIGINAL.bench));
+
+  // Restore original FPL squad.
+  if (MY_TEAM_ORIGINAL && MY_TEAM_DATA) {
+    MY_TEAM_DATA.starters =
+      JSON.parse(JSON.stringify(
+        MY_TEAM_ORIGINAL.starters || []
+      ));
+
+    MY_TEAM_DATA.bench =
+      JSON.parse(JSON.stringify(
+        MY_TEAM_ORIGINAL.bench || []
+      ));
+
+    // Restore original financial state.
+    MY_TEAM_DATA.gw_summary =
+      JSON.parse(JSON.stringify(
+        MY_TEAM_ORIGINAL.gw_summary || {}
+      ));
+
+    MY_TEAM_DATA.squad_value =
+      MY_TEAM_ORIGINAL.squad_value;
+
+    MY_TEAM_DATA.predicted_points =
+      MY_TEAM_ORIGINAL.predicted_points;
   }
-  SIM_SELL_ID = null; SIM_BUY_ID = null;
+
+  SIM_SELL_ID = null;
+  SIM_BUY_ID = null;
+
+  document.getElementById('sim-result').style.display = 'none';
+
+  const replacePanel =
+    document.getElementById('sim-replace-panel');
+
+  if (replacePanel) {
+    replacePanel.style.display = 'none';
+  }
+
   renderSimPitch();
   renderTransferQueue();
-  document.getElementById('sim-result').style.display = 'none';
-  const replacePanel = document.getElementById('sim-replace-panel');
-  if (replacePanel) replacePanel.style.display = 'none';
+  renderSimSellList();
 }
+
 
 function loadSimState() {
   try {

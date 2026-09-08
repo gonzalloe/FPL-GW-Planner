@@ -127,11 +127,12 @@ def fetch_my_team(team_id: int) -> dict:
                 row for row in history_rows
                 if int(row.get("event", 0)) < current_event
             ]
-            result["free_transfers"] = calculate_free_transfers(completed_history, chips_used)
+            starting_free_transfers = calculate_free_transfers(completed_history, chips_used)
+            result["free_transfers"] = starting_free_transfers
             
             # Check if FH was used in the previous GW (current_event - 1 is the last completed GW)
             # If current_event is 34, last completed is 33
-            last_completed_gw = current_event  # This is actually the last GW that has data
+            last_completed_gw = current_event -1
             
             fh_last_gw = any(
                 c.get("name") == "freehit" and c.get("event") == last_completed_gw
@@ -165,24 +166,49 @@ def fetch_my_team(team_id: int) -> dict:
             else:
                 eh = picks_data.get("entry_history", {})
             
+            bank_raw = eh.get("bank")
+            value_raw = eh.get("value")
+
+            # Fall back to the entry-level deadline values only if the
+            # current picks endpoint did not provide them.
+            if bank_raw is None:
+                bank_raw = entry.get("last_deadline_bank", 0)
+
+            if value_raw is None:
+                value_raw = entry.get("last_deadline_value", 0)
+            current_gw_transfers = int(eh.get("event_transfers", 0) or 0)
+            starting_free_transfers = result["free_transfers"]
+
             result["gw_summary"] = {
                 "event": current_event,
                 "points": eh.get("points", 0),
                 "total_points": eh.get("total_points", 0),
                 "rank": eh.get("rank", 0),
                 "overall_rank": eh.get("overall_rank", 0),
-                "bank": (eh.get("bank") or 0) / 10,
-                "value": (eh.get("value") or 0) / 10,
-                "event_transfers": eh.get("event_transfers", 0),
-                "event_transfers_cost": eh.get("event_transfers_cost", 0),
+
+                # Current FPL bank/value, not last-deadline snapshot.
+                "bank": float(bank_raw or 0) / 10,
+                "value": float(value_raw or 0) / 10,
+
+                "event_transfers": int(eh.get("event_transfers", 0) or 0),
+                "event_transfers_cost": int(eh.get("event_transfers_cost", 0) or 0),
+                "starting_free_transfers": starting_free_transfers,
+                "free_transfers_remaining": max(0, starting_free_transfers - current_gw_transfers),
+                "transfer_hits": max(0, current_gw_transfers - starting_free_transfers),
                 "points_on_bench": eh.get("points_on_bench", 0),
-                "free_transfers": result["free_transfers"],
             }
             
             # Store chips for later use (already fetched)
+            result["gw_summary"]["starting_free_transfers"] = (starting_free_transfers)
+            result["gw_summary"]["free_transfers_remaining"] = max(0, starting_free_transfers - current_gw_transfers)
+            result["gw_summary"]["transfer_hits"] = max(0, current_gw_transfers - starting_free_transfers)
             result["history"] = hist_data.get("current", [])
             result["chips"] = chips_used
             result["past_seasons"] = hist_data.get("past", [])
+            result["current_bank"] = result["gw_summary"]["bank"]
+            result["current_team_value"] = result["gw_summary"]["value"]
+            result["current_event_transfers"] = result["gw_summary"]["event_transfers"]
+            result["current_transfer_cost"] = (result["gw_summary"]["event_transfers_cost"])
             
         except Exception as e:
             result["error"] = f"Could not fetch GW picks: {str(e)}"
@@ -243,6 +269,16 @@ def enrich_my_team(team_data: dict, player_map: dict, predictions: list) -> dict
             "position": pred.get("position", "???"),
             "position_id": pred.get("position_id", 0),
             "price": pred.get("price", 0),
+            "purchase_price": (
+                float(pick["purchase_price"]) / 10
+                if pick.get("purchase_price") is not None
+                else None
+            ),
+            "selling_price": (
+                float(pick["selling_price"]) / 10
+                if pick.get("selling_price") is not None
+                else None
+            ),
             "selected_by_percent": pred.get("selected_by_percent", "0"),
             "form": pred.get("form", 0),
             "ppg": pred.get("ppg", 0),
@@ -285,14 +321,24 @@ def enrich_my_team(team_data: dict, player_map: dict, predictions: list) -> dict
     team_data["bench"] = [p for p in enriched_picks if not p["is_starter"]]
 
     # Squad value and stats
-    total_value = sum(p["price"] for p in enriched_picks)
+    fpl_value = team_data.get("gw_summary", {}).get("value")
+    if fpl_value is not None:
+        team_data["squad_value"] = round(float(fpl_value), 1)
+    else:
+        team_data["squad_value"] = round(
+            sum(
+                float(p.get("price", 0) or 0)
+                for p in enriched_picks
+            ),
+            1
+        )
+        team_data["squad_value"] = round(total_value, 1)
     total_predicted = sum(
         p["predicted_points"] * (2 if p["is_captain"] else 1)
-        for p in enriched_picks if p["is_starter"]
+        for p in enriched_picks
+        if p["is_starter"]
     )
-    team_data["squad_value"] = round(total_value, 1)
     team_data["predicted_points"] = round(total_predicted, 1)
-
     # Identify weak spots (lowest predicted starters)
     starters_ranked = sorted(team_data["starters"], key=lambda x: x["predicted_points"])
     team_data["weakest_links"] = starters_ranked[:3]
@@ -328,8 +374,10 @@ def generate_transfer_suggestions(team_data: dict, predictions: list,
 
     for out_player in starters[:free_transfers * 3]:
         pos_id = out_player["position_id"]
-        out_price = out_player["price"]
-        budget = out_price + bank
+        out_sell_price = out_player.get("selling_price")
+        if out_sell_price is None:
+            out_sell_price = out_player.get("price", 0)
+        budget = float(out_sell_price) + float(bank)
 
         # Find better replacements
         candidates = []
@@ -362,6 +410,7 @@ def generate_transfer_suggestions(team_data: dict, predictions: list,
                     "team": out_player["team"],
                     "position": out_player["position"],
                     "price": out_player["price"],
+                    "selling_price": out_sell_price,
                     "predicted_points": out_player["predicted_points"],
                     "form": out_player["form"],
                     "total_points": out_player["total_points"],
@@ -381,7 +430,7 @@ def generate_transfer_suggestions(team_data: dict, predictions: list,
                 "points_gain": round(
                     best.get("predicted_points", 0) - out_player["predicted_points"], 2
                 ),
-                "cost_change": round(best.get("price", 0) - out_price, 1),
+                "cost_change": round(best.get("price", 0) - out_sell_price, 1),
                 "budget_after": round(budget - best.get("price", 0), 1),
             })
 
