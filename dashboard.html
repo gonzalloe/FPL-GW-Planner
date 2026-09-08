@@ -3524,9 +3524,10 @@ async function loadMyTeam() {
 
     const bank = Number(data.gw_summary?.bank ?? 0);
     const squadValue = Number(data.squad_value ?? data.gw_summary?.value ?? 0);
-    const remainingFT = Number(data.gw_summary?.free_transfers_remaining ?? data.gw_summary?.free_transfers ?? 0);
-    const transfersThisGW = Number(data.gw_summary?.event_transfers ?? 0);
-    const transferHits = Number(data.gw_summary?.transfer_hits ?? 0);
+    const remainingFT = Number(data.free_transfers ?? data.gw_summary?.starting_free_transfers ?? 0);
+    const transfersThisGW = data.early_transfers_known ? Number(data.gw_summary?.event_transfers ?? 0) : null;
+    const transferHits = data.early_transfers_known ? Number(data.gw_summary?.transfer_hits ?? 0) : null;
+
 
     document.getElementById('myteam-stats').innerHTML = `
       <div class="stat-box">
@@ -3619,24 +3620,29 @@ function applyAISuggestion(outId, inId) {
 
 function getSimulatorFreeTransfers() {
   if (!MY_TEAM_DATA) return 0;
-  // Preferred: current GW remaining free transfers.
-  const remaining = Number(MY_TEAM_DATA.gw_summary?.free_transfers_remaining);
+  // Primary source: backend's known FT entering the planning GW.
+  const freeTransfers = Number(MY_TEAM_DATA.free_transfers);
+  if (Number.isFinite(freeTransfers)) {
+    return Math.max(0, Math.min(5, freeTransfers));
+  }
+  // Fallback: starting FT from the GW summary.
+  const startingFT = Number(
+    MY_TEAM_DATA.gw_summary?.starting_free_transfers
+  );
+  if (Number.isFinite(startingFT)) {
+    return Math.max(0, Math.min(5, startingFT));
+  }
+  // Legacy fallback.
+  const remaining = Number(
+    MY_TEAM_DATA.gw_summary?.free_transfers_remaining
+  );
   if (Number.isFinite(remaining)) {
     return Math.max(0, Math.min(5, remaining));
   }
-  // Backwards compatibility with the old backend.
-  const summaryFT = Number(MY_TEAM_DATA.gw_summary?.free_transfers);
-  if (Number.isFinite(summaryFT)) {
-    const transfersMade = Number(
-      MY_TEAM_DATA.gw_summary?.event_transfers || 0
-    );
-    return Math.max(
-      0,
-      Math.min(5, summaryFT - transfersMade)
-    );
-  }
+
   return 0;
 }
+
 
 
 function updateSimulatorFreeTransferDisplay() {
