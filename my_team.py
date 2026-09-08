@@ -13,14 +13,14 @@ CACHE_DIR.mkdir(exist_ok=True)
 
 def calculate_free_transfers(history: list, chips: list | None = None) -> int:
     """
-    Return free transfers available for the upcoming gameweek.
+    Calculate free transfers available at the start of the current GW.
 
-    We start with 1 FT for GW1.
-    Each completed GW rolls unused FT into the next GW, capped at 5.
+    History should contain completed gameweeks only.
     """
     chips = chips or []
 
     chip_by_gw = {}
+
     for chip in chips:
         if not isinstance(chip, dict):
             continue
@@ -39,23 +39,30 @@ def calculate_free_transfers(history: list, chips: list | None = None) -> int:
     )
 
     for row in rows:
-        transfers = int(row.get("event_transfers", 0) or 0)
-        gw = int(row.get("event", 0))
+        transfers = int(
+            row.get("event_transfers", 0) or 0
+        )
 
+        gw = int(row.get("event", 0))
         chip = chip_by_gw.get(gw)
 
-        # Wildcard / Free Hit do not consume the banked FT.
         if chip in ("wildcard", "freehit"):
             transfers = 0
 
-        # First transfer is free; subsequent transfers are hits.
-        used_free = min(transfers, free_transfers)
+        used_free = min(
+            transfers,
+            free_transfers
+        )
+
         free_transfers -= used_free
 
-        # Move to the next GW.
-        free_transfers = min(5, free_transfers + 1)
+        free_transfers = min(
+            5,
+            free_transfers + 1
+        )
 
-    return max(1, min(5, free_transfers))
+    return max(0, min(5, free_transfers))
+
 
 
 def fetch_my_team(team_id: int) -> dict:
@@ -107,138 +114,304 @@ def fetch_my_team(team_id: int) -> dict:
     time.sleep(0.3)
 
     # 2. Current GW picks (squad selection)
-    # We need to handle Free Hit correctly:
-    # If FH was played last GW, the current picks API returns the FH squad,
-    # but the actual squad for THIS week is the one from before FH.
+    # IMPORTANT:
+    # - current_event is the current FPL GW.
+    # - The current GW picks endpoint is the source of truth for
+    #   the current squad AND current GW financial state.
+    # - Free Hit is the one exception: after a FH, FPL's current
+    #   picks can represent the temporary FH squad, so we restore
+    #   the actual squad from before the FH.
+
     current_event = result["info"]["current_event"]
+
     if current_event:
         try:
-            # First, check if Free Hit was used in the previous GW
-            # by looking at the history/chips endpoint
+            # ---------------------------------------------------------
+            # 2A. Fetch history/chips once
+            # ---------------------------------------------------------
             history_url = f"{FPL_API_BASE}/entry/{team_id}/history/"
-            hist_resp = requests.get(history_url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
+
+            hist_resp = requests.get(
+                history_url,
+                headers={"User-Agent": "FPL-Predictor/1.0"},
+                timeout=15,
+            )
             hist_resp.raise_for_status()
             hist_data = hist_resp.json()
             chips_used = hist_data.get("chips", [])
-            hist_data = hist_resp.json()
-            chips_used = hist_data.get("chips", [])
             history_rows = hist_data.get("current", [])
+
+            result["history"] = history_rows
+            result["chips"] = chips_used
+            result["past_seasons"] = hist_data.get("past", [])
+
+            # ---------------------------------------------------------
+            # 2B. Calculate FREE TRANSFERS AVAILABLE AT START OF GW
+            # ---------------------------------------------------------
             completed_history = [
-                row for row in history_rows
+                row
+                for row in history_rows
                 if int(row.get("event", 0)) < current_event
             ]
-            starting_free_transfers = calculate_free_transfers(completed_history, chips_used)
+
+            starting_free_transfers = calculate_free_transfers(
+                completed_history,
+                chips_used,
+            )
+
             result["free_transfers"] = starting_free_transfers
-            
-            # Check if FH was used in the previous GW (current_event - 1 is the last completed GW)
-            # If current_event is 34, last completed is 33
-            last_completed_gw = current_event -1
-            
+
+            # ---------------------------------------------------------
+            # 2C. Fetch CURRENT GW picks ONCE
+            # ---------------------------------------------------------
+            current_url = (
+                f"{FPL_API_BASE}/entry/"
+                f"{team_id}/event/"
+                f"{current_event}/picks/"
+            )
+
+            current_resp = requests.get(
+                current_url,
+                headers={"User-Agent": "FPL-Predictor/1.0"},
+                timeout=15,
+            )
+            current_resp.raise_for_status()
+
+            current_picks = current_resp.json()
+
+            # This is the authoritative current-GW response.
+            current_pick_list = current_picks.get("picks", [])
+
+            # Current GW financial/transfer state.
+            eh = current_picks.get("entry_history", {})
+
+            current_gw_transfers = int(
+                eh.get("event_transfers", 0) or 0
+            )
+
+            # ---------------------------------------------------------
+            # 2D. Determine whether Free Hit was used LAST GW
+            # ---------------------------------------------------------
+            last_completed_gw = current_event - 1
+
             fh_last_gw = any(
-                c.get("name") == "freehit" and c.get("event") == last_completed_gw
+                str(c.get("name", "")).lower() == "freehit"
+                and int(c.get("event", 0)) == last_completed_gw
                 for c in chips_used
             )
-            
-            # Determine which GW's picks to fetch
+
+            # ---------------------------------------------------------
+            # 2E. Determine which picks should be displayed
+            # ---------------------------------------------------------
             if fh_last_gw and last_completed_gw > 1:
-                # FH was used last GW - get picks from the GW before FH
-                # to restore the "real" squad
+                # Free Hit was used in the previous GW.
+                #
+                # FPL current picks may still represent the temporary
+                # Free Hit squad. For the actual permanent squad,
+                # restore the squad from before the Free Hit.
                 picks_gw = last_completed_gw - 1
+
                 result["fh_revert_from"] = last_completed_gw
                 result["fh_reverted_to"] = picks_gw
+
+                previous_url = (
+                    f"{FPL_API_BASE}/entry/"
+                    f"{team_id}/event/"
+                    f"{picks_gw}/picks/"
+                )
+
+                previous_resp = requests.get(
+                    previous_url,
+                    headers={"User-Agent": "FPL-Predictor/1.0"},
+                    timeout=15,
+                )
+                previous_resp.raise_for_status()
+
+                previous_picks = previous_resp.json()
+
+                result["picks"] = previous_picks.get(
+                    "picks",
+                    []
+                )
+
+                result["active_chip"] = None
+                result["auto_subs"] = []
+
             else:
+                # Normal case:
+                #
+                # USE THE CURRENT GW RESPONSE DIRECTLY.
+                result["picks"] = current_pick_list
+
+                result["active_chip"] = current_picks.get(
+                    "active_chip"
+                )
+
+                result["auto_subs"] = current_picks.get(
+                    "automatic_subs",
+                    []
+                )
+
                 picks_gw = current_event
-            
-            url = f"{FPL_API_BASE}/entry/{team_id}/event/{picks_gw}/picks/"
-            resp = requests.get(url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
-            resp.raise_for_status()
-            picks_data = resp.json()
-            result["picks"] = picks_data.get("picks", [])
-            result["active_chip"] = picks_data.get("active_chip") if picks_gw == current_event else None
-            result["auto_subs"] = picks_data.get("automatic_subs", [])
-            
-            # entry_history has GW-level summary - always use current event for summary
-            current_url = f"{FPL_API_BASE}/entry/{team_id}/event/{current_event}/picks/"
-            current_resp = requests.get(current_url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
-            if current_resp.ok:
-                current_picks = current_resp.json()
-                eh = current_picks.get("entry_history", {})
-            else:
-                eh = picks_data.get("entry_history", {})
-            
+
+            # ---------------------------------------------------------
+            # 2F. Current FPL financial state
+            # ---------------------------------------------------------
             bank_raw = eh.get("bank")
             value_raw = eh.get("value")
 
-            # Fall back to the entry-level deadline values only if the
-            # current picks endpoint did not provide them.
             if bank_raw is None:
-                bank_raw = entry.get("last_deadline_bank", 0)
+                bank_raw = entry.get(
+                    "last_deadline_bank",
+                    0,
+                )
 
             if value_raw is None:
-                value_raw = entry.get("last_deadline_value", 0)
-            current_gw_transfers = int(eh.get("event_transfers", 0) or 0)
-            starting_free_transfers = result["free_transfers"]
+                value_raw = entry.get(
+                    "last_deadline_value",
+                    0,
+                )
 
+            # ---------------------------------------------------------
+            # 2G. Remaining FT / transfer hits
+            # ---------------------------------------------------------
+            free_transfers_remaining = max(
+                0,
+                starting_free_transfers - current_gw_transfers,
+            )
+
+            transfer_hits = max(
+                0,
+                current_gw_transfers - starting_free_transfers,
+            )
+
+            # ---------------------------------------------------------
+            # 2H. GW summary
+            # ---------------------------------------------------------
             result["gw_summary"] = {
                 "event": current_event,
+
                 "points": eh.get("points", 0),
                 "total_points": eh.get("total_points", 0),
+
                 "rank": eh.get("rank", 0),
                 "overall_rank": eh.get("overall_rank", 0),
 
-                # Current FPL bank/value, not last-deadline snapshot.
+                # FPL stores these in tenths of £m.
                 "bank": float(bank_raw or 0) / 10,
                 "value": float(value_raw or 0) / 10,
 
-                "event_transfers": int(eh.get("event_transfers", 0) or 0),
-                "event_transfers_cost": int(eh.get("event_transfers_cost", 0) or 0),
-                "starting_free_transfers": starting_free_transfers,
-                "free_transfers_remaining": max(0, starting_free_transfers - current_gw_transfers),
-                "transfer_hits": max(0, current_gw_transfers - starting_free_transfers),
-                "points_on_bench": eh.get("points_on_bench", 0),
-            }
-            
-            # Store chips for later use (already fetched)
-            result["gw_summary"]["starting_free_transfers"] = (starting_free_transfers)
-            result["gw_summary"]["free_transfers_remaining"] = max(0, starting_free_transfers - current_gw_transfers)
-            result["gw_summary"]["transfer_hits"] = max(0, current_gw_transfers - starting_free_transfers)
-            result["history"] = hist_data.get("current", [])
-            result["chips"] = chips_used
-            result["past_seasons"] = hist_data.get("past", [])
-            result["current_bank"] = result["gw_summary"]["bank"]
-            result["current_team_value"] = result["gw_summary"]["value"]
-            result["current_event_transfers"] = result["gw_summary"]["event_transfers"]
-            result["current_transfer_cost"] = (result["gw_summary"]["event_transfers_cost"])
-            
-        except Exception as e:
-            result["error"] = f"Could not fetch GW picks: {str(e)}"
+                # Transfer state.
+                "event_transfers": current_gw_transfers,
 
-    time.sleep(0.3)
+                "event_transfers_cost": int(
+                    eh.get("event_transfers_cost", 0) or 0
+                ),
+
+                "starting_free_transfers": (
+                    starting_free_transfers
+                ),
+
+                "free_transfers_remaining": (
+                    free_transfers_remaining
+                ),
+
+                "transfer_hits": transfer_hits,
+
+                "points_on_bench": eh.get(
+                    "points_on_bench",
+                    0,
+                ),
+            }
+
+            # Convenience fields.
+            result["current_bank"] = (
+                result["gw_summary"]["bank"]
+            )
+
+            result["current_team_value"] = (
+                result["gw_summary"]["value"]
+            )
+
+            result["current_event_transfers"] = (
+                result["gw_summary"]["event_transfers"]
+            )
+
+            result["current_transfer_cost"] = (
+                result["gw_summary"]["event_transfers_cost"]
+            )
+
+            # ---------------------------------------------------------
+            # 2I. DEBUG — KEEP THIS TEMPORARILY
+            # ---------------------------------------------------------
+            result["debug_fpl"] = {
+                "current_event": current_event,
+
+                "picks_event": picks_gw,
+
+                # Actual current GW response from FPL.
+                "current_pick_ids": [
+                    pick.get("element")
+                    for pick in current_pick_list
+                ],
+
+                # Squad that we are actually returning to frontend.
+                "returned_pick_ids": [
+                    pick.get("element")
+                    for pick in result["picks"]
+                ],
+
+                "event_transfers": current_gw_transfers,
+
+                "bank_raw": bank_raw,
+                "value_raw": value_raw,
+
+                "starting_free_transfers": (
+                    starting_free_transfers
+                ),
+
+                "free_transfers_remaining": (
+                    free_transfers_remaining
+                ),
+
+                "fh_last_gw": fh_last_gw,
+                "picks_gw": picks_gw,
+            }
+
+        except Exception as e:
+            result["error"] = (
+                f"Could not fetch GW picks: {str(e)}"
+            )
+
 
     # 3. Transfer history
     try:
         url = f"{FPL_API_BASE}/entry/{team_id}/transfers/"
-        resp = requests.get(url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
+        resp = requests.get(url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15,)
         resp.raise_for_status()
-        result["transfers"] = resp.json()[:20]  # Last 20 transfers
-    except Exception:
-        pass
+        all_transfers = resp.json()
 
-    # Skip re-fetching history if already fetched above
-    if "history" not in result or not result["history"]:
-        time.sleep(0.3)
+        # Keep the latest 20 for normal app usage.
+        result["transfers"] = all_transfers[:20]
 
-        # 4. Season history (GW-by-GW)
-        try:
-            url = f"{FPL_API_BASE}/entry/{team_id}/history/"
-            resp = requests.get(url, headers={"User-Agent": "FPL-Predictor/1.0"}, timeout=15)
-            resp.raise_for_status()
-            hist = resp.json()
-            result["history"] = hist.get("current", [])
-            result["chips"] = hist.get("chips", [])
-            result["past_seasons"] = hist.get("past", [])
-        except Exception:
-            pass
+        # But inspect all returned transfers for the current GW.
+        current_gw_transfer_rows = [
+            t
+            for t in all_transfers
+            if int(t.get("event", 0)) == current_event
+        ]
+
+        if "debug_fpl" not in result:
+            result["debug_fpl"] = {}
+
+        result["debug_fpl"][
+            "transfers_this_gw"
+        ] = current_gw_transfer_rows
+
+    except Exception as e:
+        if "debug_fpl" not in result:
+            result["debug_fpl"] = {}
+        result["debug_fpl"]["transfer_history_error"] = str(e)    
 
     return result
 
@@ -261,14 +434,6 @@ def enrich_my_team(team_data: dict, player_map: dict, predictions: list) -> dict
 
         enriched = {
             "player_id": pid,
-            # From our predictions (which already have the right field names)
-            "name": pred.get("name", "Unknown"),
-            "full_name": pred.get("full_name", "Unknown"),
-            "team": pred.get("team", "???"),
-            "team_name": pred.get("team_name", "Unknown"),
-            "position": pred.get("position", "???"),
-            "position_id": pred.get("position_id", 0),
-            "price": pred.get("price", 0),
             "purchase_price": (
                 float(pick["purchase_price"]) / 10
                 if pick.get("purchase_price") is not None
@@ -278,7 +443,15 @@ def enrich_my_team(team_data: dict, player_map: dict, predictions: list) -> dict
                 float(pick["selling_price"]) / 10
                 if pick.get("selling_price") is not None
                 else None
-            ),
+            ),            
+            # From our predictions (which already have the right field names)
+            "name": pred.get("name", "Unknown"),
+            "full_name": pred.get("full_name", "Unknown"),
+            "team": pred.get("team", "???"),
+            "team_name": pred.get("team_name", "Unknown"),
+            "position": pred.get("position", "???"),
+            "position_id": pred.get("position_id", 0),
+            "price": pred.get("price", 0),
             "selected_by_percent": pred.get("selected_by_percent", "0"),
             "form": pred.get("form", 0),
             "ppg": pred.get("ppg", 0),
