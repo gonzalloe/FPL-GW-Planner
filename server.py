@@ -1517,6 +1517,7 @@ def api_my_team():
             "recent_transfers": enriched.get("transfers", [])[:10],
             "history": enriched.get("history", [])[-10:],
             "free_transfers": free_transfers,
+            "debug_fpl": team_data.get("debug_fpl"),
         })
     except ValueError:
         return jsonify({"error": "Invalid team ID"}), 400

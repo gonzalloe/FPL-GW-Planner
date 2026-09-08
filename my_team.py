@@ -11,16 +11,56 @@ from config import FPL_API_BASE
 CACHE_DIR = Path(__file__).parent / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
-def calculate_free_transfers(history: list, chips: list | None = None) -> int:
+def calculate_free_transfers(
+    history: list,
+    chips: list | None = None,
+) -> int:
     """
-    Calculate free transfers available at the start of the next GW.
-    Start with 1 FT.
-    Unused FT rolls forward, capped at 5.
-    Transfers made during a GW consume available FT.
+    Calculate free transfers available for the next Gameweek.
+
+    FPL FT logic:
+    - Pre-GW1/preseason transfers are unlimited and are NOT part
+      of the normal FT bank.
+    - A manager starts GW2 with 1 FT.
+    - Unused FTs roll forward.
+    - Maximum bank is 5 FTs.
+    - Transfers consume the available FT bank.
+    - Any transfers beyond the available FT bank are hits.
+    - Free Hit and Wildcard transfers do not consume FTs.
+    - The FT earned after a GW is effectively the unused FT carried
+      into that GW plus the normal 1 FT earned for the following GW,
+      capped at 5.
+
+    Examples:
+
+        GW1 preseason/unlimited
+            -> GW2 starts with 1 FT
+
+        GW2: use 0
+            -> GW3 starts with 2 FT
+
+        GW3: use 0
+            -> GW4 starts with 3 FT
+
+        GW4: use 3
+            -> GW5 starts with 1 FT
+
+        GW2: use 1
+            -> GW3 starts with 1 FT
+
+        GW2: use 0
+        GW3: use 1
+            -> GW4 starts with 1 FT
     """
+
     chips = chips or []
 
+    # ------------------------------------------------------------
+    # Build chip lookup by GW
+    # ------------------------------------------------------------
+
     chip_by_gw = {}
+
     for chip in chips:
         if not isinstance(chip, dict):
             continue
@@ -29,47 +69,115 @@ def calculate_free_transfers(history: list, chips: list | None = None) -> int:
         if event is None:
             continue
 
-        chip_by_gw[int(event)] = str(
+        try:
+            event = int(event)
+        except (TypeError, ValueError):
+            continue
+
+        chip_name = str(
             chip.get("name", "")
-        ).lower()
+        ).strip().lower()
 
-    free_transfers = 1
+        chip_by_gw[event] = chip_name
 
-    rows = sorted(
-        history or [],
+    # ------------------------------------------------------------
+    # History rows
+    # ------------------------------------------------------------
+
+    rows = []
+
+    for row in history or []:
+        if not isinstance(row, dict):
+            continue
+
+        try:
+            gw = int(row.get("event", 0))
+        except (TypeError, ValueError):
+            continue
+
+        if gw <= 0:
+            continue
+
+        rows.append(row)
+
+    rows.sort(
         key=lambda row: int(row.get("event", 0))
     )
 
+    # ------------------------------------------------------------
+    # IMPORTANT:
+    #
+    # GW1 is the preseason/unlimited-transfer starting point.
+    #
+    #     GW1 -> GW2 = 1 FT
+    # ------------------------------------------------------------
+
+    free_transfers = 1
+
     for row in rows:
         gw = int(row.get("event", 0))
+
+        # GW1 establishes the first normal FT for GW2.
+        if gw == 1:
+            continue
+
         transfers = int(
             row.get("event_transfers", 0) or 0
         )
 
-        chip = chip_by_gw.get(gw)
+        chip = chip_by_gw.get(gw, "")
 
-        # Free Hit / Wildcard do not consume FTs.
-        if chip in ("freehit", "wildcard"):
+        # --------------------------------------------------------
+        # Free Hit / Wildcard
+        #
+        # Transfers during these chips do not consume the FT bank.
+        # --------------------------------------------------------
+
+        if chip in {
+            "freehit",
+            "free_hit",
+            "wildcard",
+        }:
             transfers = 0
 
-        # Consume available FT with transfers made in this GW.
-        used_free = min(
+        # --------------------------------------------------------
+        # Consume available FTs.
+        #
+        # Anything above this amount is a hit, but this function
+        # only calculates the FT bank.
+        # --------------------------------------------------------
+
+        used_free_transfers = min(
             transfers,
-            free_transfers
+            free_transfers,
         )
 
-        free_transfers -= used_free
+        free_transfers -= used_free_transfers
 
-        # One new FT is added for the next GW.
+        # --------------------------------------------------------
+        # Earn one FT for the next GW.
+        #
+        # Example:
+        #
+        # entering GW3 = 2
+        # use 0
+        # -> 3 entering GW4
+        #
+        # entering GW4 = 3
+        # use 3
+        # -> 1 entering GW5
+        # --------------------------------------------------------
+
         free_transfers = min(
             5,
-            free_transfers + 1
+            free_transfers + 1,
         )
 
     return max(
         1,
-        min(5, free_transfers)
+        min(5, free_transfers),
     )
+
 
 
 def fetch_my_team(team_id: int) -> dict:
@@ -347,16 +455,6 @@ def fetch_my_team(team_id: int) -> dict:
 
     # ================================================================
     # 5. CALCULATE FT ENTERING PLANNING GW
-    #
-    # Example:
-    #
-    # GW1: 1 FT, use 0
-    # GW2: 2 FT, use 0
-    # GW3: 3 FT, use 0
-    #
-    # Entering GW4 = 4 FT
-    #
-    # This is the FT bank BEFORE GW4 early transfers.
     # ================================================================
 
     completed_history = [
@@ -365,10 +463,8 @@ def fetch_my_team(team_id: int) -> dict:
         if int(row.get("event", 0)) <= completed_gw
     ]
 
-    starting_free_transfers = calculate_free_transfers(
-        completed_history,
-        chips_used,
-    )
+    starting_free_transfers = calculate_free_transfers(completed_history, chips_used,)
+    result["free_transfers"] = starting_free_transfers
 
     # ================================================================
     # 6. IDENTIFY TRANSFERS FOR COMPLETED + PLANNING GW
@@ -605,10 +701,7 @@ def fetch_my_team(team_id: int) -> dict:
     if free_hit_gw is not None:
         # The actual squad entering the next GW is the squad
         # from before the Free Hit.
-        revert_gw = max(
-            1,
-            completed_gw - 1,
-        )
+        revert_gw = max(1,completed_gw - 1)
 
         try:
             revert_url = (
