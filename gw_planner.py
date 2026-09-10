@@ -691,8 +691,7 @@ class GWPlanner:
         return self.build_fixture_ticker(list(team_ids))
 
     # ── Convenience: Plan from FPL Team ID ────────────────────
-
-    def plan_from_team_id(self, team_id: int, horizon: int = None) -> dict:
+    def plan_from_team_id(self, team_id: int, horizon: int = None, free_transfers: int | None = None) -> dict:
         """
         Convenience method: fetch team from FPL API and generate plan.
         """
@@ -759,35 +758,27 @@ class GWPlanner:
             f"available={chips_available}"
         )
 
-        # Estimate free transfers (FPL doesn't expose this directly)
-        history = team_data.get("history", []) or []
+        ## ------------------------------------------------------------
+        # Free transfers
+        # ------------------------------------------------------------
+        # my_team.py is the single source of truth for the current FT
+        # balance. Do NOT reconstruct it again from history here.
+        # ------------------------------------------------------------
 
-        def reconstruct_free_transfers(history, next_gw):
-            ft = 1
-            for gw_history in history:
-                event = gw_history.get("event")
-                if event is None:
-                    continue
-                event = int(event)
-                # Only process completed GWs before the planning GW.
-                if event >= next_gw:
-                    continue
-                transfers_made = int(gw_history.get("event_transfers", 0) or 0)
-                # Transfers made this GW consume available FTs first.
-                ft = max(0, ft - transfers_made)
-                # One new FT is earned for the following GW.
-                ft = min(5, ft + 1)
-            return max(1, ft)
-        ft = reconstruct_free_transfers(history, self.next_gw)
+        gw_summary = team_data.get("gw_summary", {}) or {}
 
-        #debug print
+        if free_transfers is not None:
+            ft = int(free_transfers)
+            ft_source = "argument"
+        else:
+            ft = int(gw_summary.get("free_transfers", 1))
+            ft_source = "my_team"
+
         print(
-            f"[FT] next_gw={self.next_gw} "
-            f"history_gws={[h.get('event') for h in history]} "
-            f"transfers={[h.get('event_transfers', 0) for h in history]} "
-            f"reconstructed_ft={ft}"
+            f"[FT] planning_gw={self.next_gw} "
+            f"free_transfers={ft} "
+            f"source={ft_source}"
         )
-
 
         plan = self.plan_transfers(
             current_squad_ids=squad_ids,
@@ -807,6 +798,6 @@ class GWPlanner:
         plan["chips_remaining"] = chips_available
         plan["free_transfers"] = ft
         plan["estimated_free_transfers"] = ft
-        plan["free_transfers_source"] = "reconstructed_from_history"
+        plan["free_transfers_source"] = ft_source
 
         return plan

@@ -361,42 +361,8 @@ def fetch_my_team(team_id: int) -> dict:
         # We can still use current_event as a fallback.
         events = []
 
-    completed_gw = current_event
-
-    # If current_event exists but is not finished,
-    # the latest completed GW is current_event - 1.
-    current_event_data = next(
-        (
-            event
-            for event in events
-            if int(event.get("id", 0)) == current_event
-        ),
-        None,
-    )
-
-    if current_event_data is not None:
-        if not current_event_data.get(
-            "finished",
-            False,
-        ):
-            completed_gw = max(
-                0,
-                current_event - 1,
-            )
-
-    # Prefer the highest explicitly finished GW.
-    finished_events = [
-        int(event.get("id", 0))
-        for event in events
-        if event.get("finished", False)
-    ]
-
-    if finished_events:
-        completed_gw = max(
-            finished_events
-        )
-
-    planning_gw = completed_gw + 1
+    planning_gw = current_event
+    completed_gw = max(0, planning_gw - 1)
 
     result["info"]["completed_gw"] = completed_gw
     result["info"]["planning_gw"] = planning_gw
@@ -486,6 +452,25 @@ def fetch_my_team(team_id: int) -> dict:
             completed_history,
             chips_used,
         )
+    )
+
+    # debug print
+    print(
+        "[FT DEBUG]",
+        {
+            "current_event": current_event,
+            "completed_gw": completed_gw,
+            "planning_gw": planning_gw,
+            "history_events": [
+                int(row.get("event", 0))
+                for row in completed_history
+            ],
+            "event_transfers": [
+                int(row.get("event_transfers", 0) or 0)
+                for row in completed_history
+            ],
+            "starting_free_transfers": starting_free_transfers,
+        }
     )
 
     result["starting_free_transfers"] = (
