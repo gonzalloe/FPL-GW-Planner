@@ -11,10 +11,7 @@ from config import FPL_API_BASE
 CACHE_DIR = Path(__file__).parent / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
-def calculate_free_transfers(
-    history: list,
-    chips: list | None = None,
-) -> int:
+def calculate_free_transfers(history: list, chips: list | None = None) -> int:
     """
     Calculate free transfers available for the next Gameweek.
 
@@ -349,6 +346,38 @@ def fetch_my_team(team_id: int) -> dict:
     # ================================================================
     # 2. FETCH BOOTSTRAP AND DETERMINE COMPLETED / PLANNING GW
     # ================================================================
+    events = []
+
+    try:
+        bootstrap_url = f"{FPL_API_BASE}/bootstrap-static/"
+        bootstrap_resp = requests.get(
+            bootstrap_url,
+            headers=headers,
+            timeout=15,
+        )
+        bootstrap_resp.raise_for_status()
+
+        bootstrap_data = bootstrap_resp.json()
+        events = bootstrap_data.get("events", []) or []
+
+    except Exception as e:
+        print(f"[GW] Could not fetch bootstrap events: {e}")
+        events = []
+
+    #debug print
+    print(
+        "[GW DEBUG]",
+        {
+            "current_event": current_event,
+            "current_finished": (
+                current_event_data.get("finished")
+                if current_event_data
+                else None
+            ),
+            "completed_gw": completed_gw,
+            "planning_gw": planning_gw,
+        }
+    )
 
     current_event_data = next(
         (
@@ -428,15 +457,6 @@ def fetch_my_team(team_id: int) -> dict:
     #
     # Then each completed GW rolls unused FT forward.
     #
-    # Therefore:
-    #
-    #     GW1: 1 FT
-    #     GW2: 2 FT if GW1 unused
-    #     GW3: 3 FT if GW1 + GW2 unused
-    #     GW4: 4 FT if GW1 + GW2 + GW3 unused
-    #
-    # capped at 5.
-    #
     # NOTE:
     # We pass ONLY completed GWs.
     # We must NOT include planning_gw here because those transfers
@@ -449,31 +469,25 @@ def fetch_my_team(team_id: int) -> dict:
         if int(row.get("event", 0)) <= completed_gw
     ]
 
-    starting_free_transfers = (
-        calculate_free_transfers(
-            completed_history,
-            chips_used,
-        )
-    )
+    starting_free_transfers = calculate_free_transfers(completed_history, chips_used)
 
     # debug print
     print(
         "[FT DEBUG]",
         {
-            "current_event": current_event,
             "completed_gw": completed_gw,
             "planning_gw": planning_gw,
-            "history_events": [
-                int(row.get("event", 0))
-                for row in completed_history
-            ],
-            "event_transfers": [
-                int(row.get("event_transfers", 0) or 0)
-                for row in completed_history
-            ],
             "starting_free_transfers": starting_free_transfers,
+            "history": [
+                {
+                    "event": row.get("event"),
+                    "event_transfers": row.get("event_transfers"),
+                }
+                for row in completed_history
+            ],
         }
     )
+
 
     result["starting_free_transfers"] = (
         starting_free_transfers
