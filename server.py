@@ -1006,13 +1006,6 @@ def ask_dify(user_message, conversation_id=None):
         }
 
     fpl_context = build_fpl_context(user_message)
-    # debug temp
-    print("[DIFY DEBUG] fpl_context chars:", len(fpl_context))
-    print("[DIFY DEBUG] context approx tokens:", len(fpl_context) / 4)
-    print("[DIFY DEBUG] first 500 chars:")
-    print(fpl_context[:500])
-    print("[DIFY DEBUG] user question:", user_message)
-
     headers = {
         "Authorization": f"Bearer {DIFY_API_KEY}",
         "Content-Type": "application/json"
@@ -1047,12 +1040,6 @@ def ask_dify(user_message, conversation_id=None):
             )
         response.raise_for_status()
         data = response.json()
-        #debug temp
-        print("[DIFY DEBUG] answer length:", len(data.get("answer","")))
-        print("[DIFY DEBUG] conversation_id:", conversation_id)
-        print("[DIFY DEBUG] ending:")
-        print(data.get("answer","")[-300:])
-        print(json.dumps(data, indent=2))
     
         return {
             "answer": data.get("answer", "No response from AI."),

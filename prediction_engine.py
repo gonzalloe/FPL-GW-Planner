@@ -500,16 +500,6 @@ class PredictionEngine:
         from data_fetcher import get_previous_season_team_stats, get_promoted_team_priors
         real_priors = get_previous_season_team_stats(self.bootstrap, self.teams)
         fallback_priors = get_promoted_team_priors(self.bootstrap, self.teams, real_priors)
-        #debug temp
-        DEBUG_MODE = False
-        if DEBUG_MODE is True:
-            print("\n=== FINAL TEAM PRIORS ===")
-            for tid, p in {**fallback_priors, **real_priors}.items():
-                print(
-                    self.teams[tid]["name"],
-                    "GF:", p["gf_per_game"],
-                    "GA:", p["ga_per_game"]
-                )
         merged = dict(fallback_priors)  # promoted teams start here
         merged.update(real_priors)      # established teams overwrite with real data
         # Store promoted teams automatically
@@ -1423,20 +1413,6 @@ class PredictionEngine:
         observed_start_rate = None
         observed_avg_mins = None
         has_competition_evidence = False
-
-        # ============================================================
-        # DEBUG PLAYERS
-        # ============================================================
-
-        DEBUG_PLAYERS = {
-            "Meslier",
-            "Trafford",
-            "Kinsky",
-            "Arrizabalaga",
-            "Raya",
-            "Haaland",
-        }
-        debug_player = p.get("web_name") in DEBUG_PLAYERS
 
         # ============================================================
         # 1. PLAYER HISTORICAL ROLE PRIOR
