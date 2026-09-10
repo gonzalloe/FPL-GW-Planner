@@ -571,22 +571,6 @@ class PredictionEngine:
                     p["_previous_team_id"] = None
                     p["_is_new_transfer"] = False
 
-                # Debug
-                if p.get("web_name") in {
-                    "Haaland",
-                    "Savinho",
-                    "Donnarumma",
-                    "Meslier",
-                    "Kinsky",
-                }:
-                    print(
-                        f"[TRANSFER DEBUG] {p.get('web_name')} "
-                        f"current_team_id={current_team_id} "
-                        f"previous_team_id={previous_team_id} "
-                        f"is_new_transfer={p.get('_is_new_transfer')} "
-                        f"previous_season={p.get('_previous_season_name')}"
-                    )
-
                 # Store attacking priors too.
                 if rates:
                     prior_xg = rates.get("xg_per90") or prior_xg

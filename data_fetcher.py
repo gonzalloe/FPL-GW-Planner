@@ -345,23 +345,13 @@ def get_previous_season_player_team(player_code: int, previous_season_name: str 
 
 def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict:
     """
-    Return role/attacking data from the IMMEDIATELY previous completed
-    Premier League season only.
+    Return data from the immediately previous completed Premier League season.
 
-    Example:
+    Players need at least 450 minutes for statistical priors.
+    Players below 450 minutes still return their previous team
+    so new-transfer detection works correctly.
 
-        Current season 2026/27
-            ↓
-        Previous season 2025/26
-
-    IMPORTANT:
-        We deliberately do NOT fall back to older seasons.
-
-    If the immediately previous season has no meaningful sample,
-    return {}.
-
-    This prevents old historical seasons from contaminating GW1 role
-    predictions.
+    Do not fall back to older seasons.
     """
 
     try:
@@ -391,9 +381,7 @@ def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict
     previous_season = None
 
     for season in history_past:
-        season_name = str(
-            season.get("season_name", "")
-        ).strip().replace("-", "/")
+        season_name = str(season.get("season_name", "")).strip().replace("-", "/")
 
         if season_name == normalized_previous:
             previous_season = season
