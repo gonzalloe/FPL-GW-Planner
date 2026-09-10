@@ -261,6 +261,21 @@ def fetch_my_team(team_id: int) -> dict:
 
         entry = entry_resp.json()
 
+        # debug print 
+        print(
+            "[ENTRY TRANSFERS]",
+            json.dumps(
+                entry.get("transfers"),
+                indent=2,
+                sort_keys=True,
+            ),
+        )
+
+        print(
+            "[ENTRY TRANSFERS LIMIT]",
+            entry.get("transfers_limit"),
+        )
+
     except Exception as e:
         result["error"] = (
             f"Could not fetch team info: {str(e)}"
@@ -335,34 +350,21 @@ def fetch_my_team(team_id: int) -> dict:
     # 2. FETCH BOOTSTRAP AND DETERMINE COMPLETED / PLANNING GW
     # ================================================================
 
-    events = []
+    current_event_data = next(
+        (
+            event
+            for event in events
+            if int(event.get("id", 0)) == current_event
+        ),
+        None,
+    )
 
-    try:
-        bootstrap_url = (
-            f"{FPL_API_BASE}/bootstrap-static/"
-        )
-
-        bootstrap_resp = requests.get(
-            bootstrap_url,
-            headers=headers,
-            timeout=15,
-        )
-
-        bootstrap_resp.raise_for_status()
-
-        bootstrap_data = bootstrap_resp.json()
-
-        events = bootstrap_data.get(
-            "events",
-            [],
-        )
-
-    except Exception:
-        # We can still use current_event as a fallback.
-        events = []
-
-    planning_gw = current_event
-    completed_gw = max(0, planning_gw - 1)
+    if current_event_data and current_event_data.get("finished", False):
+        completed_gw = current_event
+        planning_gw = current_event + 1
+    else:
+        completed_gw = max(0, current_event - 1)
+        planning_gw = current_event
 
     result["info"]["completed_gw"] = completed_gw
     result["info"]["planning_gw"] = planning_gw
@@ -534,6 +536,7 @@ def fetch_my_team(team_id: int) -> dict:
             ) == completed_gw
         ]
 
+    # ================================================================
     # IMPORTANT:
     #
     # An empty transfer list is not enough to conclude that the user
@@ -546,12 +549,13 @@ def fetch_my_team(team_id: int) -> dict:
     # Before the planning GW deadline, [] means UNKNOWN.
     # ================================================================
 
-    if planning_gw <= current_event:
+    if planning_gw < current_event:
         early_transfers_known = True
     elif planning_transfers:
         early_transfers_known = True
     else:
         early_transfers_known = False
+
 
     planning_transfer_count = (
         len(planning_transfers)
