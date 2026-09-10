@@ -534,28 +534,35 @@ class PredictionEngine:
             prior_xg = POSITION_XG_PRIOR.get(pos, 0.15)
             prior_xa = POSITION_XA_PRIOR.get(pos, 0.10)
             prior_bonus = POSITION_BONUS_PRIOR.get(pos, 0.20)
+
             # Load previous-season data once
             if not p.get("_prior_loaded", False):
                 rates = {}
-                try: 
-                    rates = get_last_season_rates(pid, bootstrap=self.bootstrap) 
+
+                try:
+                    rates = get_last_season_rates(pid, bootstrap=self.bootstrap,)
                 except Exception:
-                    rates = {}     
+                    rates = {}
+
+                # Always initialize these per player.
+                current_team_id = p.get("team")
+                previous_team_id = None
+
                 if rates:
                     p["previous_minutes"] = int(rates.get("minutes", 0) or 0)
                     p["previous_starts"] = int(rates.get("starts", 0) or 0)
                     p["previous_games"] = int(rates.get("games", 38) or 38)
                     p["_previous_season_name"] = rates.get("season_name", "")
-                    p["_previous_team_id"] = rates.get("previous_team_id")
-                
-                    # NEW: current club differs from previous club                        
-                    current_team_id = p.get("team")
-                    previous_team_id = p.get("_previous_team_id")
+                    previous_team_id = rates.get("previous_team_id")
+                    p["_previous_team_id"] = previous_team_id
+
+                    # Current club differs from previous club.
                     p["_is_new_transfer"] = (
                         previous_team_id is not None
                         and current_team_id is not None
                         and int(previous_team_id) != int(current_team_id)
                     )
+
                 else:
                     p["previous_minutes"] = 0
                     p["previous_starts"] = 0
@@ -564,7 +571,7 @@ class PredictionEngine:
                     p["_previous_team_id"] = None
                     p["_is_new_transfer"] = False
 
-                # debug print
+                # Debug
                 if p.get("web_name") in {
                     "Haaland",
                     "Savinho",
@@ -579,31 +586,17 @@ class PredictionEngine:
                         f"is_new_transfer={p.get('_is_new_transfer')} "
                         f"previous_season={p.get('_previous_season_name')}"
                     )
-            
-                # Store attacking priors too 
-                if rates: 
-                    prior_xg = rates.get("xg_per90") or prior_xg 
-                    prior_xa = rates.get("xa_per90") or prior_xa 
-                    prior_bonus = rates.get("bonus_per_start") or prior_bonus 
-                p["_prior_xg_per90"] = prior_xg 
-                p["_prior_xa_per90"] = prior_xa 
-                p["_prior_bonus_per_start"] = prior_bonus 
+
+                # Store attacking priors too.
+                if rates:
+                    prior_xg = rates.get("xg_per90") or prior_xg
+                    prior_xa = rates.get("xa_per90") or prior_xa
+                    prior_bonus = (rates.get("bonus_per_start") or prior_bonus)
+
+                p["_prior_xg_per90"] = prior_xg
+                p["_prior_xa_per90"] = prior_xa
+                p["_prior_bonus_per_start"] = prior_bonus
                 p["_prior_loaded"] = True
-
-            else: 
-                # Reuse already-loaded values 
-                p["_prior_xg_per90"] = p.get("_prior_xg_per90", prior_xg) 
-                p["_prior_xa_per90"] = p.get("_prior_xa_per90", prior_xa) 
-                p["_prior_bonus_per_start"] = p.get( "_prior_bonus_per_start", prior_bonus )
-
-            # Recent form / role data
-            try: 
-                recent = get_recent_gw_stats(pid, window=5) 
-            except Exception: 
-                recent = {} 
-            p["_recent_start_rate"] = recent.get("recent_start_rate") 
-            p["_recent_avg_mins"] = recent.get("recent_avg_mins") 
-            p["_recent_games"] = recent.get("recent_games", 0)
 
     # ──────────────────────────────────────────────────────────
     #  Public API

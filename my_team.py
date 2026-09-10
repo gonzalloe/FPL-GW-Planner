@@ -255,23 +255,7 @@ def fetch_my_team(team_id: int) -> dict:
         )
 
         entry_resp.raise_for_status()
-
         entry = entry_resp.json()
-
-        # debug print 
-        print(
-            "[ENTRY TRANSFERS]",
-            json.dumps(
-                entry.get("transfers"),
-                indent=2,
-                sort_keys=True,
-            ),
-        )
-
-        print(
-            "[ENTRY TRANSFERS LIMIT]",
-            entry.get("transfers_limit"),
-        )
 
     except Exception as e:
         result["error"] = (
@@ -381,21 +365,6 @@ def fetch_my_team(team_id: int) -> dict:
         completed_gw = max(0, current_event - 1)
         planning_gw = current_event
 
-    #debug print
-    print(
-        "[GW DEBUG]",
-        {
-            "current_event": current_event,
-            "current_finished": (
-                current_event_data.get("finished")
-                if current_event_data
-                else None
-            ),
-            "completed_gw": completed_gw,
-            "planning_gw": planning_gw,
-        }
-    )
-
     result["info"]["completed_gw"] = completed_gw
     result["info"]["planning_gw"] = planning_gw
 
@@ -472,27 +441,7 @@ def fetch_my_team(team_id: int) -> dict:
 
     starting_free_transfers = calculate_free_transfers(completed_history, chips_used)
 
-    # debug print
-    print(
-        "[FT DEBUG]",
-        {
-            "completed_gw": completed_gw,
-            "planning_gw": planning_gw,
-            "starting_free_transfers": starting_free_transfers,
-            "history": [
-                {
-                    "event": row.get("event"),
-                    "event_transfers": row.get("event_transfers"),
-                }
-                for row in completed_history
-            ],
-        }
-    )
-
-
-    result["starting_free_transfers"] = (
-        starting_free_transfers
-    )
+    result["starting_free_transfers"] = (starting_free_transfers)
 
     # ================================================================
     # 5. FETCH TRANSFER HISTORY

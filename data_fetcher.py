@@ -300,7 +300,6 @@ def get_previous_season_player_team(player_code: int, previous_season_name: str 
         )
 
         code = int(player_code)
-
         previous_team_id = None
 
         for row in player_rows:
@@ -388,12 +387,7 @@ def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict
     if not previous_season_name:
         return {}
 
-    normalized_previous = (
-        previous_season_name
-        .replace("-", "/")
-        .strip()
-    )
-
+    normalized_previous = previous_season_name.replace("-", "/").strip()
     previous_season = None
 
     for season in history_past:
@@ -414,48 +408,19 @@ def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict
     # MEANINGFUL SAMPLE CHECK
     # ============================================================
 
-    mins = int(
-        previous_season.get("minutes", 0) or 0
-    )
-
+    mins = int(previous_season.get("minutes", 0) or 0)
     if mins < 450:
         return {}
-
-    starts = int(
-        previous_season.get("starts", 0) or 0
-    )
-
+    starts = int(previous_season.get("starts", 0) or 0)
     if starts <= 0:
-        # Defensive fallback for historical API records that do not
-        # expose starts reliably.
-        starts = max(
-            round(mins / 75),
-            1,
-        )
-
-    games = int(
-        previous_season.get("appearances", 0) or 0
-    )
-
+        # Defensive fallback for historical API records that do not expose starts reliably.
+        starts = max(round(mins / 75), 1)
+    games = int(previous_season.get("appearances", 0) or 0)
     if games <= 0:
-        games = max(
-            round(mins / 75),
-            starts,
-            1,
-        )
-
-    xg = float(
-        previous_season.get("expected_goals", 0) or 0
-    )
-
-    xa = float(
-        previous_season.get("expected_assists", 0) or 0
-    )
-
-    bonus = int(
-        previous_season.get("bonus", 0) or 0
-    )
-
+        games = max(round(mins / 75), starts, 1)
+    xg = float(previous_season.get("expected_goals", 0) or 0)
+    xa = float(previous_season.get("expected_assists", 0) or 0)
+    bonus = int(previous_season.get("bonus", 0) or 0)
     per90 = mins / 90.0
 
     # ============================================================

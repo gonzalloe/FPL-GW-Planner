@@ -2799,34 +2799,16 @@ def api_season_chips():
 
             planner = SeasonChipPlanner(
                 bootstrap=bootstrap,
-
                 fixtures=fixtures,
-
                 teams=teams,
-
                 players=players,
-
                 next_gw=next_gw,
-
                 baseline_predictions=baseline_predictions,
-            )
-
-            print(
-                "[CHIP DEBUG] next_gw=",
-                next_gw,
-
-                "squad_ids=",
-                len(squad_ids or []),
-
-                "baseline_predictions=",
-                len(baseline_predictions),
             )
 
             result = planner.analyze_season(
                 chips_available=chips_available,
-
                 current_squad_ids=squad_ids,
-
                 bank=bank,
             )
 
@@ -2841,12 +2823,9 @@ def api_season_chips():
             del bootstrap
 
             import gc
-
             gc.collect()
 
-            print(
-                "[CHIP] Lightweight season-chip analysis complete."
-            )
+            print("[CHIP] Lightweight season-chip analysis complete.")
 
         except Exception:
             import traceback
@@ -2905,33 +2884,12 @@ def api_season_chips():
             ),
         }
 
-        result[
-            "user_chips_available"
-        ] = chips_available
-
-        print(
-            "[CHIP INVENTORY]",
-            "current_half=",
-            current_half,
-            "usage=",
-            chip_usage,
-            "available_current_half=",
-            chips_available,
-        )
-
-        result[
-            "user_chips_used"
-        ] = [
+        result["user_chips_available"] = chips_available
+        result[ "user_chips_used"] = [
             {
                 "name": c.get("name"),
-
-                "code": cmap.get(
-                    c.get("name", ""),
-                    "?"
-                ),
-
+                "code": cmap.get(c.get("name", ""), "?"),
                 "gw": c.get("event"),
-
                 "half": (
                     2
                     if c.get("event", 0)
@@ -2943,20 +2901,13 @@ def api_season_chips():
             for c in chips_used_list
             if isinstance(c, dict)
         ]
-
         result["current_half"] = (
             current_half
             if settings.get("team_id")
             else 2
         )
-
-        result[
-            "half_cutoff"
-        ] = HALF_CUTOFF
-
-        result["all_used"] = (
-            len(chips_available) == 0
-        )
+        result["half_cutoff"] = HALF_CUTOFF
+        result["all_used"] = (len(chips_available) == 0)
 
         return jsonify(result)
 
