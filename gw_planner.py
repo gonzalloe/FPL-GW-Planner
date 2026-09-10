@@ -760,18 +760,34 @@ class GWPlanner:
         )
 
         # Estimate free transfers (FPL doesn't expose this directly)
-        # If they made 0 transfers last GW, they gained 1 FT (max 5)
-        history = team_data.get("history", [])
-        if history:
-            last_gw = history[-1]
-            last_transfers = last_gw.get("event_transfers", 0)
-            # Rough estimate: if 0 transfers, probably have 2+ FT
-            if last_transfers == 0 and len(history) >= 2:
-                ft = min(5, 2)  # Conservative estimate
-            else:
-                ft = 1
-        else:
+        history = team_data.get("history", []) or []
+
+        def reconstruct_free_transfers(history, next_gw):
             ft = 1
+            for gw_history in history:
+                event = gw_history.get("event")
+                if event is None:
+                    continue
+                event = int(event)
+                # Only process completed GWs before the planning GW.
+                if event >= next_gw:
+                    continue
+                transfers_made = int(gw_history.get("event_transfers", 0) or 0)
+                # Transfers made this GW consume available FTs first.
+                ft = max(0, ft - transfers_made)
+                # One new FT is earned for the following GW.
+                ft = min(5, ft + 1)
+            return max(1, ft)
+        ft = reconstruct_free_transfers(history, self.next_gw)
+
+        #debug print
+        print(
+            f"[FT] next_gw={self.next_gw} "
+            f"history_gws={[h.get('event') for h in history]} "
+            f"transfers={[h.get('event_transfers', 0) for h in history]} "
+            f"reconstructed_ft={ft}"
+        )
+
 
         plan = self.plan_transfers(
             current_squad_ids=squad_ids,
@@ -780,11 +796,17 @@ class GWPlanner:
             chips_available=chips_available,
         )
 
-        chips_used = set(chip_usage)
+        chips_used = {
+            code
+            for used in chip_usage.values()
+            for code in used
+        }
 
         plan["team_info"] = team_data.get("info", {})
         plan["chips_used_this_season"] = sorted(chips_used)
         plan["chips_remaining"] = chips_available
+        plan["free_transfers"] = ft
         plan["estimated_free_transfers"] = ft
+        plan["free_transfers_source"] = "reconstructed_from_history"
 
         return plan
