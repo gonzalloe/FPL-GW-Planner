@@ -347,6 +347,7 @@ def fetch_my_team(team_id: int) -> dict:
     # 2. FETCH BOOTSTRAP AND DETERMINE COMPLETED / PLANNING GW
     # ================================================================
     events = []
+    current_event_data = None
 
     try:
         bootstrap_url = f"{FPL_API_BASE}/bootstrap-static/"
@@ -364,21 +365,6 @@ def fetch_my_team(team_id: int) -> dict:
         print(f"[GW] Could not fetch bootstrap events: {e}")
         events = []
 
-    #debug print
-    print(
-        "[GW DEBUG]",
-        {
-            "current_event": current_event,
-            "current_finished": (
-                current_event_data.get("finished")
-                if current_event_data
-                else None
-            ),
-            "completed_gw": completed_gw,
-            "planning_gw": planning_gw,
-        }
-    )
-
     current_event_data = next(
         (
             event
@@ -394,6 +380,21 @@ def fetch_my_team(team_id: int) -> dict:
     else:
         completed_gw = max(0, current_event - 1)
         planning_gw = current_event
+
+    #debug print
+    print(
+        "[GW DEBUG]",
+        {
+            "current_event": current_event,
+            "current_finished": (
+                current_event_data.get("finished")
+                if current_event_data
+                else None
+            ),
+            "completed_gw": completed_gw,
+            "planning_gw": planning_gw,
+        }
+    )
 
     result["info"]["completed_gw"] = completed_gw
     result["info"]["planning_gw"] = planning_gw

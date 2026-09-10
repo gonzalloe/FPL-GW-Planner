@@ -2316,18 +2316,43 @@ def api_simulate_transfer():
 @cached_response(ttl_seconds=300, key_prefix="season-chips")
 def api_season_chips():
     engine = None
-
     try:
         from chip_planner import SeasonChipPlanner
+
         settings = _load_settings()
 
+        # ============================================================
+        # DEFAULT USER TEAM / CHIP STATE
+        #
+        # IMPORTANT:
+        # These must be initialized BEFORE fetch_my_team().
+        #
+        # If FPL team loading fails, the endpoint should still be able
+        # to return cached/lightweight chip data without crashing due
+        # to an unbound local variable.
+        # ============================================================
+
+        ALL_CHIPS = ["BB", "TC", "FH", "WC"]
+
+        HALF_CUTOFF = 20
+
         squad_ids = None
-        chips_available = ["BB", "TC", "FH", "WC"]
+        chips_available = ALL_CHIPS.copy()
         chips_used_list = []
         bank = 0.0
 
-        HALF_CUTOFF = 20
         current_half = 2
+
+        chip_usage = {
+            1: {
+                code: False
+                for code in ALL_CHIPS
+            },
+            2: {
+                code: False
+                for code in ALL_CHIPS
+            },
+        }
 
         cmap = {
             "bboost": "BB",
@@ -2341,6 +2366,7 @@ def api_season_chips():
         # ============================================================
         # LOAD USER TEAM
         # ============================================================
+
         if team_id:
             try:
                 from my_team import fetch_my_team
@@ -2349,57 +2375,98 @@ def api_season_chips():
                 td = fetch_my_team(team_id)
 
                 if not td.get("error"):
+
+                    # ------------------------------------------------
+                    # Squad
+                    # ------------------------------------------------
+
                     squad_ids = [
                         p.get("element")
                         for p in td.get("picks", [])
                         if p.get("element") is not None
                     ]
 
-                    bank = td.get(
-                        "gw_summary", {}
-                    ).get("bank", 0)
+                    # ------------------------------------------------
+                    # Bank
+                    # ------------------------------------------------
 
-                    chips_used_list = td.get(
-                        "chips", []
+                    bank = td.get(
+                        "gw_summary",
+                        {},
+                    ).get(
+                        "bank",
+                        0,
                     )
 
+                    # ------------------------------------------------
+                    # Chips used
+                    # ------------------------------------------------
+
+                    chips_used_list = td.get(
+                        "chips",
+                        []
+                    )
+
+                    # ------------------------------------------------
+                    # Current / planning GW
+                    #
                     # Bootstrap is authoritative for current GW.
+                    # If that fails, use fetch_my_team()'s already
+                    # calculated planning_gw.
+                    # ------------------------------------------------
+
                     try:
                         cgw = get_current_gameweek()
+
                     except Exception:
                         cgw = (
                             td.get(
-                                "gw_summary", {}
-                            ).get("event", 1)
-                            + 1
+                                "info",
+                                {},
+                            ).get(
+                                "planning_gw",
+                                1,
+                            )
                         )
 
+                    try:
+                        cgw = int(cgw)
+                    except (
+                        TypeError,
+                        ValueError,
+                    ):
+                        cgw = 1
+
                     current_half = (
-                        2 if cgw >= HALF_CUTOFF else 1
+                        2
+                        if cgw >= HALF_CUTOFF
+                        else 1
                     )
 
-                    # ============================================================
+                    # =================================================
                     # CHIP AVAILABILITY — 2026/27
                     #
                     # There are TWO copies of every chip:
+                    #
                     #   H1 = GW1-19
                     #   H2 = GW20-38
                     #
-                    # A chip used in H1 only consumes the H1 copy.
-                    # A chip used in H2 only consumes the H2 copy.
-                    # ============================================================
-
-                    ALL_CHIPS = ["BB", "TC", "FH", "WC"]
-
-                    chip_usage = {
-                        1: {code: False for code in ALL_CHIPS},
-                        2: {code: False for code in ALL_CHIPS},
-                    }
+                    # A chip used in H1 consumes only the H1 copy.
+                    # A chip used in H2 consumes only the H2 copy.
+                    # =================================================
 
                     for chip in chips_used_list:
+
+                        if not isinstance(chip, dict):
+                            continue
+
+                        chip_name = str(
+                            chip.get("name", "")
+                        ).lower()
+
                         code = cmap.get(
-                            chip.get("name", ""),
-                            chip.get("name", "").upper(),
+                            chip_name,
+                            chip_name.upper(),
                         )
 
                         if code not in ALL_CHIPS:
@@ -2412,7 +2479,11 @@ def api_season_chips():
 
                         try:
                             chip_gw = int(chip_gw)
-                        except (TypeError, ValueError):
+
+                        except (
+                            TypeError,
+                            ValueError,
+                        ):
                             continue
 
                         chip_half = (
@@ -2421,17 +2492,35 @@ def api_season_chips():
                             else 1
                         )
 
-                        chip_usage[chip_half][code] = True
+                        chip_usage[
+                            chip_half
+                        ][code] = True
+
+                    # ------------------------------------------------
+                    # Available chips for current half
+                    # ------------------------------------------------
 
                     chips_available = [
                         code
                         for code in ALL_CHIPS
-                        if not chip_usage[current_half][code]
+                        if not chip_usage[
+                            current_half
+                        ][code]
                     ]
 
+                else:
+                    print(
+                        "[CHIP] Team data returned error:",
+                        td.get("error"),
+                    )
+
             except Exception:
-                print("[CHIP] ERROR loading team:")
+                print(
+                    "[CHIP] ERROR loading team:"
+                )
+
                 import traceback
+
                 traceback.print_exc()
 
         # ============================================================
@@ -2440,9 +2529,9 @@ def api_season_chips():
         # IMPORTANT:
         # Do NOT create PredictionEngine here.
         #
-        # The prediction cache already contains the expensive prediction
-        # results. SeasonChipPlanner only needs lightweight FPL data
-        # plus those cached predictions.
+        # The prediction cache already contains the expensive
+        # prediction results. SeasonChipPlanner only needs lightweight
+        # FPL data plus those cached predictions.
         # ============================================================
 
         preds, cached, cache_status = _cached_predictions()
@@ -2464,18 +2553,28 @@ def api_season_chips():
                 get_next_gameweek,
             )
 
-            print("[CHIP] Using lightweight cached-data context.")
+            print(
+                "[CHIP] Using lightweight cached-data context."
+            )
 
             bootstrap = fetch_bootstrap()
-            next_gw = get_next_gameweek(bootstrap)
 
-            # --------------------------------------------------------
+            next_gw = get_next_gameweek(
+                bootstrap
+            )
+
+            # ========================================================
             # PRESEASON FAST PATH
-            # --------------------------------------------------------
+            # ========================================================
+            #
             # No squad = no meaningful chip score.
-            # Do not load fixtures/player maps or run SeasonChipPlanner.
-            # --------------------------------------------------------
+            #
+            # Do not load fixtures/player maps or run
+            # SeasonChipPlanner.
+            # ========================================================
+
             if next_gw == 1 and not squad_ids:
+
                 print(
                     "[CHIP] PRESEASON — returning lightweight "
                     "chip state without loading fixtures/player maps."
@@ -2483,156 +2582,257 @@ def api_season_chips():
 
                 result = {
                     "from_gw": 1,
+
                     "to_gw": 38,
+
                     "remaining_gws": 38,
+
                     "gw_metadata": {},
+
                     "chip_analysis": {
                         chip: {
                             "best_gw": None,
+
                             "best_score": None,
+
                             "best_reason": (
                                 "Preseason — waiting for "
                                 "GW1 squad data"
                             ),
+
                             "top_3": [],
+
                             "all_scores": [
                                 {
                                     "gameweek": gw,
+
                                     "score": None,
+
                                     "reason": (
                                         "Preseason — current squad "
                                         "data unavailable"
                                     ),
+
                                     "is_dgw": False,
+
                                     "is_bgw": False,
+
                                     "dgw_teams": 0,
+
                                     "fixtures": 0,
+
                                     "score_available": False,
+
                                     "reason_code": "PRESEASON",
                                 }
+
                                 for gw in range(1, 39)
                             ],
+
                             "score_available": False,
+
                             "reason_code": "PRESEASON",
                         }
+
                         for chip in chips_available
                     },
+
                     "recommended_sequence": [],
+
                     "chips_available": chips_available,
+
                     "preseason": True,
+
                     "squad_data_available": False,
+
                     "score_status": "unavailable",
+
                     "score_status_reason": (
                         "Chip scores will be calculated once "
                         "GW1 squad data is available."
                     ),
                 }
-                result["chip_usage_by_half"] = chip_usage
-                result["chips_available_by_half"] = {
+
+                # ----------------------------------------------------
+                # User chip state
+                # ----------------------------------------------------
+
+                result[
+                    "chip_usage_by_half"
+                ] = chip_usage
+
+                result[
+                    "chips_available_by_half"
+                ] = {
                     1: [
                         code
                         for code in ALL_CHIPS
                         if not chip_usage[1][code]
                     ],
+
                     2: [
                         code
                         for code in ALL_CHIPS
                         if not chip_usage[2][code]
                     ],
                 }
-                result["chip_inventory"] = {
+
+                result[
+                    "chip_inventory"
+                ] = {
                     "total": 8,
+
                     "remaining": sum(
                         1
                         for half in (1, 2)
                         for code in ALL_CHIPS
-                        if not chip_usage[half][code]
+                        if not chip_usage[
+                            half
+                        ][code]
                     ),
+
                     "used": sum(
                         1
                         for half in (1, 2)
                         for code in ALL_CHIPS
-                        if chip_usage[half][code]
+                        if chip_usage[
+                            half
+                        ][code]
                     ),
                 }
-                result["user_chips_available"] = chips_available
-                result["user_chips_used"] = [
+
+                result[
+                    "user_chips_available"
+                ] = chips_available
+
+                result[
+                    "user_chips_used"
+                ] = [
                     {
                         "name": c.get("name"),
+
                         "code": cmap.get(
                             c.get("name", ""),
                             "?"
                         ),
+
                         "gw": c.get("event"),
+
                         "half": (
                             2
-                            if c.get("event", 0) >= HALF_CUTOFF
+                            if c.get("event", 0)
+                            >= HALF_CUTOFF
                             else 1
                         ),
                     }
+
                     for c in chips_used_list
+                    if isinstance(c, dict)
                 ]
+
                 result["current_half"] = (
                     current_half
                     if settings.get("team_id")
                     else 2
                 )
-                result["half_cutoff"] = HALF_CUTOFF
-                result["all_used"] = len(chips_available) == 0
+
+                result[
+                    "half_cutoff"
+                ] = HALF_CUTOFF
+
+                result["all_used"] = (
+                    len(chips_available) == 0
+                )
 
                 return jsonify(result)
 
-            # Only load these for normal-season analysis.
+            # ========================================================
+            # NORMAL-SEASON DATA
+            # ========================================================
+
             fixtures = fetch_fixtures()
-            players = build_player_map(bootstrap)
-            teams = build_team_map(bootstrap)
 
-            cached_gw = cached.get("gameweek")
+            players = build_player_map(
+                bootstrap
+            )
 
-            # Only use predictions if they belong to the same GW.
+            teams = build_team_map(
+                bootstrap
+            )
+
+            # ========================================================
+            # CACHED PREDICTIONS
+            # ========================================================
+
+            cached_gw = cached.get(
+                "gameweek"
+            )
+
             baseline_predictions = []
 
             if (
                 preds
                 and cached_gw is not None
-                and int(cached_gw) == int(next_gw)
+                and int(cached_gw)
+                == int(next_gw)
             ):
+
                 baseline_predictions = preds
+
                 print(
                     "[CHIP] Using cached baseline predictions:",
-                    len(baseline_predictions)
+                    len(baseline_predictions),
                 )
+
             else:
+
                 print(
                     "[CHIP] Cached predictions are stale/mismatched:",
                     cached_gw,
                     "vs",
-                    next_gw
+                    next_gw,
                 )
+
+            # ========================================================
+            # CREATE LIGHTWEIGHT CHIP PLANNER
+            # ========================================================
 
             planner = SeasonChipPlanner(
                 bootstrap=bootstrap,
+
                 fixtures=fixtures,
+
                 teams=teams,
+
                 players=players,
+
                 next_gw=next_gw,
+
                 baseline_predictions=baseline_predictions,
             )
 
             print(
                 "[CHIP DEBUG] next_gw=",
                 next_gw,
+
                 "squad_ids=",
                 len(squad_ids or []),
+
                 "baseline_predictions=",
                 len(baseline_predictions),
             )
 
             result = planner.analyze_season(
                 chips_available=chips_available,
+
                 current_squad_ids=squad_ids,
+
                 bank=bank,
             )
+
+            # ========================================================
+            # RELEASE LARGE OBJECTS
+            # ========================================================
 
             del planner
             del players
@@ -2641,12 +2841,16 @@ def api_season_chips():
             del bootstrap
 
             import gc
+
             gc.collect()
 
-            print("[CHIP] Lightweight season-chip analysis complete.")
+            print(
+                "[CHIP] Lightweight season-chip analysis complete."
+            )
 
         except Exception:
             import traceback
+
             traceback.print_exc()
 
             return jsonify({
@@ -2656,57 +2860,88 @@ def api_season_chips():
         # ============================================================
         # USER CHIP STATE
         # ============================================================
-        result["chip_usage_by_half"] = chip_usage
-        result["chips_available_by_half"] = {
+
+        result[
+            "chip_usage_by_half"
+        ] = chip_usage
+
+        result[
+            "chips_available_by_half"
+        ] = {
             1: [
                 code
                 for code in ALL_CHIPS
                 if not chip_usage[1][code]
             ],
+
             2: [
                 code
                 for code in ALL_CHIPS
                 if not chip_usage[2][code]
             ],
         }
-        result["chip_inventory"] = {
+
+        result[
+            "chip_inventory"
+        ] = {
             "total": 8,
+
             "remaining": sum(
                 1
                 for half in (1, 2)
                 for code in ALL_CHIPS
-                if not chip_usage[half][code]
+                if not chip_usage[
+                    half
+                ][code]
             ),
+
             "used": sum(
                 1
                 for half in (1, 2)
                 for code in ALL_CHIPS
-                if chip_usage[half][code]
+                if chip_usage[
+                    half
+                ][code]
             ),
         }
-        result["user_chips_available"] = chips_available
+
+        result[
+            "user_chips_available"
+        ] = chips_available
+
         print(
             "[CHIP INVENTORY]",
-            "current_half=", current_half,
-            "usage=", chip_usage,
-            "available_current_half=", chips_available,
+            "current_half=",
+            current_half,
+            "usage=",
+            chip_usage,
+            "available_current_half=",
+            chips_available,
         )
 
-        result["user_chips_used"] = [
+        result[
+            "user_chips_used"
+        ] = [
             {
                 "name": c.get("name"),
+
                 "code": cmap.get(
                     c.get("name", ""),
                     "?"
                 ),
+
                 "gw": c.get("event"),
+
                 "half": (
                     2
-                    if c.get("event", 0) >= HALF_CUTOFF
+                    if c.get("event", 0)
+                    >= HALF_CUTOFF
                     else 1
                 ),
             }
+
             for c in chips_used_list
+            if isinstance(c, dict)
         ]
 
         result["current_half"] = (
@@ -2715,7 +2950,9 @@ def api_season_chips():
             else 2
         )
 
-        result["half_cutoff"] = HALF_CUTOFF
+        result[
+            "half_cutoff"
+        ] = HALF_CUTOFF
 
         result["all_used"] = (
             len(chips_available) == 0
@@ -2725,6 +2962,7 @@ def api_season_chips():
 
     except Exception:
         import traceback
+
         traceback.print_exc()
 
         return jsonify({
