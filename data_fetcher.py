@@ -409,8 +409,26 @@ def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict
     # ============================================================
 
     mins = int(previous_season.get("minutes", 0) or 0)
+    player_code = None
+    try:
+        player_code = int(previous_season.get("element_code"))
+    except (TypeError, ValueError):
+        pass
+    previous_team_id = None
+    if player_code is not None:
+        previous_team_id = get_previous_season_player_team(player_code, previous_season_name=previous_season_name, bootstrap=bootstrap)
+
+    # Not enough minutes for attacking/bonus statistical priors.
+    # But DO NOT lose the previous-team information.
     if mins < 450:
-        return {}
+        return {
+            "season_name": previous_season.get("season_name", previous_season_name),
+            "minutes": mins,
+            "starts": 0,
+            "games": int(previous_season.get("appearances", 0) or 0),
+            "previous_team_id": previous_team_id,
+            "insufficient_sample": True,
+        }
     starts = int(previous_season.get("starts", 0) or 0)
     if starts <= 0:
         # Defensive fallback for historical API records that do not expose starts reliably.
@@ -422,32 +440,6 @@ def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict
     xa = float(previous_season.get("expected_assists", 0) or 0)
     bonus = int(previous_season.get("bonus", 0) or 0)
     per90 = mins / 90.0
-
-    # ============================================================
-    # PREVIOUS-SEASON PLAYER CODE
-    # ============================================================
-
-    player_code = None
-
-    try:
-        player_code = int(
-            previous_season.get("element_code")
-        )
-    except (TypeError, ValueError):
-        pass
-
-    # ============================================================
-    # PREVIOUS-SEASON TEAM
-    # ============================================================
-
-    previous_team_id = None
-
-    if player_code is not None:
-        previous_team_id = get_previous_season_player_team(
-            player_code,
-            previous_season_name=previous_season_name,
-            bootstrap=bootstrap
-        )
 
     return {
         "xg_per90": (
@@ -468,11 +460,7 @@ def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict
             else 0.0
         ),
 
-        "season_name": previous_season.get(
-            "season_name",
-            previous_season_name,
-        ),
-
+        "season_name": previous_season.get("season_name", previous_season_name),
         "minutes": mins,
         "starts": starts,
         "games": games,
