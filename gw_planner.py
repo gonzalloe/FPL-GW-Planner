@@ -764,12 +764,12 @@ class GWPlanner:
         # my_team.py is the single source of truth for the current FT
         # balance. Do NOT reconstruct it again from history here.
         # ------------------------------------------------------------
-        gw_summary = team_data.get("gw_summary", {}) or {}
-
         if free_transfers is not None:
             ft = int(free_transfers)
+            ft_source = "explicit_override"
         else:
             ft = int(team_data.get("starting_free_transfers", 1))
+            ft_source = "my_team_starting_free_transfers"
 
         plan = self.plan_transfers(
             current_squad_ids=squad_ids,
