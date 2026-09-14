@@ -768,8 +768,9 @@ class GWPlanner:
             ft = int(free_transfers)
             ft_source = "explicit_override"
         else:
-            ft = int(team_data.get("starting_free_transfers", 1))
-            ft_source = "my_team_starting_free_transfers"
+            current_ft = int(team_data.get("free_transfers", 0) or 0)
+            ft = min(current_ft + 1, 5)
+            ft_source = "fpl_current_ft_plus_next_gw_accrual"
 
         plan = self.plan_transfers(
             current_squad_ids=squad_ids,
