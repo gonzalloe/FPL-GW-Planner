@@ -440,6 +440,17 @@ def fetch_my_team(team_id: int) -> dict:
     ]
 
     starting_free_transfers = calculate_free_transfers(completed_history, chips_used)
+    print(
+        "[FT DEBUG]",
+        {
+            "current_event": current_event,
+            "completed_gw": completed_gw,
+            "planning_gw": planning_gw,
+            "completed_history": completed_history,
+            "starting_free_transfers": starting_free_transfers,
+            "all_transfers": all_transfers,
+        }
+    )
 
     result["starting_free_transfers"] = (starting_free_transfers)
 
