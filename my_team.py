@@ -440,18 +440,6 @@ def fetch_my_team(team_id: int) -> dict:
     ]
 
     starting_free_transfers = calculate_free_transfers(completed_history, chips_used)
-    print(
-        "[FT DEBUG]",
-        {
-            "current_event": current_event,
-            "completed_gw": completed_gw,
-            "planning_gw": planning_gw,
-            "completed_history": completed_history,
-            "starting_free_transfers": starting_free_transfers,
-            "all_transfers": all_transfers,
-        }
-    )
-
     result["starting_free_transfers"] = (starting_free_transfers)
 
     # ================================================================
@@ -491,7 +479,6 @@ def fetch_my_team(team_id: int) -> dict:
     # Only consider transfers for the planning GW if the endpoint
     # actually supplied transfer data.
     planning_transfers = []
-
     completed_transfers = []
 
     if transfer_endpoint_ok:
@@ -510,6 +497,21 @@ def fetch_my_team(team_id: int) -> dict:
                 transfer.get("event", 0)
             ) == completed_gw
         ]
+
+    print(
+    "[FT DEBUG]",
+    {
+        "current_event": current_event,
+        "completed_gw": completed_gw,
+        "planning_gw": planning_gw,
+        "completed_history": completed_history,
+        "starting_free_transfers": starting_free_transfers,
+        "transfer_endpoint_ok": transfer_endpoint_ok,
+        "all_transfers_count": len(all_transfers),
+        "planning_transfers": planning_transfers,
+        "completed_transfers": completed_transfers,
+    }
+)
 
     # ================================================================
     # IMPORTANT:
