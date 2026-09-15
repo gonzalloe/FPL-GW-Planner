@@ -180,18 +180,21 @@ def fetch_my_team(team_id: int) -> dict:
     """
     Fetch a user's FPL team data using the public FPL API.
 
-    FT logic:
-      - completed_gw = latest definitely finished GW
-      - planning_gw = completed_gw + 1
-      - starting_free_transfers = FT entering planning_gw
-      - planning transfers are counted when the public transfer endpoint
-        actually exposes them
-      - an unavailable/empty future transfer endpoint is treated as
-        unknown, not automatically as zero transfers
-      - if planning-GW transfers are explicitly returned, they are
-        authoritative
-      - Free Hit in the latest completed GW does not permanently replace
-        the user's squad
+    FT semantics:
+        starting_free_transfers
+            FT available when entering the current planning GW,
+            before any transfers made for that GW.
+
+        free_transfers
+            FT available entering the NEXT GW after accounting for
+            known transfers in the current planning GW.
+
+        free_transfers_remaining
+            Same as free_transfers.
+
+        early_transfers_known
+            True when the public API gives us enough information
+            to know the current GW transfers.
     """
 
     result = {
@@ -209,13 +212,15 @@ def fetch_my_team(team_id: int) -> dict:
         "early_transfers_known": False,
         "planning_picks_available": False,
         "picks_are_planning_gw": False,
+        "active_chip": None,
+        "auto_subs": [],
         "error": None,
     }
 
     headers = {"User-Agent": "FPL-Predictor/1.0"}
 
     # ================================================================
-    # 1. FETCH TEAM ENTRY
+    # 1. TEAM ENTRY
     # ================================================================
 
     try:
@@ -253,21 +258,31 @@ def fetch_my_team(team_id: int) -> dict:
     time.sleep(0.2)
 
     # ================================================================
-    # 2. FETCH BOOTSTRAP + DETERMINE GW STATE
+    # 2. BOOTSTRAP / GAMEWEEK STATE
     # ================================================================
 
     events = []
 
     try:
         bootstrap_url = f"{FPL_API_BASE}/bootstrap-static/"
-        bootstrap_resp = requests.get(bootstrap_url, headers=headers, timeout=15)
+        bootstrap_resp = requests.get(
+            bootstrap_url,
+            headers=headers,
+            timeout=15,
+        )
         bootstrap_resp.raise_for_status()
         bootstrap_data = bootstrap_resp.json()
         events = bootstrap_data.get("events", []) or []
     except Exception as e:
         print(f"[GW] Could not fetch bootstrap events: {e}")
 
-    current_event_data = next((event for event in events if int(event.get("id", 0)) == current_event), None)
+    current_event_data = next(
+        (
+            event for event in events
+            if int(event.get("id", 0)) == current_event
+        ),
+        None,
+    )
 
     if current_event_data and current_event_data.get("finished", False):
         completed_gw = current_event
@@ -280,7 +295,7 @@ def fetch_my_team(team_id: int) -> dict:
     result["info"]["planning_gw"] = planning_gw
 
     # ================================================================
-    # 3. FETCH HISTORY + CHIPS
+    # 3. HISTORY / CHIPS
     # ================================================================
 
     history_rows = []
@@ -289,7 +304,11 @@ def fetch_my_team(team_id: int) -> dict:
 
     try:
         history_url = f"{FPL_API_BASE}/entry/{team_id}/history/"
-        history_resp = requests.get(history_url, headers=headers, timeout=15)
+        history_resp = requests.get(
+            history_url,
+            headers=headers,
+            timeout=15,
+        )
         history_resp.raise_for_status()
         history_data = history_resp.json()
 
@@ -302,20 +321,35 @@ def fetch_my_team(team_id: int) -> dict:
         result["past_seasons"] = past_seasons
 
     except Exception as e:
-        result["error"] = result["error"] or f"Could not fetch team history: {str(e)}"
+        result["error"] = (
+            result["error"]
+            or f"Could not fetch team history: {str(e)}"
+        )
 
     # ================================================================
-    # 4. CALCULATE FT ENTERING PLANNING GW
+    # 4. FT ENTERING CURRENT PLANNING GW
     # ================================================================
 
-    completed_history = [row for row in history_rows if int(row.get("event", 0)) <= completed_gw]
+    completed_history = [
+        row
+        for row in history_rows
+        if int(row.get("event", 0) or 0) <= completed_gw
+    ]
 
-    starting_free_transfers = calculate_free_transfers(completed_history, chips_used)
+    starting_free_transfers = calculate_free_transfers(
+        completed_history,
+        chips_used,
+    )
+
+    starting_free_transfers = max(
+        0,
+        min(5, int(starting_free_transfers or 0)),
+    )
 
     result["starting_free_transfers"] = starting_free_transfers
 
     # ================================================================
-    # 5. FETCH TRANSFER HISTORY
+    # 5. TRANSFER HISTORY
     # ================================================================
 
     all_transfers = []
@@ -324,7 +358,11 @@ def fetch_my_team(team_id: int) -> dict:
 
     try:
         transfers_url = f"{FPL_API_BASE}/entry/{team_id}/transfers/"
-        transfers_resp = requests.get(transfers_url, headers=headers, timeout=15)
+        transfers_resp = requests.get(
+            transfers_url,
+            headers=headers,
+            timeout=15,
+        )
 
         transfer_endpoint_status = transfers_resp.status_code
 
@@ -337,48 +375,71 @@ def fetch_my_team(team_id: int) -> dict:
                 result["transfers"] = all_transfers[:20]
 
     except Exception as e:
-        print(f"[FT] Could not fetch transfer history: {e}")
-        transfer_endpoint_ok = False
+        print("[FT] Transfer endpoint failed:", repr(e))
 
-    # ================================================================
-    # 6. SEPARATE COMPLETED / PLANNING TRANSFERS
-    # ================================================================
-
-    completed_transfers = []
     planning_transfers = []
+    completed_transfers = []
 
     if transfer_endpoint_ok:
-        completed_transfers = [
-            transfer
-            for transfer in all_transfers
-            if int(transfer.get("event", 0)) == completed_gw
-        ]
-
         planning_transfers = [
             transfer
             for transfer in all_transfers
-            if int(transfer.get("event", 0)) == planning_gw
+            if int(transfer.get("event", 0) or 0) == planning_gw
         ]
 
-    # ================================================================
-    # 7. DETERMINE WHETHER PLANNING TRANSFERS ARE KNOWN
-    #
-    # IMPORTANT:
-    # If the endpoint explicitly returns transfers for planning_gw,
-    # those transfers are known and MUST be counted.
-    #
-    # If the endpoint returns no planning transfers before the deadline,
-    # we cannot assume zero.
-    # ================================================================
+        completed_transfers = [
+            transfer
+            for transfer in all_transfers
+            if int(transfer.get("event", 0) or 0) == completed_gw
+        ]
 
     planning_transfer_count = len(planning_transfers)
 
-    if planning_transfer_count > 0:
-        early_transfers_known = True
+    # ================================================================
+    # 6. DETERMINE WHETHER CURRENT GW TRANSFERS ARE KNOWN
+    # ================================================================
 
-        free_transfers_remaining = max(
+    if planning_gw < current_event:
+        early_transfers_known = True
+    elif transfer_endpoint_ok and planning_transfer_count > 0:
+        early_transfers_known = True
+    else:
+        early_transfers_known = False
+
+    # ================================================================
+    # 7. CALCULATE FT ENTERING NEXT GW
+    # ================================================================
+    #
+    # IMPORTANT:
+    #
+    # starting_free_transfers = FT entering current planning GW.
+    #
+    # If we know transfers made for the current planning GW:
+    #
+    #   FT entering next GW =
+    #       max(0, starting FT - current GW transfers) + 1
+    #
+    # Example:
+    #
+    #   GW4 starts with 3 FT
+    #   3 transfers made
+    #   3 - 3 = 0
+    #   +1 rollover/earned FT
+    #   GW5 starts with 1 FT
+    #
+    # If current GW transfers are NOT known, we cannot safely
+    # calculate next GW FT, so we preserve the starting FT.
+    #
+
+    if early_transfers_known:
+        ft_after_current_gw = max(
             0,
             starting_free_transfers - planning_transfer_count,
+        )
+
+        free_transfers_remaining = min(
+            5,
+            ft_after_current_gw + 1,
         )
 
         transfer_hits = max(
@@ -386,25 +447,9 @@ def fetch_my_team(team_id: int) -> dict:
             planning_transfer_count - starting_free_transfers,
         )
 
-    elif planning_gw <= completed_gw:
-        # Planning GW is already completed.
-        # No returned transfers means zero for that GW.
-        early_transfers_known = True
-
-        free_transfers_remaining = starting_free_transfers
-        transfer_hits = 0
-
     else:
-        # Future planning GW and no exposed transfer records.
-        # Do NOT claim zero transfers.
-        early_transfers_known = False
-
         free_transfers_remaining = starting_free_transfers
         transfer_hits = 0
-
-    # ================================================================
-    # 8. PUBLIC FT FIELDS
-    # ================================================================
 
     result["free_transfers"] = free_transfers_remaining
     result["free_transfers_remaining"] = free_transfers_remaining
@@ -417,59 +462,65 @@ def fetch_my_team(team_id: int) -> dict:
             "current_event": current_event,
             "completed_gw": completed_gw,
             "planning_gw": planning_gw,
-            "completed_history": completed_history,
             "starting_free_transfers": starting_free_transfers,
             "transfer_endpoint_ok": transfer_endpoint_ok,
             "all_transfers_count": len(all_transfers),
-            "current_gw_transfers": (
-                all_transfers
-                if any(
-                    int(t.get("event", 0)) == current_event
-                    for t in all_transfers
-                )
-                else []
-            ),
-            "planning_gw_transfers": planning_transfers,
-            "current_gw_transfer_count": sum(
-                1
-                for t in all_transfers
-                if int(t.get("event", 0)) == current_event
-            ),
+            "planning_transfers": planning_transfers,
             "planning_transfer_count": planning_transfer_count,
-            "free_transfers": result["free_transfers"],
+            "ft_after_current_gw": (
+                max(
+                    0,
+                    starting_free_transfers - planning_transfer_count,
+                )
+                if early_transfers_known
+                else None
+            ),
+            "free_transfers": free_transfers_remaining,
             "free_transfers_remaining": free_transfers_remaining,
             "transfer_hits": transfer_hits,
             "early_transfers_known": early_transfers_known,
-        }
+        },
     )
 
     # ================================================================
-    # 9. FETCH COMPLETED GW PICKS
+    # 8. COMPLETED GW PICKS
     # ================================================================
 
     completed_pick_list = []
     completed_entry_history = {}
     completed_picks_status = None
-    completed_data = {}
 
     try:
-        completed_url = f"{FPL_API_BASE}/entry/{team_id}/event/{completed_gw}/picks/"
-        completed_resp = requests.get(completed_url, headers=headers, timeout=15)
+        completed_url = (
+            f"{FPL_API_BASE}/entry/{team_id}/event/{completed_gw}/picks/"
+        )
+
+        completed_resp = requests.get(
+            completed_url,
+            headers=headers,
+            timeout=15,
+        )
 
         completed_picks_status = completed_resp.status_code
         completed_resp.raise_for_status()
 
         completed_data = completed_resp.json()
         completed_pick_list = completed_data.get("picks", []) or []
-        completed_entry_history = completed_data.get("entry_history", {}) or {}
+        completed_entry_history = (
+            completed_data.get("entry_history", {}) or {}
+        )
 
     except Exception as e:
-        result["error"] = result["error"] or f"Could not fetch completed GW picks: {str(e)}"
+        completed_data = {}
+        result["error"] = (
+            result["error"]
+            or f"Could not fetch completed GW picks: {str(e)}"
+        )
 
     time.sleep(0.2)
 
     # ================================================================
-    # 10. FETCH PLANNING GW PICKS
+    # 9. PLANNING GW PICKS
     # ================================================================
 
     planning_pick_list = []
@@ -479,24 +530,40 @@ def fetch_my_team(team_id: int) -> dict:
     planning_picks_data = {}
 
     try:
-        planning_url = f"{FPL_API_BASE}/entry/{team_id}/event/{planning_gw}/picks/"
-        planning_resp = requests.get(planning_url, headers=headers, timeout=15)
+        planning_url = (
+            f"{FPL_API_BASE}/entry/{team_id}/event/{planning_gw}/picks/"
+        )
+
+        planning_resp = requests.get(
+            planning_url,
+            headers=headers,
+            timeout=15,
+        )
 
         planning_picks_status = planning_resp.status_code
 
         if planning_resp.ok:
-            planning_picks_data = planning_resp.json()
-            planning_pick_list = planning_picks_data.get("picks", []) or []
-            planning_entry_history = planning_picks_data.get("entry_history", {}) or {}
-            planning_picks_available = len(planning_pick_list) >= 15
+            planning_picks_data = planning_resp.json() or {}
 
-    except Exception:
-        planning_picks_available = False
+            planning_pick_list = (
+                planning_picks_data.get("picks", []) or []
+            )
+
+            planning_entry_history = (
+                planning_picks_data.get("entry_history", {}) or {}
+            )
+
+            planning_picks_available = (
+                len(planning_pick_list) >= 15
+            )
+
+    except Exception as e:
+        print("[PICKS] Planning picks unavailable:", repr(e))
 
     result["planning_picks_available"] = planning_picks_available
 
     # ================================================================
-    # 11. DETERMINE FREE HIT
+    # 10. FREE HIT DETECTION
     # ================================================================
 
     free_hit_gw = None
@@ -517,7 +584,7 @@ def fetch_my_team(team_id: int) -> dict:
             break
 
     # ================================================================
-    # 12. SELECT SQUAD
+    # 11. SELECT SQUAD
     # ================================================================
 
     picks_event = None
@@ -527,8 +594,15 @@ def fetch_my_team(team_id: int) -> dict:
         revert_picks = []
 
         try:
-            revert_url = f"{FPL_API_BASE}/entry/{team_id}/event/{revert_gw}/picks/"
-            revert_resp = requests.get(revert_url, headers=headers, timeout=15)
+            revert_url = (
+                f"{FPL_API_BASE}/entry/{team_id}/event/{revert_gw}/picks/"
+            )
+
+            revert_resp = requests.get(
+                revert_url,
+                headers=headers,
+                timeout=15,
+            )
 
             if revert_resp.ok:
                 revert_data = revert_resp.json()
@@ -548,7 +622,10 @@ def fetch_my_team(team_id: int) -> dict:
         elif planning_picks_available:
             result["picks"] = planning_pick_list
             result["active_chip"] = planning_picks_data.get("active_chip")
-            result["auto_subs"] = planning_picks_data.get("automatic_subs", [])
+            result["auto_subs"] = planning_picks_data.get(
+                "automatic_subs",
+                [],
+            )
             picks_event = planning_gw
             result["picks_are_planning_gw"] = True
 
@@ -561,19 +638,25 @@ def fetch_my_team(team_id: int) -> dict:
     elif planning_picks_available:
         result["picks"] = planning_pick_list
         result["active_chip"] = planning_picks_data.get("active_chip")
-        result["auto_subs"] = planning_picks_data.get("automatic_subs", [])
+        result["auto_subs"] = planning_picks_data.get(
+            "automatic_subs",
+            [],
+        )
         picks_event = planning_gw
         result["picks_are_planning_gw"] = True
 
     else:
         result["picks"] = completed_pick_list
         result["active_chip"] = completed_data.get("active_chip")
-        result["auto_subs"] = completed_data.get("automatic_subs", [])
+        result["auto_subs"] = completed_data.get(
+            "automatic_subs",
+            [],
+        )
         picks_event = completed_gw
         result["picks_are_planning_gw"] = False
 
     # ================================================================
-    # 13. FINANCIAL STATE
+    # 12. FINANCIAL STATE
     # ================================================================
 
     financial_eh = completed_entry_history
@@ -586,7 +669,6 @@ def fetch_my_team(team_id: int) -> dict:
             financial_eh = planning_entry_history
 
     bank_raw = financial_eh.get("bank")
-
     value_raw = financial_eh.get("value")
 
     if bank_raw is None:
@@ -596,17 +678,29 @@ def fetch_my_team(team_id: int) -> dict:
         value_raw = entry.get("last_deadline_value", 0)
 
     # ================================================================
-    # 14. GW SUMMARY
+    # 13. GW SUMMARY
     # ================================================================
 
     result["gw_summary"] = {
         "event": planning_gw,
         "completed_event": completed_gw,
         "planning_event": planning_gw,
-        "points": financial_eh.get("points", completed_entry_history.get("points", 0)),
-        "total_points": financial_eh.get("total_points", completed_entry_history.get("total_points", 0)),
-        "rank": financial_eh.get("rank", completed_entry_history.get("rank", 0)),
-        "overall_rank": financial_eh.get("overall_rank", completed_entry_history.get("overall_rank", 0)),
+        "points": financial_eh.get(
+            "points",
+            completed_entry_history.get("points", 0),
+        ),
+        "total_points": financial_eh.get(
+            "total_points",
+            completed_entry_history.get("total_points", 0),
+        ),
+        "rank": financial_eh.get(
+            "rank",
+            completed_entry_history.get("rank", 0),
+        ),
+        "overall_rank": financial_eh.get(
+            "overall_rank",
+            completed_entry_history.get("overall_rank", 0),
+        ),
         "bank": float(bank_raw or 0) / 10,
         "value": float(value_raw or 0) / 10,
         "event_transfers": (
@@ -614,30 +708,39 @@ def fetch_my_team(team_id: int) -> dict:
             if early_transfers_known
             else None
         ),
-        "event_transfers_cost": int(financial_eh.get("event_transfers_cost", 0) or 0),
+        "event_transfers_cost": int(
+            financial_eh.get("event_transfers_cost", 0) or 0
+        ),
         "starting_free_transfers": starting_free_transfers,
         "free_transfers_remaining": free_transfers_remaining,
         "transfer_hits": transfer_hits,
-        "points_on_bench": financial_eh.get("points_on_bench", 0),
+        "points_on_bench": financial_eh.get(
+            "points_on_bench",
+            0,
+        ),
         "early_transfers_known": early_transfers_known,
         "planning_picks_available": planning_picks_available,
     }
 
     # ================================================================
-    # 15. CONVENIENCE FIELDS
+    # 14. CONVENIENCE FIELDS
     # ================================================================
 
     result["current_bank"] = result["gw_summary"]["bank"]
     result["current_team_value"] = result["gw_summary"]["value"]
+
     result["current_event_transfers"] = (
         planning_transfer_count
         if early_transfers_known
         else None
     )
-    result["current_transfer_cost"] = result["gw_summary"]["event_transfers_cost"]
+
+    result["current_transfer_cost"] = result["gw_summary"][
+        "event_transfers_cost"
+    ]
 
     # ================================================================
-    # 16. DEBUG
+    # 15. DEBUG
     # ================================================================
 
     result["debug_fpl"] = {
@@ -656,14 +759,13 @@ def fetch_my_team(team_id: int) -> dict:
         "planning_transfer_count": planning_transfer_count,
         "early_transfers_known": early_transfers_known,
         "starting_free_transfers": starting_free_transfers,
-        "free_transfers": result["free_transfers"],
+        "free_transfers": free_transfers_remaining,
         "free_transfers_remaining": free_transfers_remaining,
         "transfer_hits": transfer_hits,
         "free_hit_gw": free_hit_gw,
     }
 
     return result
-
 
 
 def enrich_my_team(team_data: dict, player_map: dict, predictions: list) -> dict:
