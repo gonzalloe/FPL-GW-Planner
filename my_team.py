@@ -444,7 +444,7 @@ def fetch_my_team(team_id: int) -> dict:
     result["starting_free_transfers"] = (starting_free_transfers)
 
     # ================================================================
-    # 5. FETCH TRANSFER HISTORY
+    # 5-6. FETCH TRANSFER HISTORY
     #
     # The public endpoint may return [] before transfers become
     # available publicly.
@@ -514,43 +514,30 @@ def fetch_my_team(team_id: int) -> dict:
     # ================================================================
 
     if planning_gw < current_event:
+        # Defensive case: planning GW is already behind current GW.
         early_transfers_known = True
-    elif planning_transfers:
-        early_transfers_known = True
+        planning_transfer_count = len(planning_transfers)
+        free_transfers_remaining = max(0, starting_free_transfers - planning_transfer_count)
+        transfer_hits = max(0, planning_transfer_count - starting_free_transfers)
+
     else:
+        # Current GW is finished and we are planning the next GW.
+        #
+        # FT entering the planning GW comes from completed GW history.
+        # Do not let the public transfer endpoint incorrectly turn this
+        # into 0 before the planning GW starts.
         early_transfers_known = False
+        planning_transfer_count = 0
+        free_transfers_remaining = starting_free_transfers
+        transfer_hits = 0
 
-
-    planning_transfer_count = (
-        len(planning_transfers)
-        if early_transfers_known
-        else 0
-    )
-
-    # ================================================================
-    # 6. CALCULATE CONFIRMED REMAINING FT
-    # ================================================================
-
-    if early_transfers_known:
-        free_transfers_remaining = max(0, starting_free_transfers - planning_transfer_count,)
-        transfer_hits = max(0, planning_transfer_count - starting_free_transfers,)
-
-    else:
-        # We know the FT entering the planning GW,
-        # but the public API has not told us whether
-        # early transfers were made.
-        free_transfers_remaining = None
-        transfer_hits = None
-
-    # Expose the values consistently
-    if early_transfers_known:
-        result["free_transfers"] = free_transfers_remaining
-    else:
-        result["free_transfers"] = starting_free_transfers
-
-    result["free_transfers_remaining"] = free_transfers_remaining
+    # ------------------------------------------------
+    # Expose the planning-GW FT state.
+    # ------------------------------------------------
+    result["free_transfers"] = starting_free_transfers
+    result["free_transfers_remaining"] = (free_transfers_remaining)
     result["transfer_hits"] = transfer_hits
-    result["early_transfers_known"] = early_transfers_known
+    result["early_transfers_known"] = (early_transfers_known)
 
     # ================================================================
     # 7. FETCH COMPLETED GW PICKS
@@ -1008,7 +995,6 @@ def fetch_my_team(team_id: int) -> dict:
     }
 
     return result
-
 
 
 
