@@ -3525,9 +3525,6 @@ async function loadMyTeam() {
     const bank = Number(data.gw_summary?.bank ?? 0);
     const squadValue = Number(data.squad_value ?? data.gw_summary?.value ?? 0);
     const remainingFT = Number(data.free_transfers ?? data.gw_summary?.starting_free_transfers ?? 0);
-    const transfersThisGW = data.early_transfers_known ? Number(data.gw_summary?.event_transfers ?? 0) : null;
-    const transferHits = data.early_transfers_known ? Number(data.gw_summary?.transfer_hits ?? 0) : null;
-
 
     document.getElementById('myteam-stats').innerHTML = `
       <div class="stat-box">
@@ -3576,10 +3573,6 @@ async function loadMyTeam() {
         <div class="label">Free Transfers</div>
         <div class="value">
           ${remainingFT}
-        </div>
-        <div class="sub">
-          ${transfersThisGW} used this GW
-          ${transferHits ? ` · ${transferHits} hit` : ''}
         </div>
       </div>
     `;

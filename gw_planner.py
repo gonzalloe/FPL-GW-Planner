@@ -212,43 +212,34 @@ class GWPlanner:
 
     # ── Multi-GW Transfer Planner ─────────────────────────────
 
-    def plan_transfers(self, current_squad_ids: list[int],
-                       bank: float = 0.0,
-                       free_transfers: int = 1,
-                       chips_available: list[str] | None = None,
-                       max_transfers_per_gw: int = 2) -> dict:
-        """
-        Plan optimal transfers across the planning horizon.
+    def plan_transfers(self, current_squad_ids: list[int], bank: float = 0.0,
+                   free_transfers: int = 1, chips_available: list[str] | None = None,
+                   max_transfers_per_gw: int = 2) -> dict:
+        """Plan optimal transfers across the planning horizon."""
 
-        Args:
-            current_squad_ids: List of 15 player IDs in current squad
-            bank: Current money in bank (millions)
-            free_transfers: Free transfers available for next GW
-            chips_available: List of chip codes still available (WC, FH, BB, TC)
-            max_transfers_per_gw: Max transfers to suggest per GW (incl. hits)
-
-        Returns:
-            Full plan with GW-by-GW transfer recommendations
-        """
         if chips_available is None:
             chips_available = ["WC", "FH", "BB", "TC"]
 
-        # Build rolling state
+        try:
+            rolling_ft = int(free_transfers)
+        except (TypeError, ValueError):
+            rolling_ft = 1
+
+        rolling_ft = max(1, min(5, rolling_ft))
         squad = list(current_squad_ids)
         rolling_bank = bank
-        rolling_ft = free_transfers
         remaining_chips_by_half = {1: set(chips_available), 2: set(chips_available)}
-
         gw_plans = []
+
         for gw in range(self.next_gw, self.next_gw + self.horizon):
             if gw > 38:
                 break
+
             chip_half = 1 if gw <= 19 else 2
             remaining_chips = remaining_chips_by_half[chip_half]
             pred_map = self._get_pred_map(gw)
             gw_info = self._gw_infos.get(gw, {})
 
-            # Enrich current squad for this GW
             squad_enriched = []
             for pid in squad:
                 p = self.players.get(pid, {})
@@ -274,55 +265,42 @@ class GWPlanner:
                     "availability": pred.get("availability", {}),
                 })
 
-            # Calculate total squad xPts for this GW (no transfers)
             baseline_xpts = sum(
-                p["predicted_points"] for p in
-                sorted(squad_enriched, key=lambda x: x["predicted_points"], reverse=True)[:11]
+                p["predicted_points"]
+                for p in sorted(squad_enriched, key=lambda x: x["predicted_points"], reverse=True)[:11]
             )
 
-            # Find best transfers for this GW
             transfers = self._find_best_transfers(
-                squad_enriched, pred_map, rolling_bank,
-                rolling_ft, max_transfers_per_gw, gw
+                squad_enriched, pred_map, rolling_bank, rolling_ft, max_transfers_per_gw, gw
             )
 
-            # Chip recommendation for this GW
             chip_rec = self._recommend_chip(
                 squad_enriched, gw_info, gw, remaining_chips, pred_map
             )
 
-            # Calculate post-transfer squad xPts
             post_squad = list(squad)
-            transfer_cost = 0
             net_spend = 0.0
+
             for t in transfers:
                 if t["out_id"] in post_squad:
                     post_squad.remove(t["out_id"])
                     post_squad.append(t["in_id"])
                     net_spend += t["in_price"] - t["out_price"]
 
-            # Transfer cost (hits)
             num_transfers = len(transfers)
             free_used = min(num_transfers, rolling_ft)
             hits = max(0, num_transfers - rolling_ft)
             transfer_cost = hits * 4
 
-            # Post-transfer predictions
-            post_enriched = []
-            for pid in post_squad:
-                pred = pred_map.get(pid, {})
-                post_enriched.append(pred)
+            post_enriched = [pred_map.get(pid, {}) for pid in post_squad]
             post_xpts = sum(
-                p.get("predicted_points", 0) for p in
-                sorted(post_enriched, key=lambda x: x.get("predicted_points", 0), reverse=True)[:11]
+                p.get("predicted_points", 0)
+                for p in sorted(post_enriched, key=lambda x: x.get("predicted_points", 0), reverse=True)[:11]
             ) - transfer_cost
 
-            # Calculate multi-GW value of transfers
-            multi_gw_value = self._calc_multi_gw_transfer_value(
-                transfers, gw
-            )
+            multi_gw_value = self._calc_multi_gw_transfer_value(transfers, gw)
 
-            gw_plan = {
+            gw_plans.append({
                 "gameweek": gw,
                 "gw_info": gw_info,
                 "squad_before": squad_enriched,
@@ -340,36 +318,29 @@ class GWPlanner:
                 "xpts_gain": round(post_xpts - baseline_xpts, 1),
                 "multi_gw_value": multi_gw_value,
                 "chip_recommendation": chip_rec,
-            }
-            gw_plans.append(gw_plan)
+            })
 
-            # Update rolling state for next GW
+            # Update squad and bank for next GW
             squad = post_squad
-            rolling_bank = rolling_bank - net_spend
+            rolling_bank -= net_spend
 
-            # Free transfer logic: accrue 1 FT per GW, max 5
-            # (changed to 5 from 2 in 2023-24 rules, capped at 5)
-            ft_used = free_used
-            remaining = rolling_ft - ft_used
-            rolling_ft = min(remaining + 1, 5)
-            if rolling_ft < 1:
-                rolling_ft = 1
+            # FT accrual happens AFTER this GW.
+            remaining_ft = max(0, rolling_ft - free_used)
+            rolling_ft = max(1, min(remaining_ft + 1, 5))
 
-            # If chip used, update remaining chips
+            # Chip handling
             if chip_rec and chip_rec.get("use_chip"):
                 chip_code = chip_rec["chip_code"]
-                # Consume the chip only from the current half.
                 current_half_chips = remaining_chips_by_half[chip_half]
 
                 if chip_code in current_half_chips:
                     current_half_chips.discard(chip_code)
-                    if chip_code == "WC":
-                        rolling_ft = 1  # WC resets FT to 1
-                    elif chip_code == "FH":
-                        squad = list(current_squad_ids)  # FH reverts squad
-                        rolling_ft = rolling_ft  # FH doesn't affect FT
 
-        # Summary stats
+                    if chip_code == "WC":
+                        rolling_ft = 1
+                    elif chip_code == "FH":
+                        squad = list(current_squad_ids)
+
         total_transfers = sum(g["num_transfers"] for g in gw_plans)
         total_hits = sum(g["hits"] for g in gw_plans)
         total_hit_cost = sum(g["hit_cost"] for g in gw_plans)
@@ -692,9 +663,7 @@ class GWPlanner:
 
     # ── Convenience: Plan from FPL Team ID ────────────────────
     def plan_from_team_id(self, team_id: int, horizon: int = None, free_transfers: int | None = None) -> dict:
-        """
-        Convenience method: fetch team from FPL API and generate plan.
-        """
+        """Fetch team from FPL API and generate plan."""
         from my_team import fetch_my_team
 
         if horizon is not None:
@@ -722,9 +691,7 @@ class GWPlanner:
         bank = team_data.get("gw_summary", {}).get("bank", 0)
 
         # ------------------------------------------------------------
-        # Chip availability — chips are available once per half-season
-        # GW1-19  = first half
-        # GW20-38 = second half
+        # Chip availability
         # ------------------------------------------------------------
 
         chip_map = {"wildcard": "WC", "freehit": "FH", "bboost": "BB", "3xc": "TC"}
@@ -733,12 +700,10 @@ class GWPlanner:
         for chip in team_data.get("chips", []):
             name = chip.get("name")
             code = chip_map.get(name)
-
             if not code:
                 continue
 
             chip_gw = chip.get("event")
-
             if chip_gw is None:
                 continue
 
@@ -747,10 +712,10 @@ class GWPlanner:
 
         current_half = 1 if self.next_gw <= 19 else 2
         chips_available = [
-            code
-            for code in ["WC", "FH", "BB", "TC"]
+            code for code in ["WC", "FH", "BB", "TC"]
             if code not in chip_usage[current_half]
         ]
+
         print(
             f"[CHIPS] Current GW={self.current_gw} "
             f"half={current_half} "
@@ -758,19 +723,27 @@ class GWPlanner:
             f"available={chips_available}"
         )
 
-        ## ------------------------------------------------------------
+        # ------------------------------------------------------------
         # Free transfers
         # ------------------------------------------------------------
-        # my_team.py is the single source of truth for the current FT
-        # balance. Do NOT reconstruct it again from history here.
-        # ------------------------------------------------------------
+        # fetch_my_team() already returns the FT entering the planning GW.
+        # Do NOT add +1 here.
+
         if free_transfers is not None:
-            ft = int(free_transfers)
+            ft = max(1, min(int(free_transfers), 5))
             ft_source = "explicit_override"
         else:
-            current_ft = int(team_data.get("free_transfers", 0) or 0)
-            ft = min(current_ft + 1, 5)
-            ft_source = "fpl_current_ft_plus_next_gw_accrual"
+            current_ft = int(team_data.get("free_transfers", 1) or 1)
+            ft = max(1, min(current_ft, 5))
+            ft_source = "my_team_current_ft"
+
+        print("[GW PLANNER FT]", {
+            "planning_gw": self.next_gw,
+            "team_data_free_transfers": team_data.get("free_transfers"),
+            "team_data_starting_free_transfers": team_data.get("starting_free_transfers"),
+            "planner_ft": ft,
+            "ft_source": ft_source,
+        })
 
         plan = self.plan_transfers(
             current_squad_ids=squad_ids,
@@ -779,11 +752,7 @@ class GWPlanner:
             chips_available=chips_available,
         )
 
-        chips_used = {
-            code
-            for used in chip_usage.values()
-            for code in used
-        }
+        chips_used = {code for used in chip_usage.values() for code in used}
 
         plan["team_info"] = team_data.get("info", {})
         plan["chips_used_this_season"] = sorted(chips_used)
@@ -793,3 +762,4 @@ class GWPlanner:
         plan["free_transfers_source"] = ft_source
 
         return plan
+
