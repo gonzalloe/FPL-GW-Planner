@@ -16,5 +16,5 @@ _check*.py
 .env
 .env.*
 !.env.example
-!tests/test_fpl_connection.py
-!tests/test_fpl_routes.py
+!tests/test_team_id_planner.py
+!tests/test_squad_optimizer.py

@@ -267,6 +267,8 @@ class GWPlanner:
             if gw > 38:
                 break
 
+            squad_before_gw = list(squad)
+            bank_before_gw = rolling_bank
             chip_half = 1 if gw <= 19 else 2
             remaining_chips = remaining_chips_by_half[chip_half]
             pred_map = self._get_pred_map(gw)
@@ -310,6 +312,8 @@ class GWPlanner:
                 squad_enriched, gw_info, gw, remaining_chips, pred_map
             )
 
+            active_chip = chip_rec.get("chip_code") if chip_rec and chip_rec.get("use_chip") else None
+            unlimited = active_chip in {"WC", "FH"}
             post_squad = list(squad)
             net_spend = 0.0
 
@@ -320,8 +324,12 @@ class GWPlanner:
                     net_spend += t["in_price"] - t["out_price"]
 
             num_transfers = len(transfers)
-            free_used = min(num_transfers, rolling_ft)
-            hits = max(0, num_transfers - rolling_ft)
+            free_used = 0 if unlimited else min(num_transfers, rolling_ft)
+            hits = 0 if unlimited else max(0, num_transfers - rolling_ft)
+            if unlimited:
+                for transfer in transfers:
+                    transfer["is_free"] = True
+                    transfer["is_hit"] = False
             transfer_cost = hits * 4
 
             post_enriched = [pred_map.get(pid, {}) for pid in post_squad]
@@ -357,8 +365,9 @@ class GWPlanner:
             rolling_bank -= net_spend
 
             # FT accrual happens AFTER this GW.
-            remaining_ft = max(0, rolling_ft - free_used)
-            rolling_ft = max(1, min(remaining_ft + 1, 5))
+            if not unlimited:
+                remaining_ft = max(0, rolling_ft - free_used)
+                rolling_ft = max(1, min(remaining_ft + 1, 5))
 
             # Chip handling
             if chip_rec and chip_rec.get("use_chip"):
@@ -368,10 +377,9 @@ class GWPlanner:
                 if chip_code in current_half_chips:
                     current_half_chips.discard(chip_code)
 
-                    if chip_code == "WC":
-                        rolling_ft = 1
-                    elif chip_code == "FH":
-                        squad = list(current_squad_ids)
+                    if chip_code == "FH":
+                        squad = squad_before_gw
+                        rolling_bank = bank_before_gw
 
         total_transfers = sum(g["num_transfers"] for g in gw_plans)
         total_hits = sum(g["hits"] for g in gw_plans)
@@ -759,18 +767,17 @@ class GWPlanner:
         # ------------------------------------------------------------
         # Free transfers
         # ------------------------------------------------------------
-        # Use a current balance, not the estimated starting allowance.
+        # Team-ID imports provide the allowance from completed history.
 
-        if team_data.get("transfers_unlimited"):
-            return {"error": "FPL currently reports unlimited transfers. Finish the active chip or preseason period before generating a normal transfer plan."}
         if free_transfers is not None:
             ft = max(0, min(int(free_transfers), 5))
             ft_source = "explicit_override"
-        elif team_data.get("free_transfers_remaining") is not None:
-            ft = max(0, min(int(team_data["free_transfers_remaining"]), 5))
-            ft_source = "fpl_my_team"
         else:
-            return {"error": "Current free transfers are unavailable. Connect FPL or enter the value shown in FPL."}
+            value = team_data.get("free_transfers")
+            if value is None:
+                value = team_data.get("starting_free_transfers", 1)
+            ft = max(0, min(int(value), 5))
+            ft_source = "completed_history"
 
         print("[GW PLANNER FT]", {
             "planning_gw": self.next_gw,

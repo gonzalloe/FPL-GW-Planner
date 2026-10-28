@@ -102,47 +102,56 @@ class SquadOptimizer:
         }
 
     def _optimize_full_squad(self) -> list:
+        """Bounded fallback search; enforce budget, quotas and team limits.
+
+        Unlike the ILP solver this heuristic does not guarantee optimality.
+        Retain cheap candidates and a low-cost branch so expensive early
+        selections do not exhaust the budget for the remaining positions.
         """
-        Build the best 15-man squad maximizing TOTAL xPts.
+        quotas = {1: 2, 2: 5, 3: 5, 4: 3}
+        by_pos = {pos: [] for pos in quotas}
+        for player in self._get_eligible_players():
+            pos = player.get("position_id")
+            if pos in by_pos:
+                by_pos[pos].append(player)
+        for pos, quota in quotas.items():
+            pool = by_pos[pos]
+            if len(pool) < quota:
+                return []
+            top = sorted(pool, key=lambda p: p["predicted_points"], reverse=True)[:40]
+            cheap = sorted(pool, key=lambda p: p.get("price", 0))[:15]
+            by_pos[pos] = list({p["player_id"]: p for p in top + cheap}.values())
 
-        Strategy: Position-by-position allocation with budget optimization.
-        1. For each position, generate top candidates (sorted by xPts)
-        2. Use a multi-pass approach:
-           a. First, pick the best combination of players by position
-           b. Respect team limits (max 3 per team)
-           c. Respect budget
-        3. Then do iterative improvement via swap search
-        """
-        # Pre-filter: only consider eligible players
-        eligible = self._get_eligible_players()
-
-        # Group by position
-        by_pos = {1: [], 2: [], 3: [], 4: []}
-        for p in eligible:
-            pos_id = p.get("position_id", 0)
-            if pos_id in by_pos:
-                by_pos[pos_id].append(p)
-
-        # Sort each position by xPts
-        for pos_id in by_pos:
-            by_pos[pos_id].sort(key=lambda x: x["predicted_points"], reverse=True)
-
-        # Trim to top N per position to keep search space manageable
-        # More candidates for positions with more slots
-        top_n = {1: 15, 2: 40, 3: 40, 4: 25}
-        for pos_id in by_pos:
-            by_pos[pos_id] = by_pos[pos_id][:top_n.get(pos_id, 30)]
-
-        # Strategy: Build squad position by position, using beam search
-        # Start with the position that has fewest slots (GKP: 2) to constrain early
-        # Then fill DEF(5), MID(5), FWD(3)
-        best_squad = self._beam_search_squad(by_pos)
-
-        if best_squad and len(best_squad) == 15:
-            return best_squad
-
-        # Fallback: greedy approach
-        return self._greedy_squad(by_pos)
+        slots = [pos for pos, count in quotas.items() for _ in range(count)]
+        min_price = {pos: min(p.get("price", 0) for p in pool) for pos, pool in by_pos.items()}
+        # score, cost, selected players, team counts, last candidate index
+        states = [(0.0, 0.0, (), {}, -1)]
+        for depth, pos in enumerate(slots):
+            following = slots[depth + 1:]
+            lower_bound = sum(min_price[remaining_pos] for remaining_pos in following)
+            next_states = []
+            same_position = depth > 0 and slots[depth - 1] == pos
+            for score, cost, selected, counts, last_index in states:
+                start = last_index + 1 if same_position else 0
+                for index in range(start, len(by_pos[pos])):
+                    player = by_pos[pos][index]
+                    team = player.get("team_id", player.get("team", 0))
+                    if counts.get(team, 0) >= MAX_PER_TEAM:
+                        continue
+                    new_cost = cost + player.get("price", 0)
+                    if new_cost + lower_bound > self.budget + 1e-6:
+                        continue
+                    new_counts = dict(counts)
+                    new_counts[team] = new_counts.get(team, 0) + 1
+                    next_states.append((score + player["predicted_points"], new_cost,
+                                        selected + (player,), new_counts, index))
+            if not next_states:
+                return []
+            states = heapq.nlargest(80, next_states, key=lambda state: (state[0], -state[1]))
+            cheapest = min(next_states, key=lambda state: (state[1], -state[0]))
+            if all(state is not cheapest for state in states):
+                states[-1] = cheapest
+        return list(max(states, key=lambda state: self._squad_score(state[2]))[2])
 
 
     def _get_eligible_players(self) -> list:

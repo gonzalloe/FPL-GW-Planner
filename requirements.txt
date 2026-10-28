@@ -5,6 +5,5 @@ gunicorn>=21.2.0
 flask-limiter>=3.5.0
 stripe>=5.0.0
 supabase>=2.0.0
-pulp
+pulp==3.3.0
 psutil
-cryptography>=43.0.0

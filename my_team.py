@@ -23,7 +23,7 @@ def calculate_free_transfers(history: list, chips: list | None = None) -> int:
     - Maximum bank is 5 FTs.
     - Transfers consume the available FT bank.
     - Any transfers beyond the available FT bank are hits.
-    - Free Hit and Wildcard transfers do not consume FTs.
+    - Free Hit and Wildcard preserve the FT bank without an extra accrual.
     - The FT earned after a GW is effectively the unused FT carried
       into that GW plus the normal 1 FT earned for the following GW,
       capped at 5.
@@ -127,7 +127,7 @@ def calculate_free_transfers(history: list, chips: list | None = None) -> int:
         # --------------------------------------------------------
         # Free Hit / Wildcard
         #
-        # Transfers during these chips do not consume the FT bank.
+        # Preserve the bank across these chips; no extra FT accrues.
         # --------------------------------------------------------
 
         if chip in {
@@ -135,7 +135,7 @@ def calculate_free_transfers(history: list, chips: list | None = None) -> int:
             "free_hit",
             "wildcard",
         }:
-            transfers = 0
+            continue
 
         # --------------------------------------------------------
         # Consume available FTs.
@@ -186,10 +186,11 @@ def fetch_my_team(team_id: int) -> dict:
             before any transfers made for that GW.
 
         free_transfers
-            Confirmed remaining FT in the planning GW, or None if unknown.
+            Allowance calculated from completed-GW history. Early transfers
+            in the planning GW are not deducted.
 
         free_transfers_remaining
-            Same as free_transfers.
+            None: public data cannot confirm the live remaining balance.
 
         early_transfers_known
             True when the public API gives us enough information
@@ -406,12 +407,12 @@ def fetch_my_team(team_id: int) -> dict:
         early_transfers_known = False
 
     # ================================================================
-    # 7. Public transfer history cannot confirm the live balance.
-    # The authenticated FPL my-team response must supply it.
+    # 7. Use the allowance entering the planning GW from completed history.
+    # Do not subtract any early transfers in the same GW.
     free_transfers_remaining = None
     transfer_hits = None
-
-    result["free_transfers"] = free_transfers_remaining
+    result["free_transfers"] = starting_free_transfers
+    result["free_transfers_source"] = "completed_history"
     result["free_transfers_remaining"] = free_transfers_remaining
     result["transfer_hits"] = transfer_hits
     result["early_transfers_known"] = early_transfers_known
@@ -427,7 +428,7 @@ def fetch_my_team(team_id: int) -> dict:
             "all_transfers_count": len(all_transfers),
             "planning_transfers": planning_transfers,
             "planning_transfer_count": planning_transfer_count,
-            "free_transfers": free_transfers_remaining,
+            "free_transfers": starting_free_transfers,
             "free_transfers_remaining": free_transfers_remaining,
             "transfer_hits": transfer_hits,
             "early_transfers_known": early_transfers_known,
@@ -711,7 +712,7 @@ def fetch_my_team(team_id: int) -> dict:
         "planning_transfer_count": planning_transfer_count,
         "early_transfers_known": early_transfers_known,
         "starting_free_transfers": starting_free_transfers,
-        "free_transfers": free_transfers_remaining,
+        "free_transfers": starting_free_transfers,
         "free_transfers_remaining": free_transfers_remaining,
         "transfer_hits": transfer_hits,
         "free_hit_gw": free_hit_gw,
