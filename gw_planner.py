@@ -41,6 +41,7 @@ class GWPlanner:
 
         # Pre-compute predictions for each GW in the planning horizon
         self._gw_predictions = {}
+        self._gw_pred_maps = {}
         self._gw_infos = {}
 
     def _ensure_gw_predictions(self, gw: int):
@@ -53,7 +54,9 @@ class GWPlanner:
     def _get_pred_map(self, gw: int) -> dict:
         """Get {player_id: prediction} map for a GW."""
         self._ensure_gw_predictions(gw)
-        return {p["player_id"]: p for p in self._gw_predictions[gw]}
+        if gw not in self._gw_pred_maps:
+            self._gw_pred_maps[gw] = {p["player_id"]: p for p in self._gw_predictions[gw]}
+        return self._gw_pred_maps[gw]
 
     # ── Fixture Ticker ────────────────────────────────────────
 
@@ -225,7 +228,7 @@ class GWPlanner:
         except (TypeError, ValueError):
             rolling_ft = 1
 
-        rolling_ft = max(1, min(5, rolling_ft))
+        rolling_ft = max(0, min(5, rolling_ft))
         squad = list(current_squad_ids)
         rolling_bank = bank
         remaining_chips_by_half = {1: set(chips_available), 2: set(chips_available)}
@@ -726,16 +729,16 @@ class GWPlanner:
         # ------------------------------------------------------------
         # Free transfers
         # ------------------------------------------------------------
-        # fetch_my_team() already returns the FT entering the planning GW.
-        # Do NOT add +1 here.
+        # Use a current balance, not the estimated starting allowance.
 
         if free_transfers is not None:
-            ft = max(1, min(int(free_transfers), 5))
+            ft = max(0, min(int(free_transfers), 5))
             ft_source = "explicit_override"
+        elif team_data.get("free_transfers_remaining") is not None:
+            ft = max(0, min(int(team_data["free_transfers_remaining"]), 5))
+            ft_source = "public_transfer_history"
         else:
-            current_ft = int(team_data.get("free_transfers", 1) or 1)
-            ft = max(1, min(current_ft, 5))
-            ft_source = "my_team_current_ft"
+            return {"error": "Current free transfers are unknown. Enter the number shown in FPL."}
 
         print("[GW PLANNER FT]", {
             "planning_gw": self.next_gw,
@@ -758,7 +761,6 @@ class GWPlanner:
         plan["chips_used_this_season"] = sorted(chips_used)
         plan["chips_remaining"] = chips_available
         plan["free_transfers"] = ft
-        plan["estimated_free_transfers"] = ft
         plan["free_transfers_source"] = ft_source
 
         return plan

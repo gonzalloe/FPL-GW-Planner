@@ -1551,11 +1551,14 @@ table tr:hover { background:var(--surface2); }
           <option value="5" selected>5 Gameweeks</option>
           <option value="8">8 Gameweeks</option>
         </select>
+        <label for="planner-free-transfers" style="font-size:13px;color:var(--text2);">Current free transfers:</label>
+        <input id="planner-free-transfers" type="number" min="0" max="5" step="1" placeholder="0–5" style="width:65px;" oninput="updateSimulatorFreeTransferDisplay(); renderTransferQueue();">
         <button class="btn btn-primary" onclick="loadGWPlanner()" id="planner-btn">Generate Plan</button>
         <span id="planner-loading" style="display:none;color:var(--text3);font-size:12px;">
           <span class="chat-spinner" style="width:14px;height:14px;border-width:2px;vertical-align:middle;margin-right:6px;"></span>Analyzing...
         </span>
       </div>
+      <p style="font-size:12px;color:var(--text3);">Enter your current free transfers from FPL if unknown. The public squad and bank may also be out of date before the deadline.</p>
       <div id="planner-summary" style="display:none;"><div class="planner-summary" id="planner-summary-stats"></div></div>
       <div id="planner-timeline-wrap" style="display:none;">
         <div class="card" style="margin-bottom:20px;"><div class="card-header"><h3>📅 Transfer Timeline</h3><span id="planner-range" style="color:var(--text3);font-size:12px;"></span></div><div class="planner-timeline" id="planner-timeline"></div></div>
@@ -3494,6 +3497,8 @@ async function loadMyTeam() {
     }
 
     MY_TEAM_DATA = data;
+    const ftInput = document.getElementById('planner-free-transfers');
+    if (ftInput) ftInput.value = data.free_transfers_remaining == null ? '' : data.free_transfers_remaining;
     MY_TEAM_ORIGINAL = JSON.parse(JSON.stringify(data));
     updateSimulatorFreeTransferDisplay();
     SIM_BASE_BANK = Number(data.gw_summary?.bank ?? 0);
@@ -3524,7 +3529,11 @@ async function loadMyTeam() {
 
     const bank = Number(data.gw_summary?.bank ?? 0);
     const squadValue = Number(data.squad_value ?? data.gw_summary?.value ?? 0);
-    const remainingFT = Number(data.free_transfers ?? data.gw_summary?.starting_free_transfers ?? 0);
+    const remainingFT = data.free_transfers_remaining;
+    const startingFT = data.starting_free_transfers ?? data.gw_summary?.starting_free_transfers;
+    const ftDisplay = remainingFT == null
+      ? `Unknown${startingFT == null ? '' : ` (estimated ${Number(startingFT)} at start)`}`
+      : Number(remainingFT);
 
     document.getElementById('myteam-stats').innerHTML = `
       <div class="stat-box">
@@ -3572,7 +3581,7 @@ async function loadMyTeam() {
       <div class="stat-box">
         <div class="label">Free Transfers</div>
         <div class="value">
-          ${remainingFT}
+          ${ftDisplay}
         </div>
       </div>
     `;
@@ -3612,37 +3621,20 @@ function applyAISuggestion(outId, inId) {
 }
 
 function getSimulatorFreeTransfers() {
-    if (!MY_TEAM_DATA) return 0;
-    const rawFreeTransfers = MY_TEAM_DATA.free_transfers;
-    // null/undefined means the value is unavailable.
-    // Do NOT let Number(null) become 0.
-    if (
-        rawFreeTransfers !== null &&
-        rawFreeTransfers !== undefined &&
-        Number.isFinite(Number(rawFreeTransfers))
-    ) {
-        return Math.max(0, Math.min(5, Number(rawFreeTransfers)));
-    }
-    const startingFreeTransfers =
-        MY_TEAM_DATA.starting_free_transfers ??
-        MY_TEAM_DATA.gw_summary?.starting_free_transfers;
-
-    if (
-        startingFreeTransfers !== null &&
-        startingFreeTransfers !== undefined &&
-        Number.isFinite(Number(startingFreeTransfers))
-    ) {
-        return Math.max(0,Math.min(5, Number(startingFreeTransfers)));
-    }
-    return 1;
+  const input = document.getElementById('planner-free-transfers');
+  if (input && input.value !== '') {
+    const value = Number(input.value);
+    return Number.isInteger(value) && value >= 0 && value <= 5 ? value : null;
+  }
+  const value = MY_TEAM_DATA?.free_transfers_remaining;
+  return value == null ? null : Number(value);
 }
-
 
 function updateSimulatorFreeTransferDisplay() {
   const ftEl = document.getElementById('sim-ft-display');
   if (!ftEl) return;
   const ft = getSimulatorFreeTransfers();
-  ftEl.textContent =
+  ftEl.textContent = ft == null ? 'Free transfers unknown — enter them in GW Planner' :
     ft + ' Free Transfer' + (ft !== 1 ? 's' : '');
 }
 
@@ -4489,7 +4481,7 @@ function renderTransferQueue() {
   const activeChip = document.getElementById('sim-chip-select')?.value || '';
   const unlimitedFreeTransfers = activeChip === 'FH' || activeChip === 'WC';
   const availableFreeTransfers =unlimitedFreeTransfers ? TRANSFER_QUEUE.length : getSimulatorFreeTransfers();
-  const hits = Math.max(0, TRANSFER_QUEUE.length - availableFreeTransfers);
+  const hits = availableFreeTransfers == null ? null : Math.max(0, TRANSFER_QUEUE.length - availableFreeTransfers);
   const chipLabel = activeChip === 'FH' ? 'Free Hit' : activeChip === 'WC' ? 'Wildcard' : '';
 
   summary.style.display = '';
@@ -4515,6 +4507,8 @@ function renderTransferQueue() {
 
     ${unlimitedFreeTransfers
       ? `<div style="color:var(--accent);font-weight:600;">🎯 ${chipLabel} active — all transfers FREE</div>`
+      : hits == null
+        ? '<div>Hits unknown — enter current free transfers in GW Planner</div>'
       : hits > 0
         ? `<div><span style="color:var(--red);">Hits: ${hits} (-${hits * 4} pts)</span></div>`
         : '<div style="color:var(--accent);">All FREE</div>'}
@@ -5507,10 +5501,16 @@ async function loadGWPlanner() {
   }
 
   try {
+    const ft = getSimulatorFreeTransfers();
+    if (ft == null) {
+      alert('Enter your current free transfers from FPL (0–5) before generating a plan.');
+      return;
+    }
     const url =
       `/api/gw-planner` +
       `?id=${encodeURIComponent(teamId)}` +
-      `&horizon=${encodeURIComponent(horizon)}`;
+      `&horizon=${encodeURIComponent(horizon)}` +
+      `&free_transfers=${encodeURIComponent(ft)}`;
 
     console.log('[GW PLANNER] Fetching:', url);
 

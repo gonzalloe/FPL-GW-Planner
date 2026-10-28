@@ -186,8 +186,7 @@ def fetch_my_team(team_id: int) -> dict:
             before any transfers made for that GW.
 
         free_transfers
-            FT available entering the NEXT GW after accounting for
-            known transfers in the current planning GW.
+            Confirmed remaining FT in the planning GW, or None if unknown.
 
         free_transfers_remaining
             Same as free_transfers.
@@ -205,10 +204,10 @@ def fetch_my_team(team_id: int) -> dict:
         "history": [],
         "chips": [],
         "past_seasons": [],
-        "free_transfers": 1,
+        "free_transfers": None,
         "starting_free_transfers": 1,
-        "free_transfers_remaining": 1,
-        "transfer_hits": 0,
+        "free_transfers_remaining": None,
+        "transfer_hits": None,
         "early_transfers_known": False,
         "planning_picks_available": False,
         "picks_are_planning_gw": False,
@@ -407,49 +406,17 @@ def fetch_my_team(team_id: int) -> dict:
         early_transfers_known = False
 
     # ================================================================
-    # 7. CALCULATE FT ENTERING NEXT GW
-    # ================================================================
-    #
-    # IMPORTANT:
-    #
-    # starting_free_transfers = FT entering current planning GW.
-    #
-    # If we know transfers made for the current planning GW:
-    #
-    #   FT entering next GW =
-    #       max(0, starting FT - current GW transfers) + 1
-    #
-    # Example:
-    #
-    #   GW4 starts with 3 FT
-    #   3 transfers made
-    #   3 - 3 = 0
-    #   +1 rollover/earned FT
-    #   GW5 starts with 1 FT
-    #
-    # If current GW transfers are NOT known, we cannot safely
-    # calculate next GW FT, so we preserve the starting FT.
-    #
-
+    # 7. REMAINING FT IN THE PLANNING GW
+    # Public transfers may not expose early transfers before the deadline.
+    # Do not add the next GW's transfer to the current balance.
     if early_transfers_known:
-        ft_after_current_gw = max(
-            0,
-            starting_free_transfers - planning_transfer_count,
-        )
-
-        free_transfers_remaining = min(
-            5,
-            ft_after_current_gw + 1,
-        )
-
-        transfer_hits = max(
-            0,
-            planning_transfer_count - starting_free_transfers,
-        )
-
+        ft_after_current_gw = max(0, starting_free_transfers - planning_transfer_count)
+        free_transfers_remaining = ft_after_current_gw
+        transfer_hits = max(0, planning_transfer_count - starting_free_transfers)
     else:
-        free_transfers_remaining = starting_free_transfers
-        transfer_hits = 0
+        ft_after_current_gw = None
+        free_transfers_remaining = None
+        transfer_hits = None
 
     result["free_transfers"] = free_transfers_remaining
     result["free_transfers_remaining"] = free_transfers_remaining

@@ -1524,38 +1524,9 @@ def api_my_team():
             preds,
         )
 
-        # ============================================================
-        # FREE TRANSFERS
-        #
-        # Important:
-        #
-        # free_transfers
-        #     = known FT entering the planning GW
-        #
-        # free_transfers_remaining
-        #     = confirmed remaining FT after planning-GW transfers
-        #
-        # When FPL does not expose future transfers yet,
-        # free_transfers_remaining is None, but free_transfers
-        # is still valid and should be displayed.
-        # ============================================================
-
-        free_transfers = team_data.get("free_transfers")
-
-        if free_transfers is None:
-            free_transfers = enriched.get("free_transfers")
-
-        if free_transfers is None:
-            free_transfers = (
-                team_data
-                .get("gw_summary", {})
-                .get("starting_free_transfers")
-            )
-
-        if free_transfers is None:
-            free_transfers = 1
-
-        free_transfers = int(free_transfers)
+        # Suggestions use the starting estimate when the live balance is unknown.
+        free_transfers = team_data.get("free_transfers_remaining")
+        suggestion_ft = free_transfers if free_transfers is not None else team_data.get("starting_free_transfers", 1)
 
         # ============================================================
         # TRANSFER SUGGESTIONS
@@ -1564,7 +1535,7 @@ def api_my_team():
         suggestions = generate_transfer_suggestions(
             enriched,
             preds,
-            free_transfers=free_transfers,
+            free_transfers=int(suggestion_ft),
         )
 
         # ============================================================
@@ -1587,6 +1558,7 @@ def api_my_team():
             "history": enriched.get("history", [])[-10:],
             "free_transfers": free_transfers,
             "free_transfers_remaining": team_data.get("free_transfers_remaining"),
+            "starting_free_transfers": team_data.get("starting_free_transfers"),
             "early_transfers_known": team_data.get("early_transfers_known", False),
             "debug_fpl": team_data.get("debug_fpl"),
         })
@@ -1631,7 +1603,7 @@ def api_transfers():
             free_transfers = team_data.get("info", {}).get("free_transfers")
         if free_transfers is None:
             free_transfers = 1
-        free_transfers = int(team_data.get("free_transfers") or 1)
+        free_transfers = int(free_transfers)
         suggestions = generate_transfer_suggestions(enriched, preds, free_transfers=free_transfers)
         return jsonify({
             "team_id": int(team_id),
@@ -1726,6 +1698,13 @@ def api_gw_planner():
     print("========== GW PLANNER REQUEST ==========")
     team_id = request.args.get("id") or _load_settings().get("team_id")
     horizon = request.args.get("horizon", 5, type=int)
+    raw_ft = request.args.get("free_transfers")
+    if raw_ft is not None:
+        if raw_ft not in {str(n) for n in range(6)}:
+            return jsonify({"error": "Free transfers must be an integer from 0 to 5"}), 400
+        free_transfers = int(raw_ft)
+    else:
+        free_transfers = None
     print("[GW PLANNER] team_id:", team_id)
     print("[GW PLANNER] horizon:", horizon)
   
@@ -1820,7 +1799,7 @@ def api_gw_planner():
         # ─────────────────────────────────────────
 
         print("[GW PLANNER] Running plan_from_team_id:", team_id)
-        plan = planner.plan_from_team_id(team_id, horizon=horizon)
+        plan = planner.plan_from_team_id(team_id, horizon=horizon, free_transfers=free_transfers)
 
         # ─────────────────────────────────────────
         # DEBUG
