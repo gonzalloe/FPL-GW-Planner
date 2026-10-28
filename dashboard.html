@@ -1433,6 +1433,27 @@ table tr:hover { background:var(--surface2); }
     </span>
   </div>
 
+  <details class="card" id="fpl-connect-panel" style="margin-bottom:16px;">
+    <summary style="cursor:pointer;">Connect your FPL account for live transfers and squad</summary>
+    <p id="fpl-connect-status" role="status" style="font-size:13px;margin-top:10px;">Checking connection...</p>
+    <p style="font-size:12px;color:var(--text3);">Sign in to FPL in another tab, then connect its access token here. The connection belongs to your signed-in app account. Reconnect when the token expires.</p>
+    <details style="font-size:12px;margin:10px 0;">
+      <summary>How to find your FPL access token</summary>
+      <ol style="padding-left:20px;line-height:1.8;">
+        <li>Open <a href="https://fantasy.premierleague.com/" target="_blank" rel="noopener noreferrer">FPL</a> and sign in.</li>
+        <li>Open browser Developer Tools → Network, then refresh Pick Team.</li>
+        <li>Select the <code>my-team</code> request and copy the <code>X-Api-Authorization</code> request header.</li>
+        <li>Paste that value below. Your FPL password is not needed. The token grants account access; connect only on a deployment you trust.</li>
+      </ol>
+    </details>
+    <form onsubmit="connectFPL(event)" autocomplete="off" style="display:flex;gap:8px;flex-wrap:wrap;">
+      <label for="fpl-access-token" style="align-self:center;">FPL access token</label>
+      <input type="password" id="fpl-access-token" autocomplete="off" spellcheck="false" maxlength="16384" placeholder="Bearer …" required style="flex:1;min-width:180px;">
+      <button type="submit" id="fpl-connect-button" class="btn btn-primary">Connect FPL</button>
+      <button type="button" class="btn btn-secondary" onclick="disconnectFPL()">Disconnect</button>
+    </form>
+  </details>
+
   <!-- Team Info + Tabs -->
   <div id="myteam-content">
     <div style="color:var(--text3); line-height:1.7;">
@@ -1551,14 +1572,11 @@ table tr:hover { background:var(--surface2); }
           <option value="5" selected>5 Gameweeks</option>
           <option value="8">8 Gameweeks</option>
         </select>
-        <label for="planner-free-transfers" style="font-size:13px;color:var(--text2);">Current free transfers:</label>
-        <input id="planner-free-transfers" type="number" min="0" max="5" step="1" placeholder="0–5" style="width:65px;" oninput="updateSimulatorFreeTransferDisplay(); renderTransferQueue();">
         <button class="btn btn-primary" onclick="loadGWPlanner()" id="planner-btn">Generate Plan</button>
         <span id="planner-loading" style="display:none;color:var(--text3);font-size:12px;">
           <span class="chat-spinner" style="width:14px;height:14px;border-width:2px;vertical-align:middle;margin-right:6px;"></span>Analyzing...
         </span>
       </div>
-      <p style="font-size:12px;color:var(--text3);">Enter your current free transfers from FPL if unknown. The public squad and bank may also be out of date before the deadline.</p>
       <div id="planner-summary" style="display:none;"><div class="planner-summary" id="planner-summary-stats"></div></div>
       <div id="planner-timeline-wrap" style="display:none;">
         <div class="card" style="margin-bottom:20px;"><div class="card-header"><h3>📅 Transfer Timeline</h3><span id="planner-range" style="color:var(--text3);font-size:12px;"></span></div><div class="planner-timeline" id="planner-timeline"></div></div>
@@ -2108,6 +2126,8 @@ function authLogout() {
 
 function onAuthSuccess() {
   hideAuthOverlay();
+  loadSettings();
+  refreshFPLConnection();
   // Update sidebar with user info
   const sidebar = document.querySelector('.sidebar');
   if (sidebar && !document.getElementById('user-info-bar')) {
@@ -3478,18 +3498,28 @@ async function loadMyTeam() {
   const loadingEl = document.getElementById('myteam-loading');
 
   content.innerHTML = '';
+  content.style.display = '';
+  loaded.style.display = 'none';
+  MY_TEAM_DATA = null;
+  MY_TEAM_ORIGINAL = null;
+  PLANNER_DATA = null;
+  TRANSFER_QUEUE = [];
   loadingEl.style.display = '';
 
   try {
-    const r = await fetch('/api/my-team?id=' + id);
+    const r = await fetch('/api/my-team?id=' + encodeURIComponent(id), {headers: authHeaders(), cache: 'no-store'});
     const data = await r.json();
 
     console.log('[MY TEAM] Team loaded:', data);
 
     if (data.error) {
+      if (data.code === 'fpl_reconnect_required') {
+        document.getElementById('fpl-connect-panel').open = true;
+        document.getElementById('fpl-connect-status').textContent = data.error;
+      }
       content.innerHTML =
         '<div class="card"><p style="color:var(--red);">Error: ' +
-        data.error +
+        escapeHtml(data.error) +
         '</p></div>';
 
       loadingEl.style.display = 'none';
@@ -3497,8 +3527,6 @@ async function loadMyTeam() {
     }
 
     MY_TEAM_DATA = data;
-    const ftInput = document.getElementById('planner-free-transfers');
-    if (ftInput) ftInput.value = data.free_transfers_remaining == null ? '' : data.free_transfers_remaining;
     MY_TEAM_ORIGINAL = JSON.parse(JSON.stringify(data));
     updateSimulatorFreeTransferDisplay();
     SIM_BASE_BANK = Number(data.gw_summary?.bank ?? 0);
@@ -3529,11 +3557,8 @@ async function loadMyTeam() {
 
     const bank = Number(data.gw_summary?.bank ?? 0);
     const squadValue = Number(data.squad_value ?? data.gw_summary?.value ?? 0);
-    const remainingFT = data.free_transfers_remaining;
-    const startingFT = data.starting_free_transfers ?? data.gw_summary?.starting_free_transfers;
-    const ftDisplay = remainingFT == null
-      ? `Unknown${startingFT == null ? '' : ` (estimated ${Number(startingFT)} at start)`}`
-      : Number(remainingFT);
+    const allowance = data.free_transfers;
+    const ftDisplay = data.transfers_unlimited ? 'Unlimited' : allowance == null ? 'Connect FPL' : Number(allowance);
 
     document.getElementById('myteam-stats').innerHTML = `
       <div class="stat-box">
@@ -3580,9 +3605,8 @@ async function loadMyTeam() {
 
       <div class="stat-box">
         <div class="label">Free Transfers</div>
-        <div class="value">
-          ${ftDisplay}
-        </div>
+        <div class="value" id="myteam-ft-value">${ftDisplay}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:4px;">${data.fpl_connected ? 'FPL allowance this gameweek' : 'Live balance requires an FPL connection'}</div>
       </div>
     `;
 
@@ -3621,11 +3645,6 @@ function applyAISuggestion(outId, inId) {
 }
 
 function getSimulatorFreeTransfers() {
-  const input = document.getElementById('planner-free-transfers');
-  if (input && input.value !== '') {
-    const value = Number(input.value);
-    return Number.isInteger(value) && value >= 0 && value <= 5 ? value : null;
-  }
   const value = MY_TEAM_DATA?.free_transfers_remaining;
   return value == null ? null : Number(value);
 }
@@ -3634,8 +3653,9 @@ function updateSimulatorFreeTransferDisplay() {
   const ftEl = document.getElementById('sim-ft-display');
   if (!ftEl) return;
   const ft = getSimulatorFreeTransfers();
-  ftEl.textContent = ft == null ? 'Free transfers unknown — enter them in GW Planner' :
-    ft + ' Free Transfer' + (ft !== 1 ? 's' : '');
+  ftEl.textContent = MY_TEAM_DATA?.transfers_unlimited ? 'Unlimited transfers' :
+    ft == null ? 'Connect FPL for your remaining transfers' :
+    ft + ' Free Transfer' + (ft !== 1 ? 's' : '') + ' remaining';
 }
 
 
@@ -4479,10 +4499,10 @@ function renderTransferQueue() {
   );
 
   const activeChip = document.getElementById('sim-chip-select')?.value || '';
-  const unlimitedFreeTransfers = activeChip === 'FH' || activeChip === 'WC';
+  const unlimitedFreeTransfers = MY_TEAM_DATA?.transfers_unlimited || activeChip === 'FH' || activeChip === 'WC';
   const availableFreeTransfers =unlimitedFreeTransfers ? TRANSFER_QUEUE.length : getSimulatorFreeTransfers();
   const hits = availableFreeTransfers == null ? null : Math.max(0, TRANSFER_QUEUE.length - availableFreeTransfers);
-  const chipLabel = activeChip === 'FH' ? 'Free Hit' : activeChip === 'WC' ? 'Wildcard' : '';
+  const chipLabel = activeChip === 'FH' ? 'Free Hit' : activeChip === 'WC' ? 'Wildcard' : 'Unlimited transfers';
 
   summary.style.display = '';
   summary.innerHTML = `<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12px;">
@@ -4508,7 +4528,7 @@ function renderTransferQueue() {
     ${unlimitedFreeTransfers
       ? `<div style="color:var(--accent);font-weight:600;">🎯 ${chipLabel} active — all transfers FREE</div>`
       : hits == null
-        ? '<div>Hits unknown — enter current free transfers in GW Planner</div>'
+        ? '<div>Connect FPL to calculate transfer hits</div>'
       : hits > 0
         ? `<div><span style="color:var(--red);">Hits: ${hits} (-${hits * 4} pts)</span></div>`
         : '<div style="color:var(--accent);">All FREE</div>'}
@@ -4519,6 +4539,12 @@ function renderTransferQueue() {
   if (saveBar) saveBar.style.display = TRANSFER_QUEUE.length > 0 ? '' : 'none';
 }
 
+function simulatorStorageKey() {
+  const owner = AUTH_USER ? AUTH_USER.email + ':' + (AUTH_USER.created_at || '') : 'public';
+  const team = MY_TEAM_DATA?.team_id ?? document.getElementById('team-id-input')?.value ?? '';
+  return 'fpl_sim_state:' + encodeURIComponent(owner) + ':' + encodeURIComponent(team);
+}
+
 function saveSimChanges() {
   const state = {
     transfers: TRANSFER_QUEUE,
@@ -4526,7 +4552,7 @@ function saveSimChanges() {
     gw: document.getElementById('sim-gw-select')?.value || '',
     savedAt: new Date().toISOString(),
   };
-  localStorage.setItem('fpl_sim_state', JSON.stringify(state));
+  localStorage.setItem(simulatorStorageKey(), JSON.stringify(state));
   const status = document.getElementById('sim-save-status');
   if (status) {
     status.style.display = 'inline';
@@ -4539,7 +4565,7 @@ function clearSimChanges() {
   if (!confirm('Clear all planned transfers?')) return;
 
   TRANSFER_QUEUE.length = 0;
-  localStorage.removeItem('fpl_sim_state');
+  localStorage.removeItem(simulatorStorageKey());
 
   // Restore original FPL squad.
   if (MY_TEAM_ORIGINAL && MY_TEAM_DATA) {
@@ -4586,7 +4612,7 @@ function clearSimChanges() {
 
 function loadSimState() {
   try {
-    const raw = localStorage.getItem('fpl_sim_state');
+    const raw = localStorage.getItem(simulatorStorageKey());
     if (!raw) return;
     const state = JSON.parse(raw);
     if (!state.transfers?.length || !MY_TEAM_DATA) return;
@@ -4598,7 +4624,7 @@ function loadSimState() {
     const valid = state.transfers.every(t => currentIds.has(t.out_id));
     if (!valid) {
       // Saved state is stale (squad changed since last save) — discard
-      localStorage.removeItem('fpl_sim_state');
+      localStorage.removeItem(simulatorStorageKey());
       return;
     }
 
@@ -5350,10 +5376,59 @@ function renderSeasonChips(data) {
   }
 }
 
+// ── Per-user FPL connection ──
+async function refreshFPLConnection() {
+  const el = document.getElementById('fpl-connect-status');
+  try {
+    const r = await fetch('/api/fpl-connection', {headers: authHeaders(), cache: 'no-store'});
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Could not read FPL connection.');
+    el.textContent = data.connected ? 'Connected to FPL team ' + data.team_id : 'FPL is not connected.';
+  } catch (e) { el.textContent = e.message; }
+}
+async function connectFPL(event) {
+  event.preventDefault();
+  const field = document.getElementById('fpl-access-token');
+  const button = document.getElementById('fpl-connect-button');
+  const status = document.getElementById('fpl-connect-status');
+  let token = field.value.trim();
+  field.value = '';
+  button.disabled = true;
+  status.textContent = 'Verifying your FPL account...';
+  try {
+    const r = await fetch('/api/fpl-connection', {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({access_token: token})
+    });
+    token = '';
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Could not connect FPL.');
+    document.getElementById('team-id-input').value = data.team_id;
+    status.textContent = 'Connected to FPL team ' + data.team_id;
+    await loadMyTeam();
+  } catch (e) { status.textContent = e.message; }
+  finally { token = ''; button.disabled = false; }
+}
+async function disconnectFPL() {
+  const status = document.getElementById('fpl-connect-status');
+  try {
+    const r = await fetch('/api/fpl-connection', {method: 'DELETE', headers: authHeaders()});
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Could not disconnect FPL.');
+    status.textContent = 'FPL disconnected.';
+    MY_TEAM_DATA = null;
+    MY_TEAM_ORIGINAL = null;
+    PLANNER_DATA = null;
+    TRANSFER_QUEUE = [];
+    document.getElementById('myteam-loaded').style.display = 'none';
+    document.getElementById('myteam-content').textContent = 'Import a public team or reconnect FPL.';
+    document.getElementById('myteam-content').style.display = '';
+  } catch (e) { status.textContent = e.message; }
+}
+
 // ── Saved settings ──
 async function loadSettings() {
   try {
-    const r = await fetch('/api/settings');
+    const r = await fetch('/api/settings', {headers: authHeaders(), cache: 'no-store'});
     const s = await r.json();
     if (s.team_id) document.getElementById('team-id-input').value = s.team_id;
   } catch(e) {}
@@ -5475,7 +5550,7 @@ async function loadGWPlanner() {
   if (!teamId) {
     try {
       const r = await fetch('/api/settings', {
-        cache: 'no-store'
+        headers: authHeaders(), cache: 'no-store'
       });
 
       const s = await r.json();
@@ -5503,26 +5578,24 @@ async function loadGWPlanner() {
   try {
     const ft = getSimulatorFreeTransfers();
     if (ft == null) {
-      alert('Enter your current free transfers from FPL (0–5) before generating a plan.');
+      alert(MY_TEAM_DATA?.transfers_unlimited ? 'FPL currently reports unlimited transfers. Normal transfer planning resumes after the active chip or preseason period.' : 'Connect your FPL account before generating a plan.');
       return;
     }
     const url =
       `/api/gw-planner` +
       `?id=${encodeURIComponent(teamId)}` +
-      `&horizon=${encodeURIComponent(horizon)}` +
-      `&free_transfers=${encodeURIComponent(ft)}`;
+      `&horizon=${encodeURIComponent(horizon)}`;
 
     console.log('[GW PLANNER] Fetching:', url);
 
     const r = await fetch(url, {
-      cache: 'no-store'
+      headers: authHeaders(), cache: 'no-store'
     });
 
-    if (!r.ok) {
-      throw new Error(`HTTP ${r.status}`);
-    }
-
     const data = await r.json();
+    if (!r.ok) {
+      throw new Error(data.error || `HTTP ${r.status}`);
+    }
 
     console.log('[GW PLANNER] API response:', data);
 
@@ -5822,7 +5895,7 @@ function showFooterModal(type) {
         <h3 style="margin:16px 0 8px;font-size:15px;">3. Payments & Cancellation</h3>
         <p>Premium subscriptions are billed monthly via Stripe. You can cancel anytime through the "Manage Subscription" link in your account sidebar or by contacting the admin. Cancellation takes effect at the end of the current billing period.</p>
         <h3 style="margin:16px 0 8px;font-size:15px;">4. Disclaimer</h3>
-        <p>Predictions are statistical estimates. FPL Predictor is not affiliated with, endorsed by, or connected to the Premier League, Fantasy Premier League, or any football club. All FPL data is sourced from publicly available APIs.</p>
+        <p>Predictions are statistical estimates. FPL Predictor is not affiliated with, endorsed by, or connected to the Premier League, Fantasy Premier League, or any football club. Public FPL data is supplemented with private squad data when you connect your own FPL account.</p>
         <h3 style="margin:16px 0 8px;font-size:15px;">5. Contact</h3>
         <p>For questions or support: <a href="mailto:admin@fplpredictor.com" style="color:var(--accent);">admin@fplpredictor.com</a></p>
       </div>`;

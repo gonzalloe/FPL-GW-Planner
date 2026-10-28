@@ -406,17 +406,10 @@ def fetch_my_team(team_id: int) -> dict:
         early_transfers_known = False
 
     # ================================================================
-    # 7. REMAINING FT IN THE PLANNING GW
-    # Public transfers may not expose early transfers before the deadline.
-    # Do not add the next GW's transfer to the current balance.
-    if early_transfers_known:
-        ft_after_current_gw = max(0, starting_free_transfers - planning_transfer_count)
-        free_transfers_remaining = ft_after_current_gw
-        transfer_hits = max(0, planning_transfer_count - starting_free_transfers)
-    else:
-        ft_after_current_gw = None
-        free_transfers_remaining = None
-        transfer_hits = None
+    # 7. Public transfer history cannot confirm the live balance.
+    # The authenticated FPL my-team response must supply it.
+    free_transfers_remaining = None
+    transfer_hits = None
 
     result["free_transfers"] = free_transfers_remaining
     result["free_transfers_remaining"] = free_transfers_remaining
@@ -434,14 +427,6 @@ def fetch_my_team(team_id: int) -> dict:
             "all_transfers_count": len(all_transfers),
             "planning_transfers": planning_transfers,
             "planning_transfer_count": planning_transfer_count,
-            "ft_after_current_gw": (
-                max(
-                    0,
-                    starting_free_transfers - planning_transfer_count,
-                )
-                if early_transfers_known
-                else None
-            ),
             "free_transfers": free_transfers_remaining,
             "free_transfers_remaining": free_transfers_remaining,
             "transfer_hits": transfer_hits,

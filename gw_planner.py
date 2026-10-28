@@ -24,12 +24,35 @@ class GWPlanner:
     week by week, tracking budget, free transfers, and chip usage.
     """
 
-    def __init__(self, horizon: int = 5):
+    def __init__(self, horizon: int = 5, baseline_predictions=None, baseline_gw=None):
         """
         Args:
             horizon: How many GWs ahead to plan (default 5)
         """
-        self.engine = PredictionEngine()
+        self._projection_planner = None
+        self._baseline_gw = baseline_gw
+        self._baseline_predictions = baseline_predictions
+        if baseline_predictions is None:
+            self.engine = PredictionEngine()
+        else:
+            from types import SimpleNamespace
+            from chip_planner import SeasonChipPlanner
+            bootstrap = fetch_bootstrap()
+            fixtures = fetch_fixtures()
+            players = build_player_map(bootstrap)
+            teams = build_team_map(bootstrap)
+            next_gw = get_next_gameweek(bootstrap)
+            self.engine = SimpleNamespace(
+                bootstrap=bootstrap, fixtures=fixtures, players=players,
+                teams=teams, team_stats={}, current_gw=get_current_gameweek(bootstrap),
+                next_gw=next_gw,
+            )
+            if int(baseline_gw or 0) != int(next_gw):
+                raise ValueError(f"Cached predictions are for GW{baseline_gw}; GW{next_gw} predictions are needed.")
+            self._projection_planner = SeasonChipPlanner(
+                bootstrap=bootstrap, fixtures=fixtures, players=players,
+                teams=teams, next_gw=next_gw, baseline_predictions=baseline_predictions,
+            )
         self.bootstrap = self.engine.bootstrap
         self.fixtures = self.engine.fixtures
         self.players = self.engine.players
@@ -47,9 +70,15 @@ class GWPlanner:
     def _ensure_gw_predictions(self, gw: int):
         """Lazy-load predictions for a gameweek."""
         if gw not in self._gw_predictions:
-            preds = self.engine.predict_all(gw)
+            if self._projection_planner is None:
+                preds = self.engine.predict_all(gw)
+                gw_info = self.engine.get_gw_info(gw)
+            else:
+                preds = (self._baseline_predictions if gw == self._baseline_gw
+                         else self._projection_planner._get_target_predictions(gw))
+                gw_info = PredictionEngine.get_gw_info(self.engine, gw)
             self._gw_predictions[gw] = preds
-            self._gw_infos[gw] = self.engine.get_gw_info(gw)
+            self._gw_infos[gw] = gw_info
 
     def _get_pred_map(self, gw: int) -> dict:
         """Get {player_id: prediction} map for a GW."""
@@ -665,14 +694,15 @@ class GWPlanner:
         return self.build_fixture_ticker(list(team_ids))
 
     # ── Convenience: Plan from FPL Team ID ────────────────────
-    def plan_from_team_id(self, team_id: int, horizon: int = None, free_transfers: int | None = None) -> dict:
+    def plan_from_team_id(self, team_id: int, horizon: int = None, free_transfers: int | None = None, team_data: dict | None = None) -> dict:
         """Fetch team from FPL API and generate plan."""
         from my_team import fetch_my_team
 
         if horizon is not None:
             self.horizon = min(horizon, 38 - self.next_gw + 1)
 
-        team_data = fetch_my_team(team_id)
+        if team_data is None:
+            team_data = fetch_my_team(team_id)
         if team_data.get("error"):
             return {"error": team_data["error"]}
 
@@ -731,14 +761,16 @@ class GWPlanner:
         # ------------------------------------------------------------
         # Use a current balance, not the estimated starting allowance.
 
+        if team_data.get("transfers_unlimited"):
+            return {"error": "FPL currently reports unlimited transfers. Finish the active chip or preseason period before generating a normal transfer plan."}
         if free_transfers is not None:
             ft = max(0, min(int(free_transfers), 5))
             ft_source = "explicit_override"
         elif team_data.get("free_transfers_remaining") is not None:
             ft = max(0, min(int(team_data["free_transfers_remaining"]), 5))
-            ft_source = "public_transfer_history"
+            ft_source = "fpl_my_team"
         else:
-            return {"error": "Current free transfers are unknown. Enter the number shown in FPL."}
+            return {"error": "Current free transfers are unavailable. Connect FPL or enter the value shown in FPL."}
 
         print("[GW PLANNER FT]", {
             "planning_gw": self.next_gw,
@@ -762,6 +794,7 @@ class GWPlanner:
         plan["chips_remaining"] = chips_available
         plan["free_transfers"] = ft
         plan["free_transfers_source"] = ft_source
+        plan["prediction_source"] = "cached_fixture_projection" if self._projection_planner else "full_model"
 
         return plan
 

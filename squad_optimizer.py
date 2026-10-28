@@ -49,7 +49,11 @@ class SquadOptimizer:
         Find the best 15-man squad maximizing total xPts.
         Then pick the best starting XI from that squad.
         """
-        squad = self._solve_ilp_squad()
+        try:
+            squad = self._solve_ilp_squad()
+        except (ImportError, OSError) as exc:
+            print(f"[OPTIMIZER] ILP solver unavailable; using heuristic: {exc}")
+            squad = self._optimize_full_squad()
         if not squad:
             return {
                 "squad": [],
@@ -200,7 +204,12 @@ class SquadOptimizer:
             prob += c[i] <= x[i]
         prob += lpSum(c) == 1
 
-        status = prob.solve(PULP_CBC_CMD(msg=0))
+        from pulp import PulpSolverError
+        try:
+            status = prob.solve(PULP_CBC_CMD(msg=0))
+        except PulpSolverError as exc:
+            print(f"[OPTIMIZER] ILP solver failed; using heuristic: {exc}")
+            return self._optimize_full_squad()
         if LpStatus[status] != "Optimal":
             return []
 

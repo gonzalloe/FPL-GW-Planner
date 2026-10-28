@@ -24,6 +24,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from data_fetcher import fetch_bootstrap
+from fpl_connection import FPLConnectionError
 from supabase import create_client
 
 
@@ -801,7 +802,7 @@ def _maybe_gzip(resp):
 @app.after_request
 def after_request(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     path = request.path
     if path.startswith("/api/"):
@@ -832,7 +833,7 @@ def before_request():
         print(f"  [CORS] OPTIONS preflight: {request.path} from {request.headers.get('Origin', 'no-origin')}")
         resp = app.make_default_options_response()
         resp.headers["Access-Control-Allow-Origin"] = "*"
-        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         resp.headers["Access-Control-Max-Age"] = "86400"  # Cache preflight for 24h
         return resp
@@ -1424,20 +1425,61 @@ def api_refresh_status():
     })
 
 
-# ── Settings ──
+# ── Per-user settings and FPL connections ──
+@app.errorhandler(FPLConnectionError)
+def fpl_connection_error(exc):
+    return jsonify({"error": str(exc), "code": exc.code}), exc.status
+
+
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():
-    if request.method == "GET":
-        return jsonify(_load_settings())
-    # POST requires authentication
     user = _get_auth_user()
     if not user:
         return jsonify({"error": "Not authenticated"}), 401
+    if request.method == "GET":
+        return jsonify({"team_id": user.get("team_id")})
     data = request.get_json(silent=True) or {}
-    settings = _load_settings()
-    settings.update(data)
-    _save_settings(settings)
-    return jsonify({"ok": True, "settings": settings})
+    try:
+        team_id = int(data.get("team_id"))
+        if team_id <= 0:
+            raise ValueError()
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid team ID"}), 400
+    from auth import update_team_id
+    update_team_id(user["email"], team_id)
+    return jsonify({"ok": True, "settings": {"team_id": team_id}})
+
+
+@app.route("/api/fpl-connection", methods=["GET", "POST", "DELETE"])
+@limiter.limit("10 per minute")
+def api_fpl_connection():
+    user = _get_auth_user()
+    if not user:
+        return jsonify({"error": "Sign in to connect FPL."}), 401
+    from fpl_connection import connect, disconnect, status
+    if request.method == "GET":
+        return jsonify(status(user))
+    if request.method == "DELETE":
+        disconnect(user)
+        return jsonify({"connected": False})
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid connection request"}), 400
+    result = connect(user, data.get("access_token"))
+    from auth import update_team_id
+    update_team_id(user["email"], result["team_id"])
+    return jsonify(result)
+
+
+def _fetch_user_team(team_id, user):
+    from my_team import fetch_my_team
+    team_data = fetch_my_team(team_id)
+    if not team_data.get("error") and user:
+        from fpl_connection import fetch_snapshot, apply_snapshot
+        snapshot = fetch_snapshot(user, team_id)
+        if snapshot is not None:
+            apply_snapshot(team_data, snapshot)
+    return team_data
 
 
 # ── Chat ──
@@ -1464,7 +1506,8 @@ def api_chat():
 # ── My Team ──
 @app.route("/api/my-team")
 def api_my_team():
-    team_id = request.args.get("id") or _load_settings().get("team_id")
+    user = _get_auth_user()
+    team_id = request.args.get("id") or (user or {}).get("team_id")
     if not team_id:
         return jsonify({"error": "No team ID"}), 400
 
@@ -1477,15 +1520,15 @@ def api_my_team():
             generate_transfer_suggestions,
         )
 
-        settings = _load_settings()
-        settings["team_id"] = team_id
-        _save_settings(settings)
+        if user:
+            from auth import update_team_id
+            update_team_id(user["email"], team_id)
 
         # ============================================================
         # FETCH FPL TEAM
         # ============================================================
 
-        team_data = fetch_my_team(team_id)
+        team_data = _fetch_user_team(team_id, user)
 
         if team_data.get("error"):
             print(
@@ -1524,18 +1567,15 @@ def api_my_team():
             preds,
         )
 
-        # Suggestions use the starting estimate when the live balance is unknown.
         free_transfers = team_data.get("free_transfers_remaining")
-        suggestion_ft = free_transfers if free_transfers is not None else team_data.get("starting_free_transfers", 1)
 
         # ============================================================
         # TRANSFER SUGGESTIONS
         # ============================================================
 
-        suggestions = generate_transfer_suggestions(
-            enriched,
-            preds,
-            free_transfers=int(suggestion_ft),
+        suggestions = (
+            generate_transfer_suggestions(enriched, preds, free_transfers=int(free_transfers))
+            if free_transfers is not None else []
         )
 
         # ============================================================
@@ -1556,13 +1596,19 @@ def api_my_team():
             "active_chip": enriched.get("active_chip"),
             "recent_transfers": enriched.get("transfers", [])[:10],
             "history": enriched.get("history", [])[-10:],
-            "free_transfers": free_transfers,
+            "free_transfers": team_data.get("free_transfers"),
             "free_transfers_remaining": team_data.get("free_transfers_remaining"),
-            "starting_free_transfers": team_data.get("starting_free_transfers"),
+            "transfers_unlimited": team_data.get("transfers_unlimited", False),
+            "fpl_connected": team_data.get("fpl_connected", False),
+            "free_transfers_source": team_data.get("free_transfers_source"),
+            "fpl_transfer_status": team_data.get("fpl_transfer_status"),
             "early_transfers_known": team_data.get("early_transfers_known", False),
             "debug_fpl": team_data.get("debug_fpl"),
         })
 
+
+    except FPLConnectionError as exc:
+        return fpl_connection_error(exc)
 
     except ValueError:
         return jsonify({
@@ -1588,23 +1634,20 @@ def api_news():
 
 @app.route("/api/transfers")
 def api_transfers():
-    team_id = request.args.get("id") or _load_settings().get("team_id")
+    user = _get_auth_user()
+    team_id = request.args.get("id") or (user or {}).get("team_id")
     if not team_id:
         return jsonify({"error": "No team ID"}), 400
     try:
         from my_team import fetch_my_team, enrich_my_team, generate_transfer_suggestions
-        team_data = fetch_my_team(int(team_id))
+        team_data = _fetch_user_team(int(team_id), user)
         preds, _, _ = _cached_predictions()
         if not preds: return jsonify({"error": "Predictions not ready"}), 503
         player_map = {p["player_id"]: p for p in preds if "player_id" in p}
         enriched = enrich_my_team(team_data, player_map, preds)
-        free_transfers = team_data.get("free_transfers")
-        if free_transfers is None:
-            free_transfers = team_data.get("info", {}).get("free_transfers")
-        if free_transfers is None:
-            free_transfers = 1
-        free_transfers = int(free_transfers)
-        suggestions = generate_transfer_suggestions(enriched, preds, free_transfers=free_transfers)
+        free_transfers = team_data.get("free_transfers_remaining")
+        suggestions = (generate_transfer_suggestions(enriched, preds, free_transfers=int(free_transfers))
+                       if free_transfers is not None else [])
         return jsonify({
             "team_id": int(team_id),
             "suggestions": suggestions,
@@ -1612,6 +1655,9 @@ def api_transfers():
             "squad_value": enriched.get("squad_value", 0),
             "free_transfers": free_transfers,
         })
+
+    except FPLConnectionError as exc:
+        return fpl_connection_error(exc)
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1696,15 +1742,13 @@ def api_chip_analysis():
 @limiter.limit("5 per minute")
 def api_gw_planner():
     print("========== GW PLANNER REQUEST ==========")
-    team_id = request.args.get("id") or _load_settings().get("team_id")
+    user = _get_auth_user()
+    team_id = request.args.get("id") or (user or {}).get("team_id")
     horizon = request.args.get("horizon", 5, type=int)
-    raw_ft = request.args.get("free_transfers")
-    if raw_ft is not None:
-        if raw_ft not in {str(n) for n in range(6)}:
-            return jsonify({"error": "Free transfers must be an integer from 0 to 5"}), 400
-        free_transfers = int(raw_ft)
-    else:
-        free_transfers = None
+    if not user:
+        return jsonify({"error": "Sign in and connect FPL before generating a plan."}), 401
+    free_transfers = None
+
     print("[GW PLANNER] team_id:", team_id)
     print("[GW PLANNER] horizon:", horizon)
   
@@ -1762,7 +1806,6 @@ def api_gw_planner():
     # PREVENT CONCURRENT HEAVY CALCULATIONS
     # ─────────────────────────────────────────────
     gw_planner_lock_acquired = False
-    prediction_lock_acquired = False
 
     if not GW_PLANNER_LOCK.acquire(blocking=False):
         return jsonify({
@@ -1774,32 +1817,28 @@ def api_gw_planner():
 
     gw_planner_lock_acquired = True
 
-    if not _prediction_run_lock.acquire(blocking=False):
-        GW_PLANNER_LOCK.release()
-        gw_planner_lock_acquired = False
-
-        return jsonify({
-            "error": (
-                "Prediction refresh is currently running. "
-                "Please wait for the current calculation to finish."
-            )
-        }), 503
-
-    prediction_lock_acquired = True
-
     # ─────────────────────────────────────────
     # CREATE PLANNER
     # ─────────────────────────────────────────
     try:
         from gw_planner import GWPlanner
-        planner = GWPlanner(horizon=horizon)
+        predictions, cached, _ = _cached_predictions()
+        if not predictions or not cached:
+            return jsonify({"error": "Predictions are not ready yet. Please try again after the refresh finishes."}), 503
+        try:
+            planner = GWPlanner(horizon=horizon, baseline_predictions=predictions,
+                                baseline_gw=cached.get("gameweek"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 503
 
         # ─────────────────────────────────────────
         # RUN PLANNER
         # ─────────────────────────────────────────
 
         print("[GW PLANNER] Running plan_from_team_id:", team_id)
-        plan = planner.plan_from_team_id(team_id, horizon=horizon, free_transfers=free_transfers)
+        team_data = _fetch_user_team(team_id, user)
+        plan = planner.plan_from_team_id(team_id, horizon=horizon,
+                                         free_transfers=free_transfers, team_data=team_data)
 
         # ─────────────────────────────────────────
         # DEBUG
@@ -1840,6 +1879,9 @@ def api_gw_planner():
         print("[GW PLANNER] Calculation complete")
         return jsonify(plan)
 
+    except FPLConnectionError as exc:
+        return fpl_connection_error(exc)
+
     except MemoryError:
         print("[GW PLANNER] !!! PYTHON MEMORY ERROR !!!")
         _log_gw_planner_memory("MemoryError")
@@ -1861,8 +1903,6 @@ def api_gw_planner():
         }), 500
 
     finally:
-        if prediction_lock_acquired:
-            _prediction_run_lock.release()
         if gw_planner_lock_acquired:
             GW_PLANNER_LOCK.release()
         print("[GW PLANNER] Locks released")
