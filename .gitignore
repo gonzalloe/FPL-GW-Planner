@@ -18,3 +18,5 @@ _check*.py
 !.env.example
 !tests/test_team_id_planner.py
 !tests/test_squad_optimizer.py
+
+!tests/test_player_roles.py

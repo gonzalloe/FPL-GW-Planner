@@ -23,6 +23,7 @@ Key improvements over v3:
   10. Defensive contribution points (clearances/blocks/interceptions)
 """
 import math
+import copy
 from config import (
     SCORING, PREDICTION_WEIGHTS, FDR_MULTIPLIER,
     HOME_BONUS, AWAY_PENALTY, POSITION_LIMITS
@@ -60,6 +61,48 @@ PRIOR_FETCH_MINUTES_THRESHOLD = 450  # only fetch last-season history for player
 POSITION_START_RATE_PRIOR = {1: 0.50, 2: 0.70, 3: 0.65, 4: 0.65}
 POSITION_MINUTES_PRIOR = {1: 0.70, 2: 0.65, 3: 0.60, 4: 0.60}
 PLAYER_PRIOR_PHASEOUT_GW = 12
+
+PLAYER_ROLE_MODEL_VERSION = 3
+
+
+def sanitize_legacy_role_cache(data):
+    """Do not serve starter labels/probabilities from the superseded model."""
+    if data.get("role_model_version") == PLAYER_ROLE_MODEL_VERSION:
+        return data
+    data = copy.deepcopy(data)
+    pending = [data]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if isinstance(value.get("starter_quality"), dict):
+                value["starter_quality"] = {"tier": "unknown", "p_start": None,
+                                            "start_probability_source": "stale_cache"}
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    data["role_model_stale"] = True
+    return data
+
+
+def _finite_number(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _count(value):
+    number = _finite_number(value)
+    return int(number) if number is not None and number >= 0 and number.is_integer() else None
+
+
+def _probability(value):
+    number = _finite_number(value)
+    return number if number is not None and 0 <= number <= 1 else None
+
 
 # ══════════════════════════════════════════════════════════════
 #  Poisson helpers
@@ -371,11 +414,25 @@ class PredictionEngine:
 
             return found
 
-        player_records = []
-        for event in events:
+        player_records = {}
+        team_matches = {}
+        seen_events = set()
+        for event_index, event in enumerate(events):
             if not isinstance(event, dict):
                 continue
-            player_records.extend(find_player_records(event))
+            event_key = str(event.get("match_id") or event.get("fixture_id") or event_index)
+            if event_key in seen_events:
+                continue
+            seen_events.add(event_key)
+            for side in ("home", "away"):
+                team_id = api_to_fpl_team.get(safe_int(event.get(f"match_{side}team_id")))
+                if team_id is not None:
+                    team_matches[team_id] = team_matches.get(team_id, 0) + 1
+            for record in find_player_records(event):
+                key = (normalize_name(record["player_name"]), record["team_id"], event_key)
+                previous = player_records.get(key)
+                if previous is None or record["minutes"] > previous["minutes"]:
+                    player_records[key] = record
 
         # ============================================================
         # BUILD HISTORICAL ROLE STATS
@@ -386,7 +443,7 @@ class PredictionEngine:
 
         historical_by_player = {}
 
-        for record in player_records:
+        for record in player_records.values():
             name = normalize_name(record.get("player_name"))
             if not name:
                 continue
@@ -401,6 +458,7 @@ class PredictionEngine:
                     "minutes": 0,
                     "matches": 0,
                     "starts": 0,
+                    "unknown_starts": 0,
                     "display_name": record.get("player_name", ""),
                     "team_id": fpl_team_id,
                 }
@@ -413,8 +471,8 @@ class PredictionEngine:
             started = record.get("started")
             if started is True:
                 stats["starts"] += 1
-            elif started is None and minutes >= 60:
-                stats["starts"] += 1
+            elif started is None:
+                stats["unknown_starts"] += 1
 
         # ============================================================
         # MATCH FPL PLAYERS
@@ -467,14 +525,15 @@ class PredictionEngine:
                 continue
 
             minutes = int(matched_record.get("minutes", 0))
-            matches = int(matched_record.get("matches", 0))
+            matches = team_matches.get(matched_record.get("team_id"), 0)
             starts = int(matched_record.get("starts", 0))
 
             if minutes < 450 or matches <= 0:
                 continue
 
             avg_minutes = min(minutes / matches, 90.0)
-            start_rate = min(max(starts / matches if matches > 0 else 0.0, 0.0), 1.0)
+            start_rate = (starts / matches if not matched_record.get("unknown_starts")
+                          and starts <= matches else None)
 
             p["championship_role"] = {
                 "start_rate": start_rate,
@@ -525,6 +584,11 @@ class PredictionEngine:
             prior_xa = POSITION_XA_PRIOR.get(pos, 0.10)
             prior_bonus = POSITION_BONUS_PRIOR.get(pos, 0.20)
 
+            recent = get_recent_gw_stats(pid)
+            p["_recent_games"] = recent.get("recent_games", 0)
+            p["_recent_start_rate"] = recent.get("recent_start_rate")
+            p["_recent_avg_mins"] = recent.get("recent_avg_mins")
+
             # Load previous-season data once
             if not p.get("_prior_loaded", False):
                 rates = {}
@@ -540,7 +604,7 @@ class PredictionEngine:
 
                 if rates:
                     p["previous_minutes"] = int(rates.get("minutes", 0) or 0)
-                    p["previous_starts"] = int(rates.get("starts", 0) or 0)
+                    p["previous_starts"] = rates.get("starts")
                     p["previous_games"] = int(rates.get("games", 38) or 38)
                     p["_previous_season_name"] = rates.get("season_name", "")
                     previous_team_id = rates.get("previous_team_id")
@@ -606,6 +670,7 @@ class PredictionEngine:
             "tier": self._derive_tier_label(
                 profile,
                 p.get("position_id"),
+                availability,
             ),
         }
 
@@ -1037,9 +1102,10 @@ class PredictionEngine:
         # ============================================================
 
         previous_minutes = int(p.get("previous_minutes", 0) or 0)
-        previous_starts = int(p.get("previous_starts", 0) or 0)
+        previous_starts = _finite_number(p.get("previous_starts"))
         previous_games = int(p.get("previous_games", 0) or 0)
-        if (previous_minutes >= 450 and previous_games > 0):
+        if (previous_minutes >= 450 and previous_games > 0
+                and previous_starts is not None and 0 <= previous_starts <= previous_games):
             previous_start_rate = min(max(previous_starts / previous_games, 0.0,), 1.0)
             previous_avg_minutes = min(max(previous_minutes / previous_games, 0.0,), 90.0)
 
@@ -1064,8 +1130,8 @@ class PredictionEngine:
         if isinstance(champ, dict):
             champ_minutes = int(champ.get("minutes", 0) or 0)
             champ_matches = int(champ.get("matches", 0) or 0)
-            if (champ_minutes >= 450 and champ_matches > 0):
-                champ_start_rate = min(max(float(champ.get("start_rate", 0.5) or 0.5), 0.0), 1.0)
+            if (champ_minutes >= 450 and champ_matches > 0 and _probability(champ.get("start_rate")) is not None):
+                champ_start_rate = _probability(champ.get("start_rate"))
                 champ_avg_minutes = min(max(float(champ.get("avg_minutes", 60.0) or 60.0), 0.0), 90.0,)
 
                 return {
@@ -1112,6 +1178,32 @@ class PredictionEngine:
             return False
         return team_id in self.promoted_team_ids
 
+    def _played_team_fixtures(self, p: dict) -> int:
+        team = p.get("team")
+        if not hasattr(self, "_role_fixture_counts"):
+            counts = {}
+            for fixture in self.fixtures:
+                if fixture.get("finished") or fixture.get("finished_provisional") or fixture.get("started"):
+                    for side in ("team_h", "team_a"):
+                        team_id = fixture.get(side)
+                        counts[team_id] = counts.get(team_id, 0) + 1
+            self._role_fixture_counts = counts
+        if self.fixtures:
+            return self._role_fixture_counts.get(team, 0)
+        return sum(bool(event.get("finished")) for event in self.bootstrap.get("events", []))
+
+    def _current_season_role_weight(self, p: dict) -> float:
+        """Phase out old roles using team opportunities, not player minutes.
+
+        A player left out of ten matches has just as much selection evidence
+        as one who started ten. Retain the project's existing 6/10-fixture
+        phase-out horizons for promoted/established teams.
+        """
+        phaseout = (PROMOTED_ROLE_PHASEOUT_GW
+                    if p.get("team") in getattr(self, "promoted_team_ids", set())
+                    else ESTABLISHED_ROLE_PHASEOUT_GW)
+        return min(self._played_team_fixtures(p) / max(phaseout, 1), 1.0)
+
     def _current_team_position_competition(self, p: dict) -> dict:
         """
         Estimate current-club selection strength relative to available
@@ -1151,8 +1243,8 @@ class PredictionEngine:
                 return 0.5, 60.0
 
         def player_score(player):
-            minutes = int(player.get("minutes", 0) or 0)
-            starts = int(player.get("starts", 0) or 0)
+            minutes = (_count(player.get("minutes")) or 0)
+            starts = (_count(player.get("starts")) or 0)
 
             recent_games = int(player.get("_recent_games", 0) or 0)
             recent_start_rate = player.get("_recent_start_rate")
@@ -1165,8 +1257,8 @@ class PredictionEngine:
             # ------------------------------------------------------------
             # CURRENT-SEASON EVIDENCE
             # ------------------------------------------------------------
-            if self.current_gw > 1 and minutes > 0:
-                gws_played = max(self.current_gw - 1, 1)
+            if self._played_team_fixtures(player) > 0 and player.get("starts") is not None:
+                gws_played = max(self._played_team_fixtures(player), 1)
 
                 season_start_rate = min(
                     starts / gws_played,
@@ -1178,8 +1270,8 @@ class PredictionEngine:
                     90.0,
                 )
 
-                # Current-season evidence becomes dominant quickly.
-                current_weight = min(minutes / 450.0, 1.0)
+                # Team match opportunities also count repeated non-selection.
+                current_weight = self._current_season_role_weight(player)
 
                 start_score = (
                     prior_start_rate * (1.0 - current_weight)
@@ -1236,15 +1328,13 @@ class PredictionEngine:
                     )
                 else:
                     score = prior_start_rate
+                # Missing current data must not revive a historical role late
+                # in the season through the competition model.
+                score *= 1.0 - self._current_season_role_weight(player)
 
             # ------------------------------------------------------------
             # AVAILABILITY
             # ------------------------------------------------------------
-            chance = player.get("chance_of_playing_next_round")
-
-            if chance is not None:
-                score *= float(chance) / 100.0
-
             return min(max(score, 0.0), 1.0)
 
         # ------------------------------------------------------------
@@ -1261,14 +1351,9 @@ class PredictionEngine:
             if other.get("position_id") != pos_id:
                 continue
 
-            status = other.get("status", "a")
-            chance = other.get("chance_of_playing_next_round")
-
-            # Unavailable players are not competition.
-            if status in ("i", "u", "s", "n"):
-                continue
-
-            if chance is not None and chance <= 25:
+            availability = self._get_availability(other)
+            chance = availability.get("chance")
+            if availability["status"] in {"unavailable", "unknown"} or (chance is not None and chance <= 25):
                 continue
 
             candidates.append({
@@ -1286,8 +1371,8 @@ class PredictionEngine:
         candidates.append({
             "player_id": p.get("id"),
             "score": own_score,
-            "current_minutes": int(p.get("minutes", 0) or 0),
-            "current_starts": int(p.get("starts", 0) or 0),
+            "current_minutes": (_count(p.get("minutes")) or 0),
+            "current_starts": (_count(p.get("starts")) or 0),
         })
 
         # ------------------------------------------------------------
@@ -1397,9 +1482,9 @@ class PredictionEngine:
         # 0. BASIC INPUTS — INITIALISE EVERYTHING UP FRONT
         # ============================================================
 
-        total_minutes = int(p.get("minutes", 0) or 0)
-        starts = int(p.get("starts", 0) or 0)
-        gws_played = max(self.current_gw - 1, 1)
+        total_minutes = (_count(p.get("minutes")) or 0)
+        starts = (_count(p.get("starts")) or 0)
+        gws_played = self._played_team_fixtures(p)
         recent_games = int(p.get("_recent_games", 0) or 0)
         recent_start_rate = p.get("_recent_start_rate")
         recent_avg_mins = p.get("_recent_avg_mins")
@@ -1441,19 +1526,17 @@ class PredictionEngine:
         # Fall back to the normal player minutes/starts fields.
         # ============================================================
 
-        current_minutes = int(p.get("_current_season_minutes", total_minutes) or 0)
-        current_starts = int(p.get("_current_season_starts", starts) or 0)
+        current_minutes = (_count(p.get("_current_season_minutes", total_minutes)) or 0)
+        current_starts = (_count(p.get("_current_season_starts", starts)) or 0)
         current_minutes = max(current_minutes, 0)
         current_starts = max(current_starts, 0)
 
-        # At GW1 there should normally be no current-season evidence.
-        if self.current_gw <= 1:
-            current_minutes = int(p.get("_current_season_minutes", 0) or 0)
-            current_starts = int(p.get("_current_season_starts", 0) or 0)
-
-        if current_minutes > 0:
-            current_start_rate = min(current_starts / max(gws_played, 1), 1.0)
-            current_avg_mins = min(current_minutes / max(gws_played, 1), 90.0)
+        current_start_data = _count(p.get("_current_season_starts", p.get("starts")))
+        if (gws_played > 0 and current_start_data is not None
+                and current_start_data <= gws_played
+                and (current_start_data == 0 or current_minutes > 0)):
+            current_start_rate = current_starts / gws_played
+            current_avg_mins = min(current_minutes / gws_played, 90.0)
 
         # ============================================================
         # 3. RECENT ROLE EVIDENCE
@@ -1462,10 +1545,7 @@ class PredictionEngine:
         # Sanitize recent evidence before using it.
         if recent_start_rate is not None:
             try:
-                recent_start_rate = min(
-                    max(float(recent_start_rate), 0.0),
-                    1.0,
-                )
+                recent_start_rate = _probability(recent_start_rate)
             except (TypeError, ValueError):
                 recent_start_rate = None
 
@@ -1533,10 +1613,7 @@ class PredictionEngine:
 
         if competition_score is not None:
             try:
-                competition_score = min(
-                    max(float(competition_score), 0.0),
-                    1.0,
-                )
+                competition_score = _probability(competition_score)
             except (TypeError, ValueError):
                 competition_score = None
 
@@ -1586,19 +1663,13 @@ class PredictionEngine:
         # ============================================================
 
         pos_id = p.get("position_id")
-        has_current_season_evidence = (current_minutes > 0 and observed_start_rate is not None)
+        has_current_season_evidence = observed_start_rate is not None
 
+        current_weight = self._current_season_role_weight(p)
+        historical_weight = 1.0 - current_weight
         if has_current_season_evidence:
-            # Current-season starts are much more informative than old-club role.
-            # Give recent actual starts strong weight after even 2 matches.
-            current_games = max(gws_played, 1)
-            if current_games <= 2:
-                current_weight = 0.75
-            elif current_games <= 4:
-                current_weight = 0.85
-            else:
-                current_weight = 0.90
-            start_rate = (prior_start_rate * (1.0 - current_weight) + observed_start_rate * current_weight)
+            start_rate = (prior_start_rate * historical_weight
+                          + observed_start_rate * current_weight)
 
         elif (
             pos_id == 1
@@ -1639,6 +1710,8 @@ class PredictionEngine:
                 )
             else:
                 start_rate = prior_start_rate
+        if not has_current_season_evidence and historical_weight == 0:
+            start_rate = 0.0  # Internal only; the exported probability stays unknown.
         if (
             pos_id != 1
             and not has_current_season_evidence
@@ -1655,18 +1728,9 @@ class PredictionEngine:
         # 6. EXPECTED STARTER MINUTES
         # ============================================================
 
-        if observed_avg_mins is not None and current_minutes > 0:
-            current_games = max(gws_played, 1)
-            if current_games <= 2:
-                current_weight = 0.65
-            elif current_games <= 4:
-                current_weight = 0.85
-            else:
-                current_weight = 0.90
-            # New transfers: current-club minutes are more informative
-            if is_new_environment:
-                current_weight = min(current_weight + 0.10, 0.90)
-            avg_mins = (prior_avg_mins * (1.0 - current_weight) + observed_avg_mins * current_weight)
+        if observed_avg_mins is not None:
+            avg_mins = (prior_avg_mins * historical_weight
+                        + observed_avg_mins * current_weight)
         elif (is_new_environment and competition_score is not None):
             # GKP: If selected, normally plays close to 90.
             # Outfield: Preserve historical minutes profile.
@@ -1676,23 +1740,17 @@ class PredictionEngine:
                 avg_mins = prior_avg_mins
         else:
             avg_mins = prior_avg_mins
+        if observed_avg_mins is None and historical_weight == 0:
+            avg_mins = 0.0
         avg_mins = min(max(avg_mins, 0.0), 90.0)
 
         # ============================================================
         # 7. AVAILABILITY
         # ============================================================
 
-        chance = p.get("chance_of_playing_next_round")
-        if chance is None:
-            availability = 1.0
-        else:
-            try:
-                availability = float(chance) / 100.0
-            except (TypeError, ValueError):
-                availability = 1.0
-
-        availability = min(max(availability, 0.0), 1.0)
-        p_start = min(start_rate * availability, 1.0)
+        availability_info = self._get_availability(p)
+        chance = availability_info.get("chance")
+        availability = chance / 100.0 if chance is not None else None
 
         # ============================================================
         # 8. MINUTES VOLATILITY
@@ -1706,6 +1764,7 @@ class PredictionEngine:
             mins_volatility = 0.0
         mins_volatility = min(max(mins_volatility, 0.0), 1.0)
 
+        unboosted_start_rate = start_rate
         # ============================================================
         # 9. INJURY / TEAM ROLE BOOST
         # ============================================================
@@ -1720,7 +1779,13 @@ class PredictionEngine:
                         if teammates_out == 1
                         else 0.25
                     )
-                p_start = min(p_start + boost, 1.0)        
+                start_rate = min(start_rate + boost, 1.0)
+
+        # Apply availability once, after selection/teammate adjustments.
+        selection_known = (has_current_season_evidence or
+                           (has_previous_role and gws_played == 0 and not is_new_transfer))
+        p_start = start_rate * availability if availability is not None else 0.0
+        probability_known = availability == 0 or (selection_known and availability is not None)
 
         # ============================================================
         # 10. P(60+)
@@ -1739,6 +1804,7 @@ class PredictionEngine:
         if current_minutes > 0:
             p_plays_60 *= (1.0 - mins_volatility * 0.30)
         p_plays_60 = min(max(p_plays_60, 0.0), 1.0)
+        p_plays_60 = min(p_plays_60, availability or 0.0)
 
         # ============================================================
         # 11. ROTATION RISK
@@ -1789,10 +1855,7 @@ class PredictionEngine:
                 p_sub * sub_minutes
             )
 
-        xmins = min(
-            max(xmins, 0.0),
-            90.0,
-        )
+        xmins = min(max(xmins, 0.0), 90.0 * (availability or 0.0))
 
         # ============================================================
         # 13. DGW
@@ -1824,7 +1887,16 @@ class PredictionEngine:
             dgw_effective = 1.0
             
         return {
-            "p_start": round(p_start, 3),
+            "p_start": round(p_start, 3) if probability_known else None,
+            "p_start_if_available": round(start_rate, 3) if selection_known else None,
+            "role_start_probability": round(unboosted_start_rate, 3) if selection_known else None,
+            "availability_probability": availability,
+            "availability_status": availability_info["status"],
+            "start_probability_source": "current_fixtures" if has_current_season_evidence else prior.get("source"),
+            "selection_evidence": selection_known,
+            "selection_fixtures": gws_played,
+            "current_season_role_weight": round(current_weight, 3),
+            "historical_role_weight": round(historical_weight, 3),
             "p_plays_60": round(p_plays_60, 3),
             "xmins": round(xmins, 1),
             "rotation_risk": round(rotation_risk, 3),
@@ -1841,12 +1913,20 @@ class PredictionEngine:
         }
 
 
-    def _derive_tier_label(self, profile: dict, position_id: int | None = None) -> str:
-        """Display-only squad role label."""
+    def _derive_tier_label(self, profile: dict, position_id: int | None = None, availability: dict | None = None) -> str:
+        """Availability-gated role label from the same probability sent to UI."""
 
-        p_start = profile["p_start"]
-        risk = profile["rotation_risk"]
-        xmins = profile["xmins"]
+        availability_status = (availability or {}).get("status", profile.get("availability_status", "unknown"))
+        if availability_status in {"unavailable", "blank_gw"}:
+            return "unavailable"
+        p_start = _probability(profile.get("p_start"))
+        if p_start is None or availability_status == "unknown" or not profile.get("selection_evidence", False):
+            return "unknown"
+        risk = profile.get("rotation_risk", 1.0)
+        xmins = profile.get("xmins", 0.0)
+        role_start = _probability(profile.get("role_start_probability", p_start))
+        can_be_nailed = (availability_status == "available" and role_start is not None
+                         and role_start >= 0.85)
 
         prior_start_rate = profile.get("prior_start_rate")
         has_previous_role = profile.get("has_previous_role", False)
@@ -1859,7 +1939,7 @@ class PredictionEngine:
         # GOALKEEPERS
         # ============================================================
         if position_id == 1:
-            if p_start >= 0.85:
+            if can_be_nailed and p_start >= 0.85:
                 return "nailed"
             if p_start >= 0.65:
                 return "regular"
@@ -1891,7 +1971,7 @@ class PredictionEngine:
         # ============================================================
         # NORMAL OUTFIELD TIERS
         # ============================================================
-        if p_start >= 0.85 and risk <= 0.35:
+        if can_be_nailed and p_start >= 0.85 and risk <= 0.35:
             return "nailed"
 
         if p_start >= 0.70:
@@ -1917,9 +1997,9 @@ class PredictionEngine:
         - Small samples regress toward uncertainty (0.5)
         - Large samples trust observed role stability
         """
-        total_minutes = int(p.get("minutes", 0))
-        starts = int(p.get("starts", 0))
-        gws_played = max(self.current_gw - 1, 1)
+        total_minutes = (_count(p.get("minutes")) or 0)
+        starts = (_count(p.get("starts")) or 0)
+        gws_played = max(self._played_team_fixtures(p), 1)
         # No data
         if total_minutes == 0:
             return 0.5
@@ -2144,7 +2224,7 @@ class PredictionEngine:
         return (ict_per_game - avg_per_game) / (avg_per_game + 1)
 
     def _calc_minutes_consistency(self, p: dict) -> float:
-        total_minutes = int(p.get("minutes", 0))
+        total_minutes = (_count(p.get("minutes")) or 0)
         gw_played = max(self.current_gw - 1, 1)
         # Early season: no current-season evidence yet. Previous role model should handle trust
         if gw_played <= 5:
@@ -2264,26 +2344,27 @@ class PredictionEngine:
     # ══════════════════════════════════════════════════════════
 
     def _get_availability(self, p: dict) -> dict:
-        status = p.get("status", "a")
-        chance = p.get("chance_of_playing_next_round")
+        status = p.get("status")
+        chance = _finite_number(p.get("chance_of_playing_next_round"))
+        chance = chance if chance is not None and 0 <= chance <= 100 else None
         news = p.get("news", "")
-
-        if status == "u":
-            return {"status": "unavailable", "chance": 0, "news": news}
-        elif status == "i":
-            return {"status": "unavailable", "chance": 0, "news": news or "Injured"}
-        elif status == "s":
-            return {"status": "unavailable", "chance": 0, "news": news or "Suspended"}
-        elif status == "n":
-            return {"status": "unavailable", "chance": 0, "news": news or "Not available"}
-        elif status == "d":
-            return {
-                "status": "doubtful",
-                "chance": chance if chance is not None else 50,
-                "news": news or "Doubtful",
-            }
-        else:
-            return {"status": "available", "chance": 100, "news": news}
+        override = p.get("_news_override") or {}
+        if status in {"i", "s", "u", "n"} or override.get("status") in {"i", "s", "u", "n"} or chance == 0:
+            return {"status": "unavailable", "chance": 0, "news": news or override.get("news", "")}
+        if override.get("status") == "d":
+            override_chance = _finite_number(override.get("chance"))
+            if override_chance is not None and 0 <= override_chance <= 100:
+                chance = min(chance, override_chance) if chance is not None else override_chance
+            status = "d"
+        if status == "d" or (chance is not None and chance < 100):
+            return {"status": "doubtful", "chance": chance, "news": news or "Doubtful"}
+        # FPL explicitly marks 'a' as available; its null chance is not a
+        # selection probability. Missing/invalid status alone is not availability.
+        if status == "a" and p.get("chance_of_playing_next_round") is None:
+            chance = 100.0
+        if chance == 100:
+            return {"status": "available", "chance": chance, "news": news}
+        return {"status": "unknown", "chance": None, "news": news}
 
     def _apply_availability_discount(self, xp: float, availability: dict) -> float:
         """Apply availability discount based on chance of playing.
@@ -2296,7 +2377,7 @@ class PredictionEngine:
           <25% -> 0.08x  (near-zero)
         """
         if availability["status"] == "doubtful":
-            chance = availability.get("chance", 50)
+            chance = availability.get("chance") or 0
             if chance >= 75:
                 return xp * 0.92
             elif chance >= 50:
@@ -2316,7 +2397,8 @@ class PredictionEngine:
                          teammates_out: int = 0) -> float:
         score = 0.50
         # Use continuous minutes probability, not display tier
-        p_start = starter.get("p_start", 0.5)
+        p_start = _probability(starter.get("p_start"))
+        p_start = 0.5 if p_start is None else p_start
         p60 = starter.get("p_plays_60", 0.5)
         risk = starter.get("rotation_risk", 0.5)
         xmins = starter.get("xmins", 45)
@@ -2327,7 +2409,7 @@ class PredictionEngine:
         score += ((xmins / 90.0) - 0.5) * 0.10
 
         # Historical sample size confidence only
-        starts = int(p.get("starts",0))
+        starts = (_count(p.get("starts")) or 0)
         if starts < 3:
             score -= 0.10
         elif starts > 20:
@@ -2347,7 +2429,7 @@ class PredictionEngine:
         if availability["status"] == "available":
             score += 0.05
         elif availability["status"] == "doubtful":
-            chance = availability.get("chance", 50)
+            chance = availability.get("chance") or 0
             if chance >= 75:
                 score -= 0.05
             else:
@@ -2385,7 +2467,9 @@ class PredictionEngine:
             "fixtures": [], "fixture": {},
             "num_fixtures": 0, "is_dgw": False,
             "availability": availability,
-            "starter_quality": {"tier": "unavailable", "multiplier": 0,
+            "starter_quality": {"tier": "unavailable", "p_start": 0.0, "p_start_if_available": None,
+                                "p_plays_60": 0.0, "xmins": 0.0, "rotation_risk": 1.0,
+                                "availability_status": availability["status"], "multiplier": 0,
                                 "avg_mins": 0, "start_rate": 0, "minutes_pct": 0,
                                 "starts": 0, "total_minutes": 0, "mins_volatility": 0,
                                 "dgw_both_start_prob": None, "dgw_effective_matches": 0},

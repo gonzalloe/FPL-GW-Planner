@@ -3,6 +3,7 @@ FPL Predictor - Data Fetcher
 All data from the official FPL API & APIFOOTBALL.
 """
 import json
+import math
 import time
 import requests
 import csv
@@ -16,6 +17,7 @@ CACHE_DIR.mkdir(exist_ok=True)
 # Rate limiting: be polite to the API
 REQUEST_DELAY = 0.3  # seconds between requests
 _PLAYER_DETAIL_MEMO = {}
+PLAYER_DETAIL_TTL = 600
 
 def _get(url: str, cache_key: str | None = None, cache_ttl: int = 300) -> dict | list:
     """GET with optional file-based cache (TTL in seconds). Falls back to stale cache on network error."""
@@ -57,11 +59,11 @@ def fetch_player_detail(player_id: int) -> dict:
     """Fetch detailed history for a single player."""
     player_id = int(player_id)
     cached = _PLAYER_DETAIL_MEMO.get(player_id)
-    if cached is not None:
-        return cached
+    if cached is not None and time.time() - cached[0] < PLAYER_DETAIL_TTL:
+        return cached[1]
     url = FPL_ENDPOINTS["player_detail"].format(player_id=player_id)
-    detail = _get(url, cache_key=f"player_{player_id}", cache_ttl=86400)
-    _PLAYER_DETAIL_MEMO[player_id] = detail
+    detail = _get(url, cache_key=f"player_{player_id}", cache_ttl=PLAYER_DETAIL_TTL)
+    _PLAYER_DETAIL_MEMO[player_id] = (time.time(), detail)
     return detail
 
 
@@ -412,18 +414,15 @@ def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict
         return {
             "season_name": previous_season.get("season_name", previous_season_name),
             "minutes": mins,
-            "starts": 0,
-            "games": int(previous_season.get("appearances", 0) or 0),
+            "starts": _valid_count(previous_season.get("starts")),
+            "games": 38,
             "previous_team_id": previous_team_id,
             "insufficient_sample": True,
         }
-    starts = int(previous_season.get("starts", 0) or 0)
-    if starts <= 0:
-        # Defensive fallback for historical API records that do not expose starts reliably.
-        starts = max(round(mins / 75), 1)
-    games = int(previous_season.get("appearances", 0) or 0)
-    if games <= 0:
-        games = max(round(mins / 75), starts, 1)
+    # Starts are a recorded count, never inferred from minutes. Appearances
+    # exclude absences and bench games, so they are not selection opportunities.
+    starts = _valid_count(previous_season.get("starts"))
+    games = 38  # Completed Premier League season (the FPL competition).
     xg = float(previous_season.get("expected_goals", 0) or 0)
     xa = float(previous_season.get("expected_assists", 0) or 0)
     bonus = int(previous_season.get("bonus", 0) or 0)
@@ -444,8 +443,8 @@ def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict
 
         "bonus_per_start": (
             bonus / starts
-            if starts > 0
-            else 0.0
+            if starts is not None and starts > 0
+            else None
         ),
 
         "season_name": previous_season.get("season_name", previous_season_name),
@@ -455,37 +454,38 @@ def get_last_season_rates(player_id: int, bootstrap: dict | None = None) -> dict
         "previous_team_id": previous_team_id,
     }
 
+def _valid_count(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(number) if math.isfinite(number) and number >= 0 and number.is_integer() else None
+
+
 def get_recent_gw_stats(player_id: int, window: int = 5) -> dict:
-    """
-    Current-season per-gameweek minutes/starts from the last `window` GWs,
-    via element-summary's `history` array (distinct from `history_past`,
-    which covers prior completed seasons). Used to detect a player who has
-    fallen out of / into the team recently - something season-long
-    cumulative starts/minutes cannot see, since it treats August and this
-    week's form identically.
-    Returns {} if fewer than 2 games are available (too little to trust).
+    """Per-fixture starts over the last window played fixtures, including zeros.
+
+    FPL's `starts` distinguishes an early-subbed starter from a long cameo.
+    Missing starts stay unknown; reaching 60 minutes is not a start proxy.
+    A double gameweek contributes two opportunities, a blank contributes none.
     """
     try:
         detail = fetch_player_detail(player_id)
     except Exception:
         return {}
-
     history = detail.get("history", []) if isinstance(detail, dict) else []
-    if not history:
-        return {}
-
     recent = history[-window:]
     if len(recent) < 2:
         return {}
-
-    starts = sum(1 for gw in recent if int(gw.get("minutes", 0) or 0) >= 60)
-    total_mins = sum(int(gw.get("minutes", 0) or 0) for gw in recent)
-    n = len(recent)
-
+    starts = [_valid_count(row.get("starts")) for row in recent]
+    minutes = [_valid_count(row.get("minutes")) for row in recent]
+    known_starts = all(value in (0, 1) for value in starts)
     return {
-        "recent_start_rate": starts / n,
-        "recent_avg_mins": total_mins / n,
-        "recent_games": n,
+        "recent_start_rate": sum(starts) / len(recent) if known_starts else None,
+        "recent_avg_mins": sum(minutes) / len(recent) if all(m is not None for m in minutes) else None,
+        "recent_games": len(recent),
     }
 
 

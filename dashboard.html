@@ -3020,7 +3020,7 @@ function playerTableHTML(players, captain, vice, sortable = false) {
     <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('form')"` : ''}>Form${sortArrow('form')}</th>
     <th>Team L5</th>
     <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('wr')"` : ''}>Team WR${sortArrow('wr')}</th>
-    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('start_prob')"` : ''}>Start %${sortArrow('start_prob')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('start_prob')"` : ''} title="Model probability of starting the next fixture, including availability. -- means insufficient data.">Start %${sortArrow('start_prob')}</th>
   </tr></thead><tbody>`;
 
   players.forEach(p => {
@@ -3030,16 +3030,20 @@ function playerTableHTML(players, captain, vice, sortable = false) {
 
     // Availability status
     const avail = p.availability || {};
-    const availStatus = avail.status || 'available';
-    const availChance = avail.chance != null ? avail.chance : 100;
+    const availStatus = avail.status || 'unknown';
+    const availChance = avail.chance;
     const news = p.news || avail.news || '';
 
     let statusHtml = '';
     if (availStatus === 'doubtful') {
       const flagClass = availChance <= 25 ? 'avail-flagged-25' : availChance <= 50 ? 'avail-flagged-50' : 'avail-flagged-75';
-      statusHtml = `<span class="injury-tooltip"><span class="avail-badge ${flagClass}">\u26A0 ${availChance}%</span>${news ? `<span class="tooltip-text">${news}</span>` : ''}</span>`;
+      statusHtml = `<span class="injury-tooltip"><span class="avail-badge ${flagClass}">\u26A0 ${availChance == null ? '?' : availChance + '%'}</span>${news ? `<span class="tooltip-text">${news}</span>` : ''}</span>`;
     } else if (availStatus === 'unavailable') {
       statusHtml = `<span class="injury-tooltip"><span class="avail-badge avail-flagged-25">\u274C Out</span>${news ? `<span class="tooltip-text">${news}</span>` : ''}</span>`;
+    } else if (availStatus === 'blank_gw') {
+      statusHtml = '<span class="avail-badge">Blank GW</span>';
+    } else if (availStatus === 'unknown') {
+      statusHtml = '<span class="avail-badge">?</span>';
     } else {
       statusHtml = '<span class="avail-badge avail-available">\u2713</span>';
     }
@@ -3133,8 +3137,14 @@ function renderFixtures(fixtures) {
   }).join('') + '</div>';
 }
 
+function normalizedProbability(val) {
+  return typeof val === 'number' && Number.isFinite(val) && val >= 0 && val <= 1 ? val : null;
+}
+
 function confBar(val) {
-  const pct = Math.round((val || 0) * 100);
+  const probability = normalizedProbability(val);
+  if (probability === null) return '<span style="color:var(--text3);">--</span>';
+  const pct = Math.round(probability * 100);
   const color = pct >= 70 ? 'var(--accent)' : pct >= 50 ? 'var(--orange)' : 'var(--red)';
   return `<div class="conf-bar"><div class="fill" style="width:${pct}%;background:${color};"></div></div> <span style="font-size:11px;color:var(--text3);">${pct}%</span>`;
 }
@@ -3272,8 +3282,8 @@ function filterPlayers(clickedBtn) {
   );
 
   // Status filters
-  if (_playersStatusFilters.has('available')) filtered = filtered.filter(p => (p.availability?.status || 'available') === 'available');
-  if (_playersStatusFilters.has('flagged')) filtered = filtered.filter(p => (p.availability?.status || 'available') !== 'available');
+  if (_playersStatusFilters.has('available')) filtered = filtered.filter(p => (p.availability?.status || 'unknown') === 'available');
+  if (_playersStatusFilters.has('flagged')) filtered = filtered.filter(p => (p.availability?.status || 'unknown') !== 'available');
   if (_playersStatusFilters.has('nailed')) filtered = filtered.filter(p => p.starter_quality?.tier === 'nailed');
 
   // Banner
@@ -3303,7 +3313,7 @@ function sortPlayersTable(players) {
       case 'team':
         return String(p.team_name || p.team || '').toLowerCase();
       case 'status':
-        return String(p.availability?.status || 'available').toLowerCase();
+        return String(p.availability?.status || 'unknown').toLowerCase();
       case 'xpts':
         return Number(p.predicted_points) || 0;
       case 'price':
@@ -3315,7 +3325,7 @@ function sortPlayersTable(players) {
       case 'wr':
         return Number(p.team_season_wr) || 0;
       case 'start_prob':
-        return Number(p.starter_quality?.p_start) || 0;
+        return normalizedProbability(p.starter_quality?.p_start);
       default:
         return '';
     }
@@ -3323,6 +3333,7 @@ function sortPlayersTable(players) {
   return [...players].sort((a, b) => {
     const av = getValue(a);
     const bv = getValue(b);
+    if (av === null || bv === null) return av === bv ? 0 : av === null ? 1 : -1;
     if (typeof av === 'string' && typeof bv === 'string') {
       return av.localeCompare(bv) * dir;
     }

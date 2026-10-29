@@ -344,7 +344,9 @@ def _run_predictions(gw=None):
             current_squad_ids=current_squad_ids
         )
 
+        from prediction_engine import PLAYER_ROLE_MODEL_VERSION
         output = {
+            "role_model_version": PLAYER_ROLE_MODEL_VERSION,
             "generated_at": datetime.now().isoformat(),
             "gameweek": target_gw,
             "gw_info": gw_info,
@@ -702,6 +704,8 @@ def _cached_predictions():
                 from app_storage import download_prediction_cache
                 data = download_prediction_cache()
                 if data:
+                    from prediction_engine import sanitize_legacy_role_cache
+                    data = sanitize_legacy_role_cache(data)
                     cached_gw = data.get("gameweek")
                     status = "supabase"
                     try:
@@ -747,6 +751,8 @@ def _cached_predictions():
             _PREDICTIONS_MEMO.get("data", {}),
             "stale"
         )
+    from prediction_engine import sanitize_legacy_role_cache
+    data = sanitize_legacy_role_cache(data)
     preds = data.get("predictions", [])
 
     cached_gw = data.get("gameweek")
