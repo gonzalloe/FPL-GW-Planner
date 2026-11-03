@@ -885,7 +885,67 @@ def _chat_availability(player):
     return str(availability.get('status', 'unknown')) + ' chance=' + str(availability.get('chance', 'unknown'))
 
 
-def _chat_team_context(team_id, players):
+def _chat_free_transfers(team, target_gw):
+    """Return the allowance for the prediction GW without double-deducting transfers.
+
+    Public data cannot reliably confirm remaining transfers before the deadline;
+    history gives the allowance entering a GW, not a live authenticated balance.
+    """
+    from my_team import calculate_free_transfers
+    info = team.get('info') or {}
+    planning_gw = info.get('planning_gw') or (team.get('gw_summary') or {}).get('planning_event')
+    try:
+        target_gw = int(target_gw)
+        planning_gw = int(planning_gw) if planning_gw is not None else None
+    except (TypeError, ValueError):
+        target_gw = planning_gw = None
+    if target_gw is not None and target_gw == planning_gw:
+        remaining = team.get('free_transfers_remaining')
+        if remaining is not None:
+            return int(remaining), 'confirmed remaining'
+        entering = team.get('free_transfers')
+        if entering is not None:
+            return int(entering), 'entering gameweek; live remaining unconfirmed'
+    if target_gw is not None:
+        history = team.get('history') or []
+        prior = [row for row in history if isinstance(row, dict) and
+                 str(row.get('event', '')).isdigit() and int(row['event']) < target_gw]
+        if any(int(row['event']) == target_gw - 1 for row in prior):
+            return calculate_free_transfers(prior, team.get('chips')), 'entering gameweek from public history; live remaining unconfirmed'
+        if planning_gw is not None and target_gw != planning_gw:
+            return None, 'unknown for prediction gameweek'
+    entering = team.get('free_transfers')
+    return (int(entering), 'entering gameweek; target or live remaining unconfirmed') if entering is not None else (None, 'unknown')
+
+
+def _chat_suggested_lineup(picks, by_id):
+    """Select a legal XI from available projections, not a forecast of autosubs."""
+    groups = {pos: [] for pos in (1, 2, 3, 4)}
+    for pick in picks:
+        player = by_id.get(pick.get('element'))
+        if not player or player.get('position_id') not in groups or player.get('predicted_points') is None:
+            return None
+        groups[player['position_id']].append(player)
+    if [len(groups[p]) for p in (1, 2, 3, 4)] != [2, 5, 5, 3]:
+        return None
+    for players in groups.values():
+        players.sort(key=lambda player: float(player['predicted_points']), reverse=True)
+    best, best_score = None, float('-inf')
+    for defenders in range(3, 6):
+        for midfielders in range(2, 6):
+            forwards = 10 - defenders - midfielders
+            if not 1 <= forwards <= 3:
+                continue
+            xi = groups[1][:1] + groups[2][:defenders] + groups[3][:midfielders] + groups[4][:forwards]
+            if len(xi) != 11:
+                continue
+            score = sum(float(player['predicted_points']) for player in xi)
+            if score > best_score:
+                best, best_score = xi, score
+    return best
+
+
+def _chat_team_context(team_id, players, target_gw=None):
     """Read public FPL picks for the imported team; never use simulator edits as the real team."""
     if not team_id:
         return "\nCURRENT SQUAD: No team imported. Ask the user to import their FPL team.\n"
@@ -898,16 +958,7 @@ def _chat_team_context(team_id, players):
         by_id = {p.get('player_id'): p for p in players}
         summary = team.get('gw_summary') or {}
         bank = summary.get('bank')
-        ft = team.get('free_transfers_remaining')
-        ft_label = 'remaining'
-        if ft is None:
-            ft = team.get('free_transfers')
-            early = team.get('current_event_transfers')
-            if ft is not None and early is not None and team.get('picks_are_planning_gw'):
-                ft = max(0, int(ft) - int(early))
-                ft_label = 'remaining after known early transfers'
-            else:
-                ft_label = 'entering gameweek, early transfers may not be deducted'
+        ft, ft_label = _chat_free_transfers(team, target_gw)
         fh_events = {c.get('event') for c in team.get('chips', []) if c.get('name') == 'freehit'}
         acquisitions = {}
         for transfer in sorted(team.get('transfers') or [], key=lambda t: (t.get('event') or 0, t.get('time') or '')):
@@ -916,12 +967,24 @@ def _chat_team_context(team_id, players):
         lines = ["\nCURRENT IMPORTED FPL SQUAD (public FPL picks, not simulator changes):",
                  f"Team ID: {team_id}; picks for planning GW: {team.get('picks_are_planning_gw', False)}; "
                  f"bank £m: {bank if bank is not None else 'unknown'}; "
-                 f"free transfers ({ft_label}): {ft if ft is not None else 'unknown'}; "
+                 f"prediction GW: {target_gw or 'unknown'}; free transfers ({ft_label}): {ft if ft is not None else 'unknown'}; "
                  f"chips used: {json.dumps(team.get('chips') or [], ensure_ascii=False)}; "
                  f"active chip: {team.get('active_chip') or 'none reported'}.",
                  "Selling prices are unknown unless explicitly shown; market price is not selling price."]
-        if team.get('early_transfers_known') and not team.get('picks_are_planning_gw'):
-            lines.append("Warning: early transfers are known but current picks were unavailable; this squad may be outdated.")
+        if not team.get('picks_are_planning_gw'):
+            lines.append("These are the latest public picks, not a verified current starting XI or bench order. "
+                         "Picks and bank may be outdated if transfers or lineup changes have been made.")
+        suggested_xi = _chat_suggested_lineup(picks, by_id)
+        if suggested_xi:
+            starters = {player['player_id'] for player in suggested_xi}
+            bench = [by_id[p['element']] for p in picks if p['element'] not in starters]
+            lines.append("MODEL-SUGGESTED LEGAL XI (before transfers; before-deadline selection, "
+                         "not guaranteed autosubs): " + ', '.join(player.get('name', '?') for player in suggested_xi))
+            lines.append("MODEL-SUGGESTED BENCH (choose substitution order): " + ', '.join(player.get('name', '?') for player in bench))
+        if ft is not None:
+            lines.append(f"If {ft} free transfer(s) remain: one transfer costs "
+                         f"{max(0, 1-ft)*4} points; two transfers cost {max(0, 2-ft)*4} points. "
+                         "This assumes no later transfers or relevant chip; confirm if the live balance is uncertain.")
         for pick in sorted(picks, key=lambda row: row.get('position', 99)):
             pid = pick.get('element')
             player = by_id.get(pid)
@@ -936,7 +999,7 @@ def _chat_team_context(team_id, players):
                 sell = f"£{(cost if cost <= purchase else purchase + (cost - purchase) // 2) / 10:.1f}m (estimated from transfer history)"
             else:
                 sell = 'unknown'
-            role = 'starter' if pick.get('position', 99) <= 11 else 'bench'
+            role = 'starter' if pick.get('position', 99) <= 11 else f"bench pick position {pick.get('position', '?')}"
             if pick.get('is_captain'): role += ', captain'
             if pick.get('is_vice_captain'): role += ', vice captain'
             lines.append(f"{player.get('name', '?')}|{player.get('team', '?')}|{player.get('position', '?')}|"
@@ -983,8 +1046,22 @@ def build_fpl_context(user_message="", team_id=None):
                     "Predictions are not guarantees. Compare holding transfers with affordable legal moves, "
                     "consider expected points, fixtures, minutes and injuries, and deduct four points per hit. "
                     "Check selling prices, bank, free transfers, position and club limits before claiming a move is legal. "
-                    "Never assume an unavailable value is zero or promise a rank improvement.\n")
-        context += _chat_team_context(team_id, players)
+                    "Never assume an unavailable value is zero or promise a rank improvement.\n"
+                    "FPL RULES: A squad has 15 players and selects 11 starters. A non-playing starter can "
+                    "be automatically replaced after the gameweek by an eligible bench player who played. "
+                    "The reserve goalkeeper replaces only the goalkeeper. Outfield substitutions follow "
+                    "bench priority while keeping one goalkeeper, at least three defenders, two midfielders "
+                    "and one forward. A player who plays any minutes in the gameweek is not auto-substituted, "
+                    "including in a double gameweek. Bench appearances are uncertain before matches. "
+                    "The manager can manually choose a legal XI before the deadline. Do not assume an injured "
+                    "starter means a 10-player lineup. Estimate transfer gain against the actual legal XI or "
+                    "eligible bench replacement, not simply the outgoing player's zero points. "
+                    "With no transfers, unused free transfers normally carry forward and one is added, up to five; "
+                    "Wildcard and Free Hit have special rollover rules. "
+                    "Use the current prediction-GW allowance shown below; distinguish entering allowance "
+                    "from unconfirmed live remaining, and never invent a hit. If the manager supplies "
+                    "their current free-transfer balance, use it over an unconfirmed estimate.\n")
+        context += _chat_team_context(team_id, players, current_gw)
         context += "\n"
 
         # Top 120 compact — one line each
@@ -1127,7 +1204,7 @@ def ask_dify(user_message, conversation_id=None, team_id=None, dify_user=None):
             f"{DIFY_API_URL}/chat-messages",
             headers=headers,
             json=payload,
-            timeout=30
+            timeout=90
         )
         # Conversation expired/deleted in Dify
         if response.status_code == 404 and conversation_id:
@@ -1137,7 +1214,7 @@ def ask_dify(user_message, conversation_id=None, team_id=None, dify_user=None):
                 f"{DIFY_API_URL}/chat-messages",
                 headers=headers,
                 json=payload,
-                timeout=30
+                timeout=90
             )
         response.raise_for_status()
         data = response.json()

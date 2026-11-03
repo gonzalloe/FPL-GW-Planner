@@ -24,3 +24,12 @@ unavailable squad or prediction cache is reported as unavailable. Price
 estimates derived from transfer history are labelled; other missing prices
 remain unknown. `fpl_data` is retained for compatibility with the existing
 Studio variable, while the query carries the latest snapshot on follow-ups.
+
+For gameweek-specific transfer advice, use the allowance for the prediction
+gameweek, and distinguish the allowance entering that gameweek from a live
+remaining balance. Respect a manager-provided live balance when the imported
+balance is unconfirmed. A one-transfer hit only applies when no free transfers
+remain. Consider a legal XI and the bench: an outfield substitute who plays can
+replace a non-playing starter in bench priority order when the formation stays
+legal; a goalkeeper can only replace a goalkeeper. These substitutions are
+conditional until matches have been played.

@@ -1607,8 +1607,8 @@ table tr:hover { background:var(--surface2); }
       </div>
     </div>
     <div class="chat-input-bar">
-      <textarea id="chat-input" rows="2" aria-label="Message the FPL assistant" placeholder="Ask about players, captain, chips, transfers... Enter for a new line; Ctrl/Cmd+Enter to send." onkeydown="if(event.key==='Enter' &amp;&amp; (event.ctrlKey || event.metaKey) &amp;&amp; !event.isComposing){event.preventDefault();sendChat();}"></textarea>
-      <button class="btn btn-primary chat-send-btn" onclick="sendChat()" id="chat-send-btn" aria-label="Send message" title="Send message (Ctrl+Enter or Cmd+Enter)">
+      <textarea id="chat-input" rows="2" aria-label="Message the FPL assistant" placeholder="Ask AI about players, captain, chips, transfers..." onkeydown="if(event.key==='Enter' &amp;&amp; !event.shiftKey &amp;&amp; !event.isComposing){event.preventDefault();sendChat();}"></textarea>
+      <button class="btn btn-primary chat-send-btn" onclick="sendChat()" id="chat-send-btn" aria-label="Send message" title="Send message (Enter; Shift+Enter for a new line)">
         <span id="send-icon">➤</span>
         <span id="send-spinner" style="display:none;" class="chat-spinner"></span>
       </button>
@@ -5409,6 +5409,8 @@ function removeTyping(id){const el=document.getElementById(id);if(el)el.remove()
 
 function renderMarkdown(text){
   if(!text)return'';
+  // Some Dify responses contain escaped Markdown or hard line breaks.
+  text = String(text).replace(/\\\r?\n/g, '\n').replace(/\\([*#_`])/g, '$1').replace(/&#x20;|&#32;/gi, ' ');
   let h=escapeHtml(text);  // Escape first, then apply formatting
   // Tables
   h=h.replace(/^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)*)/gm,function(m,hdr,sep,body){
@@ -5422,7 +5424,7 @@ function renderMarkdown(text){
   // Bold
   h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   // Lists
-  h=h.replace(/^- (.+)$/gm,'<li>$1</li>');
+  h=h.replace(/^\s*[-*] +(.+)$/gm,'<li>$1</li>');
   h=h.replace(/(<li>.*<\/li>\n?)+/g,'<ul>$&</ul>');
   // Line breaks
   h=h.replace(/\n\n/g,'<br><br>');

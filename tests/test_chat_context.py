@@ -36,8 +36,58 @@ class ChatContextTests(unittest.TestCase):
         self.assertIn('Player 1|ABC|MID|market £5.0m|sell £4.5m|0.1 xPts|starter, captain|ownership 1%', context)
         self.assertIn('Player 15|ABC|MID|market £5.0m|sell unknown', context)
         self.assertIn('bank £m: 1.5', context)
-        self.assertIn('free transfers (entering gameweek, early transfers may not be deducted): 2', context)
+        self.assertIn('free transfers (entering gameweek; target or live remaining unconfirmed): 2', context)
         self.assertIn('fixtures XYZ H FDR 2', context)
+
+    def test_current_gw_transfers_not_deducted_twice(self):
+        self.team.update({'info': {'planning_gw': 9}, 'picks_are_planning_gw': True,
+                          'current_event_transfers': 1, 'free_transfers': 1})
+        context = server.build_fpl_context('transfer', 123)
+        self.assertIn('free transfers (entering gameweek; live remaining unconfirmed): 1', context)
+        self.assertIn('one transfer costs 0 points; two transfers cost 4 points', context)
+
+    def test_confirmed_remaining_and_chip_sensitive_rollover(self):
+        self.team.update({'info': {'planning_gw': 9}, 'free_transfers': 2,
+                          'free_transfers_remaining': 0, 'current_event_transfers': 2})
+        context = server.build_fpl_context('transfer', 123)
+        self.assertIn('free transfers (confirmed remaining): 0', context)
+        self.assertIn('one transfer costs 4 points; two transfers cost 8 points', context)
+        team = {'info': {'planning_gw': 8}, 'history': [{'event': 1},
+                 {'event': 2, 'event_transfers': 0}, {'event': 3, 'event_transfers': 10}],
+                'chips': [{'event': 3, 'name': 'wildcard'}]}
+        self.assertEqual(server._chat_free_transfers(team, 4)[0], 2)
+
+    def test_next_prediction_gw_uses_history_not_current_gw_balance(self):
+        self.team.update({'info': {'planning_gw': 8}, 'free_transfers': 2,
+                          'history': [{'event': 1}, {'event': 2, 'event_transfers': 0},
+                                      {'event': 3, 'event_transfers': 2},
+                                      {'event': 4, 'event_transfers': 1},
+                                      {'event': 5, 'event_transfers': 1},
+                                      {'event': 6, 'event_transfers': 1},
+                                      {'event': 7, 'event_transfers': 1},
+                                      {'event': 8, 'event_transfers': 1}]})
+        context = server.build_fpl_context('transfer', 123)
+        self.assertIn('free transfers (entering gameweek from public history; live remaining unconfirmed): 1', context)
+        self.assertIn('one transfer costs 0 points; two transfers cost 4 points', context)
+        self.team['history'].pop()
+        context = server.build_fpl_context('transfer', 123)
+        self.assertIn('free transfers (unknown for prediction gameweek): unknown', context)
+
+    def test_autosub_rules_and_legal_suggested_lineup(self):
+        positions = [1]*2 + [2]*5 + [3]*5 + [4]*3
+        for i, position in enumerate(positions, 1):
+            self.players[i-1]['position_id'] = position
+            self.players[i-1]['position'] = ('GK','DEF','MID','FWD')[position-1]
+        self.players[14]['predicted_points'] = 0
+        context = server.build_fpl_context('keep my injured forward', 123)
+        xi = server._chat_suggested_lineup(self.team['picks'], {p['player_id']:p for p in self.players})
+        self.assertEqual(len(xi), 11)
+        self.assertGreaterEqual(sum(p['position_id'] == 2 for p in xi), 3)
+        self.assertGreaterEqual(sum(p['position_id'] == 4 for p in xi), 1)
+        self.assertNotIn(15, [p['player_id'] for p in xi])
+        self.assertIn('MODEL-SUGGESTED LEGAL XI', context)
+        self.assertIn('not guaranteed autosubs', context)
+        self.assertIn('Do not assume an injured starter means a 10-player lineup', context)
 
     def test_no_team_or_failed_import_is_explicit(self):
         self.assertIn('No team imported', server.build_fpl_context('question'))
