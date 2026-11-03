@@ -59,6 +59,32 @@ class TransferSearchTests(unittest.TestCase):
         self.assertEqual(result[5][0][7], 1)
         self.assertAlmostEqual(result[4], result[5][0][8] - 4)
 
+    def test_balanced_search_rolls_for_future_funded_pair(self):
+        players, preds = fixture(3)
+        players[16]['now_cost'] = 40  # Fund the midfielder by downgrading a defender.
+        players[17]['now_cost'] = 60
+        for gw in preds:
+            for pid in range(3, 8):
+                preds[gw][pid]['predicted_points'] = 10
+            preds[gw][16]['predicted_points'] = 0 if gw == 1 else 9
+            preds[gw][17]['predicted_points'] = 0 if gw == 1 else 20
+        preds[1][18]['predicted_points'] = 3.1  # Tempting but negligible immediate upgrade.
+        search = TransferSearch(players, preds, [1, 2, 3], width=1)
+        result = search.run(list(range(1, 16)), 0, 1, {i:50 for i in range(1,16)}, 2, False)
+        self.assertEqual(result[5][0][6], ())
+        self.assertEqual(result[5][1][2], 2)
+        self.assertEqual(len(result[5][1][6]), 2)
+        self.assertEqual({move[1] for move in result[5][1][6]}, {16, 17})
+        self.assertEqual(sum(row[7] for row in result[5]), 0)
+
+    def test_strategies_hold_without_improvement(self):
+        players, preds = fixture(8)
+        search = TransferSearch(players, preds, list(preds))
+        for max_moves, hits in ((1, False), (2, False), (2, True)):
+            result = search.run(list(range(1, 16)), 0, 1, {i:50 for i in range(1,16)}, max_moves, hits)
+            self.assertTrue(all(not row[6] for row in result[5]))
+            self.assertEqual([row[2] for row in result[5]], [1, 2, 3, 4, 5, 5, 5, 5])
+
     def test_planner_summary_uses_hold_baseline_and_no_double_hits(self):
         players, preds = fixture(2)
         for gw in preds: preds[gw][16]['predicted_points'] = 9

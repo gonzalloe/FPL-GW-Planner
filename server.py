@@ -1888,13 +1888,6 @@ def api_gw_planner():
         return jsonify({"error": "Invalid strategy"}), 400
     if not user:
         return jsonify({"error": "Sign in before generating a plan."}), 401
-    free_transfers = None
-    raw_ft = request.args.get('free_transfers')
-    if raw_ft is not None:
-        if raw_ft not in {'0', '1', '2', '3', '4', '5'}:
-            return jsonify({'error': 'Free transfers must be between 0 and 5.'}), 400
-        free_transfers = int(raw_ft)
-
     print("[GW PLANNER] team_id:", team_id)
     print("[GW PLANNER] horizon:", horizon)
   
@@ -1985,7 +1978,7 @@ def api_gw_planner():
         from my_team import fetch_my_team
         team_data = fetch_my_team(team_id)
         plan = planner.plan_from_team_id(team_id, horizon=horizon,
-                                         free_transfers=free_transfers, team_data=team_data, strategy=strategy)
+                                         team_data=team_data, strategy=strategy)
 
         # ─────────────────────────────────────────
         # DEBUG

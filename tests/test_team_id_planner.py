@@ -144,16 +144,13 @@ class TeamIDPlannerTests(unittest.TestCase):
         result = planner.plan_from_team_id(101, team_data=self.team)
         self.assertIn('Free transfers for GW9 are unavailable', result['error'])
 
-    def test_api_accepts_override_and_rejects_invalid_values(self):
+    def test_api_reads_imported_ft_automatically(self):
         remote = Mock(ok=True); remote.json.return_value = {'current_event': 8}
         with patch.object(server.requests, 'get', return_value=remote):
-            response = self.client.get('/api/gw-planner?id=101&horizon=1&free_transfers=1')
+            response = self.client.get('/api/gw-planner?id=101&horizon=1&free_transfers=0')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json['free_transfers'], 1)
-        self.assertEqual(response.json['free_transfers_source'], 'explicit_override')
-        for value in ('-1', '6', 'invalid'):
-            response = self.client.get('/api/gw-planner?id=101&free_transfers=' + value)
-            self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json['free_transfers'], self.team['free_transfers'])
+        self.assertEqual(response.json['free_transfers_source'], 'completed_history')
 
     def test_chip_recommendations_are_advisory(self):
         planner=gw_planner.GWPlanner(horizon=2,baseline_predictions=self.preds,baseline_gw=9)

@@ -338,7 +338,8 @@ class GWPlanner:
                 'expected_net_points': round(chosen[4], 1), 'save_transfer_points': round(baseline, 1),
                 'chips_used': [], 'final_bank': chosen[1] / 10},
             'strategies': {name: {'expected_net_points': round(state[4], 1),
-                 'transfers': sum(len(r[6]) for r in state[5]), 'hits': sum(r[7] for r in state[5])}
+                 'transfers': sum(len(r[6]) for r in state[5]), 'hits': sum(r[7] for r in state[5]),
+                 'roll_gameweeks': sum(not r[6] for r in state[5])}
                  for name, state in results.items()},
             'assumptions': {'chip_use': 'advisory only', 'prices': 'constant',
                 'selling_prices_estimated': any(prices.get(pid) is None for pid in current_squad_ids)},
@@ -714,7 +715,7 @@ class GWPlanner:
             ft, ft_source = free_transfers_for_gameweek(team_data, self.next_gw)
             if ft is None:
                 return {"error": f"Free transfers for GW{self.next_gw} are unavailable. "
-                                 "Enter your current free transfers from FPL and generate the plan again."}
+                                 "Refresh your imported team and try again."}
             ft = max(0, min(int(ft), 5))
 
         print("[GW PLANNER FT]", {

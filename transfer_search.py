@@ -111,5 +111,14 @@ class TransferSearch:
                     if key not in next_states or new_score > next_states[key][4]:
                         next_states[key] = state
             remaining = self.gameweeks[index + 1:]
-            beam = sorted(next_states.values(), key=lambda s: (s[4] + sum(self.lineup(s[0], g)[0] for g in remaining), s[4], -sum(len(x[6]) for x in s[5])), reverse=True)[:self.width]
+            ranked = sorted(next_states.values(), key=lambda s: (s[4] + sum(self.lineup(s[0], g)[0] for g in remaining), s[4], -sum(len(x[6]) for x in s[5])), reverse=True)
+            # The fixed-squad lookahead does not price the option of spending
+            # saved FTs later. Preserve the strongest path at each FT balance,
+            # otherwise short-term upgrades can eliminate every rolling path.
+            by_ft = {}
+            for state in ranked:
+                by_ft.setdefault(state[2], state)
+            reserved = {id(state) for state in by_ft.values()}
+            capacity = max(self.width, len(reserved))
+            beam = list(by_ft.values()) + [state for state in ranked if id(state) not in reserved][:capacity - len(reserved)]
         return max(beam, key=lambda s: (s[4], -sum(len(x[6]) for x in s[5])))
