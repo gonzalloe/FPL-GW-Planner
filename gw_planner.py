@@ -245,167 +245,104 @@ class GWPlanner:
     # ── Multi-GW Transfer Planner ─────────────────────────────
 
     def plan_transfers(self, current_squad_ids: list[int], bank: float = 0.0,
-                   free_transfers: int = 1, chips_available: list[str] | None = None,
-                   max_transfers_per_gw: int = 2) -> dict:
-        """Plan optimal transfers across the planning horizon."""
+                       free_transfers: int = 1, chips_available: list[str] | None = None,
+                       max_transfers_per_gw: int = 2, selling_prices: dict | None = None,
+                       strategy: str = 'balanced') -> dict:
+        """Compare bounded beam searches using expected net points over the horizon.
 
-        if chips_available is None:
-            chips_available = ["WC", "FH", "BB", "TC"]
+        Chip suggestions are advisory: chip use is not part of the transfer search.
+        Selling prices are in £m; absent prices fall back to current market values.
+        """
+        from transfer_search import TransferSearch
 
-        try:
-            rolling_ft = int(free_transfers)
-        except (TypeError, ValueError):
-            rolling_ft = 1
-
-        rolling_ft = max(0, min(5, rolling_ft))
-        squad = list(current_squad_ids)
-        rolling_bank = bank
-        remaining_chips_by_half = {1: set(chips_available), 2: set(chips_available)}
-        gw_plans = []
-
-        for gw in range(self.next_gw, self.next_gw + self.horizon):
-            if gw > 38:
-                break
-
-            squad_before_gw = list(squad)
-            bank_before_gw = rolling_bank
-            chip_half = 1 if gw <= 19 else 2
-            remaining_chips = remaining_chips_by_half[chip_half]
-            pred_map = self._get_pred_map(gw)
-            gw_info = self._gw_infos.get(gw, {})
-
-            squad_enriched = []
-            for pid in squad:
-                p = self.players.get(pid, {})
-                pred = pred_map.get(pid, {})
-                squad_enriched.append({
-                    "player_id": pid,
-                    "name": p.get("web_name", "Unknown"),
-                    "team": p.get("team_short", "???"),
-                    "team_id": p.get("team", 0),
-                    "position": p.get("position_name", "???"),
-                    "position_id": p.get("element_type", 0),
-                    "price": p.get("now_cost", 0) / 10,
-                    "predicted_points": pred.get("predicted_points", 0),
-                    "raw_xpts": pred.get("raw_xpts", 0),
-                    "is_dgw": pred.get("is_dgw", False),
-                    "num_fixtures": pred.get("num_fixtures", 0),
-                    "form": float(p.get("form", 0)),
-                    "status": p.get("status", "a"),
-                    "chance_of_playing": p.get("chance_of_playing_next_round"),
-                    "news": p.get("news", ""),
-                    "fixtures": pred.get("fixtures", []),
-                    "starter_quality": pred.get("starter_quality", {}),
-                    "availability": pred.get("availability", {}),
-                })
-
-            baseline_xpts = sum(
-                p["predicted_points"]
-                for p in sorted(squad_enriched, key=lambda x: x["predicted_points"], reverse=True)[:11]
-            )
-
-            transfers = self._find_best_transfers(
-                squad_enriched, pred_map, rolling_bank, rolling_ft, max_transfers_per_gw, gw
-            )
-
-            chip_rec = self._recommend_chip(
-                squad_enriched, gw_info, gw, remaining_chips, pred_map
-            )
-
-            active_chip = chip_rec.get("chip_code") if chip_rec and chip_rec.get("use_chip") else None
-            unlimited = active_chip in {"WC", "FH"}
-            post_squad = list(squad)
-            net_spend = 0.0
-
-            for t in transfers:
-                if t["out_id"] in post_squad:
-                    post_squad.remove(t["out_id"])
-                    post_squad.append(t["in_id"])
-                    net_spend += t["in_price"] - t["out_price"]
-
-            num_transfers = len(transfers)
-            free_used = 0 if unlimited else min(num_transfers, rolling_ft)
-            hits = 0 if unlimited else max(0, num_transfers - rolling_ft)
-            if unlimited:
-                for transfer in transfers:
-                    transfer["is_free"] = True
-                    transfer["is_hit"] = False
-            transfer_cost = hits * 4
-
-            post_enriched = [pred_map.get(pid, {}) for pid in post_squad]
-            post_xpts = sum(
-                p.get("predicted_points", 0)
-                for p in sorted(post_enriched, key=lambda x: x.get("predicted_points", 0), reverse=True)[:11]
-            ) - transfer_cost
-
-            multi_gw_value = self._calc_multi_gw_transfer_value(transfers, gw)
-
-            gw_plans.append({
-                "gameweek": gw,
-                "gw_info": gw_info,
-                "squad_before": squad_enriched,
-                "baseline_xpts": round(baseline_xpts, 1),
-                "transfers": transfers,
-                "num_transfers": num_transfers,
-                "free_transfers_available": rolling_ft,
-                "free_transfers_used": free_used,
-                "hits": hits,
-                "hit_cost": transfer_cost,
-                "net_spend": round(net_spend, 1),
-                "bank_before": round(rolling_bank, 1),
-                "bank_after": round(rolling_bank - net_spend, 1),
-                "post_transfer_xpts": round(post_xpts, 1),
-                "xpts_gain": round(post_xpts - baseline_xpts, 1),
-                "multi_gw_value": multi_gw_value,
-                "chip_recommendation": chip_rec,
-            })
-
-            # Update squad and bank for next GW
-            squad = post_squad
-            rolling_bank -= net_spend
-
-            # FT accrual happens AFTER this GW.
-            if not unlimited:
-                remaining_ft = max(0, rolling_ft - free_used)
-                rolling_ft = max(1, min(remaining_ft + 1, 5))
-
-            # Chip handling
-            if chip_rec and chip_rec.get("use_chip"):
-                chip_code = chip_rec["chip_code"]
-                current_half_chips = remaining_chips_by_half[chip_half]
-
-                if chip_code in current_half_chips:
-                    current_half_chips.discard(chip_code)
-
-                    if chip_code == "FH":
-                        squad = squad_before_gw
-                        rolling_bank = bank_before_gw
-
-        total_transfers = sum(g["num_transfers"] for g in gw_plans)
-        total_hits = sum(g["hits"] for g in gw_plans)
-        total_hit_cost = sum(g["hit_cost"] for g in gw_plans)
-        total_xpts_gain = sum(g["xpts_gain"] for g in gw_plans)
-
-        return {
-            "horizon": self.horizon,
-            "from_gw": self.next_gw,
-            "to_gw": self.next_gw + self.horizon - 1,
-            "gw_plans": gw_plans,
-            "summary": {
-                "total_transfers": total_transfers,
-                "total_hits": total_hits,
-                "total_hit_cost": total_hit_cost,
-                "total_xpts_gain": round(total_xpts_gain, 1),
-                "net_gain_after_hits": round(total_xpts_gain - total_hit_cost, 1),
-                "chips_used": [
-                    g["chip_recommendation"]["chip_code"]
-                    for g in gw_plans
-                    if g["chip_recommendation"] and g["chip_recommendation"].get("use_chip")
-                ],
-                "final_bank": round(gw_plans[-1]["bank_after"], 1) if gw_plans else rolling_bank,
-            },
-            "fixture_ticker": self._build_squad_ticker(squad),
+        gameweeks = list(range(self.next_gw, min(self.next_gw + self.horizon, 39)))
+        maps = {gw: self._get_pred_map(gw) for gw in gameweeks}
+        search = TransferSearch(self.players, maps, gameweeks)
+        search.validate(current_squad_ids)
+        ft = max(0, min(5, int(free_transfers)))
+        prices = selling_prices or {}
+        sell = {pid: round(float(prices[pid]) * 10) if prices.get(pid) is not None
+                else search.price(pid) for pid in current_squad_ids}
+        initial_bank = round(float(bank) * 10)
+        strategies = {
+            'conservative': (min(1, max_transfers_per_gw), False),
+            'balanced': (min(2, max_transfers_per_gw), False),
+            'aggressive': (min(2, max_transfers_per_gw), True),
         }
+        results = {name: search.run(current_squad_ids, initial_bank, ft, sell, limit, hits)
+                   for name, (limit, hits) in strategies.items()}
+        # Wider strategy sets can always reuse a narrower strategy's plan.
+        if results['conservative'][4] > results['balanced'][4]:
+            results['balanced'] = results['conservative']
+        if results['balanced'][4] > results['aggressive'][4]:
+            results['aggressive'] = results['balanced']
+        # The default is balanced; all strategies use the same net-points objective.
+        if strategy not in results:
+            raise ValueError('Unknown transfer strategy.')
+        chosen = results[strategy]
+        baseline = sum(search.lineup(tuple(sorted(current_squad_ids)), gw)[0] for gw in gameweeks)
+        gw_plans = []
+        for gw, record in zip(gameweeks, chosen[5]):
+            old, old_bank, old_ft, old_sell, new, new_bank, moves, hits, gross = record
+            pred_map = maps[gw]
+            def enriched(pid):
+                p, pred = self.players[pid], pred_map.get(pid, {})
+                return {'player_id': pid, 'name': p.get('web_name', 'Unknown'),
+                        'team': p.get('team_short', pred.get('team', '???')),
+                        'team_id': p.get('team', 0), 'position': p.get('position_name', pred.get('position', '???')),
+                        'position_id': search.position(pid), 'price': search.price(pid) / 10,
+                        'predicted_points': search.points(pid, gw), 'raw_xpts': pred.get('raw_xpts', 0),
+                        'is_dgw': pred.get('is_dgw', False), 'num_fixtures': pred.get('num_fixtures', 0),
+                        'form': float(p.get('form', 0) or 0), 'status': p.get('status', 'a'),
+                        'chance_of_playing': p.get('chance_of_playing_next_round'), 'news': p.get('news', ''),
+                        'fixtures': pred.get('fixtures', []), 'starter_quality': pred.get('starter_quality', {}),
+                        'availability': pred.get('availability', {})}
+            squad_before = [enriched(pid) for pid in old]
+            transfers = []
+            for i, (out_id, in_id) in enumerate(moves):
+                out, incoming = enriched(out_id), enriched(in_id)
+                out_price = old_sell.get(out_id, search.price(out_id)) / 10
+                in_price = search.price(in_id) / 10
+                value = self._quick_multi_gw_value(in_id, out_id, gw)
+                transfers.append({'out_id': out_id, 'out_name': out['name'], 'out_team': out['team'],
+                    'out_position': out['position'], 'out_price': out_price, 'out_xpts': out['predicted_points'],
+                    'out_fixtures': out['fixtures'], 'in_id': in_id, 'in_name': incoming['name'],
+                    'in_team': incoming['team'], 'in_position': incoming['position'], 'in_price': in_price,
+                    'in_xpts': incoming['predicted_points'], 'in_fixtures': incoming['fixtures'],
+                    'in_is_dgw': incoming['is_dgw'], 'in_form': incoming['form'],
+                    'in_starter_tier': incoming['starter_quality'].get('tier', 'unknown'),
+                    'xpts_gain_this_gw': round(incoming['predicted_points'] - out['predicted_points'], 2),
+                    'multi_gw_value': round(value, 2), 'cost_delta': round(in_price - out_price, 1),
+                    'is_free': i < old_ft, 'is_hit': i >= old_ft})
+            before = search.lineup(old, gw)[0]
+            _, starters, captain = search.lineup(new, gw)
+            chip = self._recommend_chip(squad_before, self._gw_infos.get(gw, {}), gw,
+                                        set(chips_available or []), pred_map)
+            if chip:
+                chip['use_chip'] = False
+            gw_plans.append({'gameweek': gw, 'gw_info': self._gw_infos.get(gw, {}),
+                'squad_before': squad_before, 'squad_after': list(new), 'starting_xi': list(starters),
+                'captain_id': captain, 'baseline_xpts': round(before, 1), 'transfers': transfers,
+                'num_transfers': len(moves), 'free_transfers_available': old_ft,
+                'free_transfers_used': min(len(moves), old_ft), 'hits': hits, 'hit_cost': 4 * hits,
+                'net_spend': (old_bank - new_bank) / 10, 'bank_before': old_bank / 10,
+                'bank_after': new_bank / 10, 'post_transfer_xpts': round(gross - 4 * hits, 1),
+                'xpts_gain': round(gross - 4 * hits - before, 1),
+                'multi_gw_value': self._calc_multi_gw_transfer_value(transfers, gw), 'chip_recommendation': chip})
+        hit_cost = sum(g['hit_cost'] for g in gw_plans)
+        net_gain = chosen[4] - baseline
+        return {'horizon': len(gameweeks), 'from_gw': self.next_gw, 'to_gw': gameweeks[-1],
+            'gw_plans': gw_plans, 'selected_strategy': strategy, 'summary': {'total_transfers': sum(g['num_transfers'] for g in gw_plans),
+                'total_hits': sum(g['hits'] for g in gw_plans), 'total_hit_cost': hit_cost,
+                'total_xpts_gain': round(net_gain + hit_cost, 1), 'net_gain_after_hits': round(net_gain, 1),
+                'expected_net_points': round(chosen[4], 1), 'save_transfer_points': round(baseline, 1),
+                'chips_used': [], 'final_bank': chosen[1] / 10},
+            'strategies': {name: {'expected_net_points': round(state[4], 1),
+                 'transfers': sum(len(r[6]) for r in state[5]), 'hits': sum(r[7] for r in state[5])}
+                 for name, state in results.items()},
+            'assumptions': {'chip_use': 'advisory only', 'prices': 'constant',
+                'selling_prices_estimated': any(prices.get(pid) is None for pid in current_squad_ids)},
+            'fixture_ticker': self._build_squad_ticker(chosen[0])}
 
     def _find_best_transfers(self, squad_enriched: list, pred_map: dict,
                               bank: float, free_transfers: int,
@@ -520,7 +457,7 @@ class GWPlanner:
     def _quick_multi_gw_value(self, in_id: int, out_id: int, from_gw: int) -> float:
         """Quick estimate of multi-GW value of a transfer (looks 3 GWs ahead)."""
         total_gain = 0.0
-        lookahead = min(3, 38 - from_gw)
+        lookahead = min(3, 38 - from_gw, self.next_gw + self.horizon - 1 - from_gw)
 
         for gw in range(from_gw, from_gw + lookahead + 1):
             if gw > 38:
@@ -541,7 +478,7 @@ class GWPlanner:
         results = []
         for t in transfers:
             gw_values = []
-            for gw in range(from_gw, min(from_gw + self.horizon, 39)):
+            for gw in range(from_gw, min(self.next_gw + self.horizon, 39)):
                 pred_map = self._get_pred_map(gw)
                 in_pred = pred_map.get(t["in_id"], {})
                 out_pred = pred_map.get(t["out_id"], {})
@@ -702,7 +639,7 @@ class GWPlanner:
         return self.build_fixture_ticker(list(team_ids))
 
     # ── Convenience: Plan from FPL Team ID ────────────────────
-    def plan_from_team_id(self, team_id: int, horizon: int = None, free_transfers: int | None = None, team_data: dict | None = None) -> dict:
+    def plan_from_team_id(self, team_id: int, horizon: int = None, free_transfers: int | None = None, team_data: dict | None = None, strategy: str = 'balanced') -> dict:
         """Fetch team from FPL API and generate plan."""
         from my_team import fetch_my_team
 
@@ -787,11 +724,35 @@ class GWPlanner:
             "ft_source": ft_source,
         })
 
+        # Public picks often omit selling prices. Recover purchase costs from
+        # permanent transfer history where available; original purchases remain unknown.
+        fh_events = {int(c['event']) for c in team_data.get('chips', [])
+                     if c.get('name') == 'freehit' and c.get('event') is not None}
+        acquisitions = {}
+        for transfer in sorted(team_data.get('transfers', []), key=lambda t: (t.get('event', 0), t.get('time', ''))):
+            if transfer.get('event') not in fh_events and transfer.get('element_in_cost') is not None:
+                acquisitions[transfer.get('element_in')] = int(transfer['element_in_cost'])
+        selling_prices = {}
+        for pick in picks:
+            pid = pick['element']
+            if pick.get('selling_price') is not None:
+                selling_prices[pid] = pick['selling_price'] / 10
+            elif pid in acquisitions and pid in self.players:
+                cost, purchase = self.players[pid]['now_cost'], acquisitions[pid]
+                selling_prices[pid] = (cost if cost <= purchase else purchase + (cost - purchase) // 2) / 10
+        # Planning-GW picks already incorporate completed early transfers.
+        early_count = (team_data.get('current_event_transfers') or 0) if team_data.get('picks_are_planning_gw') else 0
+        if early_count:
+            ft = max(0, ft - early_count)
+            ft_source = 'remaining_after_early_transfers'
+
         plan = self.plan_transfers(
             current_squad_ids=squad_ids,
             bank=bank,
             free_transfers=ft,
             chips_available=chips_available,
+            selling_prices=selling_prices,
+            strategy=strategy,
         )
 
         chips_used = {code for used in chip_usage.values() for code in used}

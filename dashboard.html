@@ -1548,8 +1548,14 @@ table tr:hover { background:var(--surface2); }
          <label style="font-size:13px;color:var(--text2);">Planning horizon:</label>
          <select id="planner-horizon" onchange="loadGWPlanner()">
           <option value="3">3 Gameweeks</option>
-          <option value="5" selected>5 Gameweeks</option>
-          <option value="8">8 Gameweeks</option>
+          <option value="5">5 Gameweeks</option>
+          <option value="8" selected>8 Gameweeks</option>
+        </select>
+        <label for="planner-strategy" style="font-size:13px;color:var(--text2);">Strategy:</label>
+        <select id="planner-strategy" onchange="loadGWPlanner()">
+          <option value="conservative">Conservative</option>
+          <option value="balanced" selected>Balanced</option>
+          <option value="aggressive">Aggressive</option>
         </select>
         <button class="btn btn-primary" onclick="loadGWPlanner()" id="planner-btn">Generate Plan</button>
         <span id="planner-loading" style="display:none;color:var(--text3);font-size:12px;">
@@ -5513,7 +5519,8 @@ async function loadGWPlanner() {
     const url =
       `/api/gw-planner` +
       `?id=${encodeURIComponent(teamId)}` +
-      `&horizon=${encodeURIComponent(horizon)}`;
+      `&horizon=${encodeURIComponent(horizon)}` +
+      `&strategy=${encodeURIComponent(document.getElementById("planner-strategy")?.value || "balanced")}`;
 
     console.log('[GW PLANNER] Fetching:', url);
 
@@ -5575,6 +5582,16 @@ function renderPlanner(data) {
     <div class="stat-box"><div class="label">Chips Remaining</div><div class="value" style="font-size:16px;">${data.chips_remaining?.join(', ') || 'None'}</div></div>
   `;
 
+  if (data.strategies) {
+    const comparison = Object.entries(data.strategies).map(([name, s]) =>
+      `${name}: ${s.expected_net_points} net xPts, ${s.transfers} transfers, ${s.hits} hits`).join(' · ');
+    document.getElementById('planner-summary-stats').insertAdjacentHTML('afterend',
+      `<p id="planner-strategy-comparison" style="font-size:12px;color:var(--text2)"></p>`);
+    const comparisons = document.querySelectorAll('#planner-strategy-comparison');
+    comparisons.forEach((el, i) => { if (i < comparisons.length - 1) el.remove(); });
+    comparisons[comparisons.length - 1].textContent = `${data.selected_strategy} plan · ${comparison}. Chips are advisory; prices are held constant.${data.assumptions?.selling_prices_estimated ? ' Some selling prices are estimated.' : ''}`;
+  }
+
   // Timeline
   renderPlannerTimeline(gwPlans);
 
@@ -5634,7 +5651,7 @@ function renderPlannerTimeline(gwPlans) {
     // Stats
     html += `<div class="planner-stats">
       <span style="color:${gw.xpts_gain >= 0 ? 'var(--accent)' : 'var(--red)'};">${gw.xpts_gain >= 0 ? '+' : ''}${gw.xpts_gain} gain</span>
-      <span>XI: ${gw.post_transfer_xpts} xPts</span>
+      <span>XI + captain: ${gw.post_transfer_xpts} net xPts</span>
     </div>`;
 
     html += '</div></div>';

@@ -103,14 +103,13 @@ class TeamIDPlannerTests(unittest.TestCase):
         self.assertEqual(response.json['gw_plans'][0]['free_transfers_available'],1)
         self.assertEqual(response.json['free_transfers_source'],'completed_history')
 
-    def test_chip_plans_do_not_award_extra_transfer(self):
+    def test_chip_recommendations_are_advisory(self):
         planner=gw_planner.GWPlanner(horizon=2,baseline_predictions=self.preds,baseline_gw=9)
-        for chip in ('WC','FH'):
-            def recommend(*args):
-                return {'use_chip':True,'chip_code':chip} if args[2] == 9 else None
-            with patch.object(planner,'_recommend_chip',side_effect=recommend), patch.object(planner,'_find_best_transfers',return_value=[]):
-                result=planner.plan_transfers(list(range(1,16)),bank=2.2,free_transfers=2,chips_available=[chip])
-            self.assertEqual(result['gw_plans'][1]['free_transfers_available'],2)
+        with patch.object(planner,'_recommend_chip',return_value={'use_chip':True,'chip_code':'WC','score':90}):
+            result=planner.plan_transfers(list(range(1,16)),bank=2.2,free_transfers=2,chips_available=['WC'],max_transfers_per_gw=0)
+        self.assertFalse(result['gw_plans'][0]['chip_recommendation']['use_chip'])
+        self.assertEqual(result['gw_plans'][1]['free_transfers_available'],3)
+        self.assertEqual(result['summary']['chips_used'],[])
 
 
 if __name__=='__main__': unittest.main()

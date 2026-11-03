@@ -20,3 +20,5 @@ _check*.py
 !tests/test_squad_optimizer.py
 
 !tests/test_player_roles.py
+
+!tests/test_transfer_search.py
