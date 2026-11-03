@@ -8,9 +8,10 @@ const source = html.slice(html.indexOf('let MODEL_ANALYSIS_DATA = null;'), html.
 function harness(responses) {
   const nodes = new Map();
   const requests = [];
+  const headers = [];
   const context = vm.createContext({
     AbortController,
-    authHeaders: () => ({}),
+    authHeaders: () => ({Authorization: 'Bearer admin-session'}),
     escapeHtml: text => String(text).replaceAll('<', '&lt;'),
     document: {getElementById: id => {
       if (!nodes.has(id)) nodes.set(id, {style: {}, textContent: '', disabled: false});
@@ -20,6 +21,7 @@ function harness(responses) {
     clearTimeout: () => {},
     fetch: async (url, options) => {
       requests.push(options.method);
+      headers.push(options.headers);
       const entry = responses.shift();
       if (entry instanceof Error) throw entry;
       return {ok: entry.status < 400, status: entry.status,
@@ -27,7 +29,7 @@ function harness(responses) {
     }
   });
   vm.runInContext(source, context);
-  return {context, nodes, requests, run: () => vm.runInContext('analyzeModelPerformance()', context)};
+  return {context, nodes, requests, headers, run: () => vm.runInContext('analyzeModelPerformance()', context)};
 }
 
 test('analysis starts once, polls, and renders completed metrics', async () => {
@@ -66,5 +68,42 @@ test('server restart stops polling with a recoverable error', async () => {
     {status: 200, body: {status: 'idle', job_id: null}}]);
   await h.run();
   assert.match(h.nodes.get('model-analysis-error').textContent, /server restart/);
+  assert.equal(h.nodes.get('model-analysis-btn').disabled, false);
+});
+
+
+test('status polling uses the job capability instead of remote session auth', async () => {
+  const h = harness([
+    {status: 202, body: {status: 'running', job_id: 'job', poll_token: 'job-secret'}},
+    {status: 200, body: {status: 'completed', job_id: 'job', result: {averages: {}, suggestions: []}}}
+  ]);
+  await h.run();
+  assert.equal(h.headers[0].Authorization, 'Bearer admin-session');
+  assert.equal(h.headers[1]['X-Analysis-Token'], 'job-secret');
+  assert.equal(h.headers[1].Authorization, undefined);
+});
+
+test('a transient polling timeout retries the same job and renders its result', async () => {
+  const timeout = new Error('aborted'); timeout.name = 'AbortError';
+  const h = harness([
+    {status: 202, body: {status: 'running', job_id: 'job', poll_token: 'job-secret'}},
+    timeout,
+    {status: 200, body: {status: 'completed', job_id: 'job', result: {averages: {mae: 1.5}, suggestions: []}}}
+  ]);
+  await h.run();
+  assert.deepEqual(h.requests, ['POST', 'GET', 'GET']);
+  assert.equal(h.nodes.get('model-mae').textContent, 1.5);
+  assert.equal(h.nodes.get('model-analysis-error').style.display, 'none');
+});
+
+test('repeated polling timeouts stop after a bounded number of retries', async () => {
+  const timeout = new Error('aborted'); timeout.name = 'AbortError';
+  const h = harness([
+    {status: 202, body: {status: 'running', job_id: 'job', poll_token: 'job-secret'}},
+    timeout, timeout, timeout, timeout
+  ]);
+  await h.run();
+  assert.deepEqual(h.requests, ['POST', 'GET', 'GET', 'GET', 'GET']);
+  assert.match(h.nodes.get('model-analysis-error').textContent, /timed out/);
   assert.equal(h.nodes.get('model-analysis-btn').disabled, false);
 });

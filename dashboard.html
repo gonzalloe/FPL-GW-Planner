@@ -1656,7 +1656,7 @@ table tr:hover { background:var(--surface2); }
     <div class="card-header"><h3>🧠 Model Optimization</h3><button id="model-analysis-btn" class="btn btn-primary" onclick="analyzeModelPerformance()" style="font-size:12px;padding:6px 14px;">Analyze Performance</button></div>
     <div id="model-analysis-loading" style="display:none;text-align:center;padding:20px;color:var(--text3);">
       <div style="display:inline-block;width:20px;height:20px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
-      <p style="margin-top:8px;font-size:13px;">Analyzing recent gameweeks...</p>
+      <p id="model-analysis-progress" style="margin-top:8px;font-size:13px;">Analyzing recent gameweeks...</p>
     </div>
     <p id="model-analysis-error" role="alert" style="display:none;color:var(--red);padding:12px;"></p>
     <div id="model-analysis-result" style="display:none;">
@@ -2299,21 +2299,35 @@ async function adminQuickDelete(email) {
 let MODEL_ANALYSIS_DATA = null;
 let MODEL_ANALYSIS_BUSY = false;
 
-async function fetchModelAnalysis(method) {
+async function fetchModelAnalysis(method, pollToken = null) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
+    const headers = pollToken ? {'X-Analysis-Token': pollToken} : authHeaders();
     const response = await fetch('/api/admin/model-analysis', {
-      method, headers: authHeaders(), cache: 'no-store', signal: controller.signal
+      method, headers, cache: 'no-store', signal: controller.signal
     });
     const text = await response.text();
     let data;
     try { data = JSON.parse(text); }
-    catch (_) { throw new Error(`Analysis service returned HTTP ${response.status}. Please retry shortly.`); }
-    if (!response.ok) throw new Error(data.error || `Analysis request failed (HTTP ${response.status}).`);
+    catch (_) {
+      const error = new Error(`Analysis service returned HTTP ${response.status}. Please retry shortly.`);
+      error.retryable = response.status >= 500;
+      throw error;
+    }
+    if (!response.ok) {
+      const error = new Error(data.error || `Analysis request failed (HTTP ${response.status}).`);
+      error.retryable = [408, 429, 502, 503, 504].includes(response.status);
+      throw error;
+    }
     return data;
   } catch (error) {
-    if (error.name === 'AbortError') throw new Error('Analysis status request timed out. Please retry shortly.');
+    if (error.name === 'AbortError') {
+      const timeoutError = new Error('Analysis status request timed out. Please retry shortly.');
+      timeoutError.retryable = true;
+      throw timeoutError;
+    }
+    if (error.name === 'TypeError') error.retryable = true;
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -2326,6 +2340,8 @@ async function analyzeModelPerformance() {
   MODEL_ANALYSIS_DATA = null;
   const button = document.getElementById('model-analysis-btn');
   const errorBox = document.getElementById('model-analysis-error');
+  const progress = document.getElementById('model-analysis-progress');
+  progress.textContent = 'Analyzing recent gameweeks...';
   button.disabled = true;
   errorBox.style.display = 'none';
   document.getElementById('model-analysis-loading').style.display = 'block';
@@ -2334,11 +2350,23 @@ async function analyzeModelPerformance() {
   try {
     let job = await fetchModelAnalysis('POST');
     const jobId = job.job_id;
+    const pollToken = job.poll_token;
     let polls = 0;
+    let retryErrors = 0;
     while (job.status === 'running') {
       if (++polls > 120) throw new Error('Analysis is still running. Please check again shortly.');
       await new Promise(resolve => setTimeout(resolve, 1500));
-      job = await fetchModelAnalysis('GET');
+      try {
+        job = await fetchModelAnalysis('GET', pollToken);
+        retryErrors = 0;
+        progress.textContent = 'Analyzing recent gameweeks...';
+      } catch (error) {
+        if (error.retryable && ++retryErrors <= 3) {
+          progress.textContent = 'Analysis is running. Reconnecting to retrieve the result...';
+          continue;
+        }
+        throw error;
+      }
       if (job.job_id !== jobId) throw new Error('Analysis was interrupted by a server restart or another run. Please try again.');
     }
     if (job.status !== 'completed' || !job.result) {

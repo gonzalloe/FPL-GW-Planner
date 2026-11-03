@@ -85,6 +85,7 @@ class ModelAnalysisJobTests(unittest.TestCase):
             p.start(); self.addCleanup(p.stop)
         with server._MODEL_ANALYSIS_LOCK:
             server._MODEL_ANALYSIS_JOB.update(status='idle', job_id=None, error=None, result=None)
+            server._MODEL_ANALYSIS_ACCESS.update(token=None, expires_at=0.0)
         server.limiter.enabled = False
         self.client = server.app.test_client()
 
@@ -106,6 +107,7 @@ class ModelAnalysisJobTests(unittest.TestCase):
                 self.assertEqual(self.client.get('/api/admin/model-analysis').json['status'], 'running')
                 duplicate = self.client.post('/api/admin/model-analysis')
                 self.assertEqual(duplicate.json['job_id'], response.json['job_id'])
+                self.assertEqual(duplicate.json['poll_token'], response.json['poll_token'])
                 self.assertEqual(analysis.call_count, 1)
             finally:
                 release.set()
@@ -126,6 +128,39 @@ class ModelAnalysisJobTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json['status'], 'failed')
             self.assertTrue(response.json['error'])
+
+    def test_poll_token_avoids_remote_auth_and_settings_reads(self):
+        class InlineThread:
+            def __init__(self, target, args=(), **kwargs): self.target, self.args = target, args
+            def start(self): self.target(*self.args)
+        with patch.object(server.threading, 'Thread', InlineThread), patch('model_optimizer.suggest_weight_adjustments', return_value={'averages': {'mae': 2}}):
+            response = self.client.post('/api/admin/model-analysis')
+        token = response.json['poll_token']
+        self.assertEqual(len(token), 64)
+        with patch.object(server, '_get_auth_user', side_effect=AssertionError('Remote auth must not run during polling')), patch('app_storage.get_setting', side_effect=AssertionError('Polling must not query storage')):
+            report = self.client.get('/api/admin/model-analysis', headers={'X-Analysis-Token': token})
+        self.assertEqual(report.status_code, 200)
+        self.assertEqual(report.json['status'], 'completed')
+        self.assertNotIn('poll_token', report.json)
+
+    def test_poll_token_is_scoped_expiring_and_rotates_with_job(self):
+        class InlineThread:
+            def __init__(self, target, args=(), **kwargs): self.target, self.args = target, args
+            def start(self): self.target(*self.args)
+        with patch.object(server.threading, 'Thread', InlineThread), patch('model_optimizer.suggest_weight_adjustments', return_value={}):
+            first = self.client.post('/api/admin/model-analysis').json['poll_token']
+            second = self.client.post('/api/admin/model-analysis').json['poll_token']
+        self.assertNotEqual(first, second)
+        for invalid in (first, 'wrong', 'é', '0'*64):
+            with patch.object(server, '_get_auth_user', side_effect=AssertionError('Invalid tokens must fail locally')):
+                response = self.client.get('/api/admin/model-analysis', headers={'X-Analysis-Token': invalid})
+            self.assertEqual(response.status_code, 401)
+        with patch.object(server, '_get_auth_user', return_value=None):
+            self.assertEqual(self.client.post('/api/admin/model-analysis', headers={'X-Analysis-Token': second}).status_code, 403)
+            self.assertEqual(self.client.post('/api/admin/users', headers={'X-Analysis-Token': second}).status_code, 403)
+        with server._MODEL_ANALYSIS_LOCK:
+            server._MODEL_ANALYSIS_ACCESS['expires_at'] = 0
+        self.assertEqual(self.client.get('/api/admin/model-analysis', headers={'X-Analysis-Token': second}).status_code, 401)
 
     def test_thread_start_failure_returns_json_and_does_not_leave_running_job(self):
         with patch.object(server.threading, 'Thread') as thread:
@@ -149,6 +184,15 @@ class ModelAnalysisJobTests(unittest.TestCase):
             response = self.client.post('/api/admin/apply-weights', json={'weights': {'form': 0.2}})
         self.assertTrue(response.json['ok'])
         engine.assert_called_once_with()
+
+
+class AnalysisStorageTimeoutTests(unittest.TestCase):
+    def test_settings_client_has_bounded_database_timeout(self):
+        import app_storage
+        fake_client = Mock()
+        with patch.object(app_storage, '_USE_SUPABASE', True), patch.object(app_storage, '_sb_client', None), patch('supabase.create_client', return_value=fake_client) as create:
+            self.assertIs(app_storage._get_sb(), fake_client)
+            self.assertEqual(create.call_args.kwargs['options'].postgrest_client_timeout, 5)
 
 
 if __name__ == '__main__': unittest.main()

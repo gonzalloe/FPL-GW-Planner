@@ -15,6 +15,7 @@ import sys
 import time
 import threading
 import hashlib
+import hmac
 import re
 import os
 import requests
@@ -32,6 +33,8 @@ _prediction_run_lock = threading.Lock()
 GW_PLANNER_LOCK = threading.Lock()
 _MODEL_ANALYSIS_LOCK = threading.Lock()
 _MODEL_ANALYSIS_JOB = {'status': 'idle', 'job_id': None, 'result': None, 'error': None}
+_MODEL_ANALYSIS_ACCESS = {'token': None, 'expires_at': 0.0}
+_MODEL_ANALYSIS_TOKEN_TTL = 600
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -817,7 +820,7 @@ def _maybe_gzip(resp):
 def after_request(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Analysis-Token"
     path = request.path
     if path.startswith("/api/"):
         max_age = _BROWSER_CACHE_API.get(path)
@@ -848,7 +851,7 @@ def before_request():
         resp = app.make_default_options_response()
         resp.headers["Access-Control-Allow-Origin"] = "*"
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Analysis-Token"
         resp.headers["Access-Control-Max-Age"] = "86400"  # Cache preflight for 24h
         return resp
 
@@ -3262,10 +3265,14 @@ def api_admin_delete_user():
 
 def _run_model_analysis_job(job_id):
     """Score saved forecasts off the request thread; never recreate historical ones."""
+    started = time.monotonic()
+    print(f'[MODEL ANALYSIS] Job {job_id} started')
     try:
         from model_optimizer import suggest_weight_adjustments
         result = suggest_weight_adjustments()
         error = result.get('error')
+        print(f'[MODEL ANALYSIS] Job {job_id} finished in {time.monotonic() - started:.1f}s: '
+              f"{'failed' if error else 'completed'}")
         with _MODEL_ANALYSIS_LOCK:
             if _MODEL_ANALYSIS_JOB['job_id'] == job_id:
                 _MODEL_ANALYSIS_JOB.update(status='failed' if error else 'completed',
@@ -3281,7 +3288,23 @@ def _run_model_analysis_job(job_id):
 @app.route("/api/admin/model-analysis", methods=["GET", "POST"])
 def api_admin_model_analysis():
     """Start one background analysis, or poll its status with a short request."""
+    # The administrator is authenticated when the job is started. A narrow,
+    # short-lived capability lets this job be polled without two Supabase
+    # auth-table queries per request, even while the database is slow.
+    poll_token = request.headers.get('X-Analysis-Token')
+    if request.method == 'GET' and poll_token is not None:
+        with _MODEL_ANALYSIS_LOCK:
+            expected = _MODEL_ANALYSIS_ACCESS['token']
+            valid = (expected is not None and re.fullmatch(r'[0-9a-f]{64}', poll_token) is not None
+                     and time.monotonic() < _MODEL_ANALYSIS_ACCESS['expires_at']
+                     and hmac.compare_digest(poll_token, expected))
+            if not valid:
+                return jsonify({'error': 'Analysis polling session expired or the server restarted. Please start the analysis again.'}), 401
+            return jsonify(dict(_MODEL_ANALYSIS_JOB))
+
+    auth_started = time.monotonic()
     user = _get_auth_user()
+    print(f'[MODEL ANALYSIS] {request.method} admin authentication took {time.monotonic() - auth_started:.1f}s')
     if not user or user.get("plan") != "admin":
         return jsonify({"error": "Admin access required"}), 403
     if request.method == 'GET':
@@ -3289,9 +3312,15 @@ def api_admin_model_analysis():
             return jsonify(dict(_MODEL_ANALYSIS_JOB))
     with _MODEL_ANALYSIS_LOCK:
         if _MODEL_ANALYSIS_JOB['status'] == 'running':
-            return jsonify(dict(_MODEL_ANALYSIS_JOB)), 202
+            if time.monotonic() >= _MODEL_ANALYSIS_ACCESS['expires_at']:
+                _MODEL_ANALYSIS_ACCESS.update(token=os.urandom(32).hex(),
+                                              expires_at=time.monotonic() + _MODEL_ANALYSIS_TOKEN_TTL)
+            return jsonify(dict(_MODEL_ANALYSIS_JOB, poll_token=_MODEL_ANALYSIS_ACCESS['token'])), 202
         job_id = hashlib.sha256(os.urandom(32)).hexdigest()[:16]
         _MODEL_ANALYSIS_JOB.update(status='running', job_id=job_id, result=None, error=None)
+        _MODEL_ANALYSIS_ACCESS.update(token=os.urandom(32).hex(),
+                                      expires_at=time.monotonic() + _MODEL_ANALYSIS_TOKEN_TTL)
+        token = _MODEL_ANALYSIS_ACCESS['token']
     try:
         threading.Thread(target=_run_model_analysis_job, args=(job_id,), daemon=True).start()
     except Exception:
@@ -3299,7 +3328,8 @@ def api_admin_model_analysis():
         with _MODEL_ANALYSIS_LOCK:
             _MODEL_ANALYSIS_JOB.update(status='failed', error='Could not start analysis. Please retry.')
         return jsonify({'error': 'Could not start analysis. Please retry.'}), 503
-    return jsonify({'status': 'running', 'job_id': job_id, 'result': None, 'error': None}), 202
+    return jsonify({'status': 'running', 'job_id': job_id, 'result': None, 'error': None,
+                    'poll_token': token}), 202
 
 
 @app.route("/api/admin/apply-weights", methods=["POST"])

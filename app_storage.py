@@ -45,8 +45,11 @@ def _get_sb():
     if _sb_client is not None:
         return _sb_client
     try:
-        from supabase import create_client
-        _sb_client = create_client(_SUPABASE_URL, _SUPABASE_KEY)
+        from supabase import create_client, ClientOptions
+        # The SDK defaults to 120 seconds per database operation. Settings and
+        # analysis snapshots should fall back promptly if storage is unavailable.
+        _sb_client = create_client(_SUPABASE_URL, _SUPABASE_KEY,
+                                   options=ClientOptions(postgrest_client_timeout=5))
         if not _backend_logged:
             print(f"  [APP_STORAGE] Using Supabase backend")
             _backend_logged = True
