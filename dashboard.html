@@ -862,8 +862,8 @@ select option:checked, select option:hover {
 .suggestion-btn { padding:6px 12px; border-radius:16px; border:1px solid var(--border); background:var(--surface3); color:var(--text2); cursor:pointer; font-size:12px; transition:var(--transition); white-space:nowrap; }
 .suggestion-btn:hover { background:var(--accent-dim); color:var(--accent); border-color:var(--accent); }
 .chat-input-bar { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--border); background:var(--bg2); }
-.chat-input-bar input { flex:1; padding:10px 16px; border-radius:20px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:14px; outline:none; }
-.chat-input-bar input:focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(0,230,118,.1); }
+.chat-input-bar textarea { flex:1; padding:10px 16px; border-radius:20px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:14px; outline:none; resize:vertical; min-height:44px; max-height:180px; font-family:inherit; line-height:1.4; }
+.chat-input-bar textarea:focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(0,230,118,.1); }
 .chat-send-btn { width:42px; height:42px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px; padding:0; flex-shrink:0; }
 .chat-spinner { width:16px; height:16px; border:2px solid rgba(0,0,0,.2); border-top-color:#000; border-radius:50%; animation:spin .6s linear infinite; display:inline-block; }
 .chat-typing { display:flex; gap:4px; padding:8px 16px; align-items:center; }
@@ -1607,8 +1607,8 @@ table tr:hover { background:var(--surface2); }
       </div>
     </div>
     <div class="chat-input-bar">
-      <input type="text" id="chat-input" placeholder="Ask about players, captain, chips, transfers..." onkeydown="if(event.key==='Enter')sendChat()">
-      <button class="btn btn-primary chat-send-btn" onclick="sendChat()" id="chat-send-btn">
+      <textarea id="chat-input" rows="2" aria-label="Message the FPL assistant" placeholder="Ask about players, captain, chips, transfers... Enter for a new line; Ctrl/Cmd+Enter to send." onkeydown="if(event.key==='Enter' &amp;&amp; (event.ctrlKey || event.metaKey) &amp;&amp; !event.isComposing){event.preventDefault();sendChat();}"></textarea>
+      <button class="btn btn-primary chat-send-btn" onclick="sendChat()" id="chat-send-btn" aria-label="Send message" title="Send message (Ctrl+Enter or Cmd+Enter)">
         <span id="send-icon">➤</span>
         <span id="send-spinner" style="display:none;" class="chat-spinner"></span>
       </button>
@@ -3497,6 +3497,7 @@ async function loadMyTeam() {
   loaded.style.display = 'none';
   MY_TEAM_DATA = null;
   MY_TEAM_ORIGINAL = null;
+  difyConversationId = null;
   PLANNER_DATA = null;
   TRANSFER_QUEUE = [];
   loadingEl.style.display = '';
@@ -5387,7 +5388,7 @@ function appendChatMsg(role,content,suggestions){
   const bubble=document.createElement('div');bubble.className='chat-bubble '+(role==='bot'?'bot-bubble':'user-bubble');
   const text=document.createElement('div');text.className='chat-text';
   if(role==='bot')text.innerHTML=renderMarkdown(content);
-  else text.textContent=content;
+  else { text.textContent=content; text.style.whiteSpace='pre-wrap'; }
   bubble.appendChild(text);
   if(suggestions&&suggestions.length){
     const sg=document.createElement('div');sg.className='chat-suggestions';
@@ -5436,6 +5437,13 @@ function renderMarkdown(text){
 }
 
 let difyConversationId = null;
+let chatUserId = sessionStorage.getItem('fpl-chat-user-id');
+if (!/^[a-f0-9]{32}$/.test(chatUserId || '')) {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  chatUserId = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  sessionStorage.setItem('fpl-chat-user-id', chatUserId);
+}
 async function sendChat(){
   if(chatBusy)return;
   const input=document.getElementById('chat-input');
@@ -5446,7 +5454,8 @@ async function sendChat(){
   document.getElementById('send-icon').style.display='none';
   document.getElementById('send-spinner').style.display='inline-block';
   try{
-    const r=await fetch('/api/chat',{method:'POST',headers:authHeaders(),body:JSON.stringify({question:q,conversation_id:difyConversationId})});
+    const r=await fetch('/api/chat',{method:'POST',headers:authHeaders(),body:JSON.stringify({question:q,conversation_id:difyConversationId,
+      team_id:MY_TEAM_ORIGINAL?.team_id || null,chat_user_id:chatUserId})});
     const data=await r.json();
     removeTyping(tid);
     if(data.conversation_id){
