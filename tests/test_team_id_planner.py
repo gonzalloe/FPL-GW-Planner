@@ -103,6 +103,58 @@ class TeamIDPlannerTests(unittest.TestCase):
         self.assertEqual(response.json['gw_plans'][0]['free_transfers_available'],1)
         self.assertEqual(response.json['free_transfers_source'],'completed_history')
 
+    def test_roll_from_one_free_transfer_and_no_double_deduction(self):
+        planner = gw_planner.GWPlanner(horizon=2, baseline_predictions=self.preds, baseline_gw=9)
+        planner.next_gw = 10
+        planner.horizon = 2
+        # With no possible replacements, the beam must hold in both GWs.
+        for gw in (10, 11):
+            planner._gw_predictions[gw] = self.preds[:15]
+            planner._gw_pred_maps[gw] = {p['player_id']: p for p in self.preds[:15]}
+            planner._gw_infos[gw] = {}
+        self.team.update({'info': {'planning_gw': 10}, 'free_transfers': 1,
+                          'picks_are_planning_gw': True, 'current_event_transfers': 1})
+        result = planner.plan_from_team_id(101, team_data=self.team)
+        self.assertEqual(result['gw_plans'][0]['gameweek'], 10)
+        self.assertEqual(result['gw_plans'][0]['free_transfers_available'], 1)
+        self.assertEqual(result['gw_plans'][0]['num_transfers'], 0)
+        self.assertEqual(result['gw_plans'][1]['free_transfers_available'], 2)
+        self.assertEqual(result['free_transfers_source'], 'completed_history')
+
+    def test_explicit_and_confirmed_balances_are_not_subtracted(self):
+        planner = gw_planner.GWPlanner(horizon=1, baseline_predictions=self.preds, baseline_gw=9)
+        self.team.update({'info': {'planning_gw': 9}, 'current_event_transfers': 4,
+                          'picks_are_planning_gw': True, 'free_transfers_remaining': 2})
+        result = planner.plan_from_team_id(101, team_data=self.team)
+        self.assertEqual(result['free_transfers'], 2)
+        self.assertEqual(result['free_transfers_source'], 'confirmed_remaining')
+        result = planner.plan_from_team_id(101, team_data=self.team, free_transfers=1)
+        self.assertEqual(result['free_transfers'], 1)
+        self.assertEqual(result['free_transfers_source'], 'explicit_override')
+
+    def test_planner_uses_history_for_target_gameweek(self):
+        planner = gw_planner.GWPlanner(horizon=1, baseline_predictions=self.preds, baseline_gw=9)
+        self.team.update({'info': {'planning_gw': 8}, 'free_transfers': 2,
+                          'history': [{'event': i, 'event_transfers': 1} for i in range(1, 9)],
+                          'chips': []})
+        result = planner.plan_from_team_id(101, team_data=self.team)
+        self.assertEqual(result['free_transfers'], 1)
+        self.assertEqual(result['free_transfers_source'], 'target_history')
+        self.team['history'].pop()
+        result = planner.plan_from_team_id(101, team_data=self.team)
+        self.assertIn('Free transfers for GW9 are unavailable', result['error'])
+
+    def test_api_accepts_override_and_rejects_invalid_values(self):
+        remote = Mock(ok=True); remote.json.return_value = {'current_event': 8}
+        with patch.object(server.requests, 'get', return_value=remote):
+            response = self.client.get('/api/gw-planner?id=101&horizon=1&free_transfers=1')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['free_transfers'], 1)
+        self.assertEqual(response.json['free_transfers_source'], 'explicit_override')
+        for value in ('-1', '6', 'invalid'):
+            response = self.client.get('/api/gw-planner?id=101&free_transfers=' + value)
+            self.assertEqual(response.status_code, 400)
+
     def test_chip_recommendations_are_advisory(self):
         planner=gw_planner.GWPlanner(horizon=2,baseline_predictions=self.preds,baseline_gw=9)
         with patch.object(planner,'_recommend_chip',return_value={'use_chip':True,'chip_code':'WC','score':90}):

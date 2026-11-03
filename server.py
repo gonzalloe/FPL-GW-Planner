@@ -891,31 +891,17 @@ def _chat_free_transfers(team, target_gw):
     Public data cannot reliably confirm remaining transfers before the deadline;
     history gives the allowance entering a GW, not a live authenticated balance.
     """
-    from my_team import calculate_free_transfers
-    info = team.get('info') or {}
-    planning_gw = info.get('planning_gw') or (team.get('gw_summary') or {}).get('planning_event')
-    try:
-        target_gw = int(target_gw)
-        planning_gw = int(planning_gw) if planning_gw is not None else None
-    except (TypeError, ValueError):
-        target_gw = planning_gw = None
-    if target_gw is not None and target_gw == planning_gw:
-        remaining = team.get('free_transfers_remaining')
-        if remaining is not None:
-            return int(remaining), 'confirmed remaining'
-        entering = team.get('free_transfers')
-        if entering is not None:
-            return int(entering), 'entering gameweek; live remaining unconfirmed'
-    if target_gw is not None:
-        history = team.get('history') or []
-        prior = [row for row in history if isinstance(row, dict) and
-                 str(row.get('event', '')).isdigit() and int(row['event']) < target_gw]
-        if any(int(row['event']) == target_gw - 1 for row in prior):
-            return calculate_free_transfers(prior, team.get('chips')), 'entering gameweek from public history; live remaining unconfirmed'
-        if planning_gw is not None and target_gw != planning_gw:
-            return None, 'unknown for prediction gameweek'
-    entering = team.get('free_transfers')
-    return (int(entering), 'entering gameweek; target or live remaining unconfirmed') if entering is not None else (None, 'unknown')
+    from my_team import free_transfers_for_gameweek
+    value, source = free_transfers_for_gameweek(team, target_gw)
+    labels = {
+        'confirmed_remaining': 'confirmed remaining',
+        'completed_history': 'entering gameweek; live remaining unconfirmed',
+        'target_history': 'entering gameweek from public history; live remaining unconfirmed',
+        'unknown': 'unknown for prediction gameweek',
+    }
+    if source == 'completed_history' and not (team.get('info') or {}).get('planning_gw') and not (team.get('gw_summary') or {}).get('planning_event'):
+        return value, 'entering gameweek; target or live remaining unconfirmed'
+    return value, labels[source]
 
 
 def _chat_suggested_lineup(picks, by_id):
@@ -1903,6 +1889,11 @@ def api_gw_planner():
     if not user:
         return jsonify({"error": "Sign in before generating a plan."}), 401
     free_transfers = None
+    raw_ft = request.args.get('free_transfers')
+    if raw_ft is not None:
+        if raw_ft not in {'0', '1', '2', '3', '4', '5'}:
+            return jsonify({'error': 'Free transfers must be between 0 and 5.'}), 400
+        free_transfers = int(raw_ft)
 
     print("[GW PLANNER] team_id:", team_id)
     print("[GW PLANNER] horizon:", horizon)

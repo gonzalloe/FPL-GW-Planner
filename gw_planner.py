@@ -704,17 +704,18 @@ class GWPlanner:
         # ------------------------------------------------------------
         # Free transfers
         # ------------------------------------------------------------
-        # Team-ID imports provide the allowance from completed history.
-
+        # Public history gives an entering allowance for a specific GW; it
+        # cannot reliably confirm transfers already made before the deadline.
         if free_transfers is not None:
             ft = max(0, min(int(free_transfers), 5))
             ft_source = "explicit_override"
         else:
-            value = team_data.get("free_transfers")
-            if value is None:
-                value = team_data.get("starting_free_transfers", 1)
-            ft = max(0, min(int(value), 5))
-            ft_source = "completed_history"
+            from my_team import free_transfers_for_gameweek
+            ft, ft_source = free_transfers_for_gameweek(team_data, self.next_gw)
+            if ft is None:
+                return {"error": f"Free transfers for GW{self.next_gw} are unavailable. "
+                                 "Enter your current free transfers from FPL and generate the plan again."}
+            ft = max(0, min(int(ft), 5))
 
         print("[GW PLANNER FT]", {
             "planning_gw": self.next_gw,
@@ -740,12 +741,6 @@ class GWPlanner:
             elif pid in acquisitions and pid in self.players:
                 cost, purchase = self.players[pid]['now_cost'], acquisitions[pid]
                 selling_prices[pid] = (cost if cost <= purchase else purchase + (cost - purchase) // 2) / 10
-        # Planning-GW picks already incorporate completed early transfers.
-        early_count = (team_data.get('current_event_transfers') or 0) if team_data.get('picks_are_planning_gw') else 0
-        if early_count:
-            ft = max(0, ft - early_count)
-            ft_source = 'remaining_after_early_transfers'
-
         plan = self.plan_transfers(
             current_squad_ids=squad_ids,
             bank=bank,

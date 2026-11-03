@@ -176,6 +176,40 @@ def calculate_free_transfers(history: list, chips: list | None = None) -> int:
     )
 
 
+def free_transfers_for_gameweek(team: dict, target_gw: int):
+    """Resolve the allowance for target_gw from confirmed balance or public history.
+
+    Public history can establish the allowance entering a GW, but cannot always
+    establish the balance after transfers made ahead of that deadline.
+    """
+    info = team.get('info') or {}
+    planning_gw = info.get('planning_gw') or (team.get('gw_summary') or {}).get('planning_event')
+    try:
+        target_gw = int(target_gw)
+        planning_gw = int(planning_gw) if planning_gw is not None else None
+    except (TypeError, ValueError):
+        target_gw = planning_gw = None
+    if target_gw is not None and target_gw == planning_gw:
+        remaining = team.get('free_transfers_remaining')
+        if remaining is not None:
+            return int(remaining), 'confirmed_remaining'
+        entering = team.get('free_transfers')
+        if entering is not None:
+            return int(entering), 'completed_history'
+    if target_gw is not None:
+        history = team.get('history') or []
+        prior = [row for row in history if isinstance(row, dict) and
+                 str(row.get('event', '')).isdigit() and int(row['event']) < target_gw]
+        if any(int(row['event']) == target_gw - 1 for row in prior):
+            return calculate_free_transfers(prior, team.get('chips')), 'target_history'
+        if planning_gw is not None and target_gw != planning_gw:
+            return None, 'unknown'
+    entering = team.get('free_transfers')
+    if entering is None:
+        entering = team.get('starting_free_transfers')
+    return (int(entering), 'completed_history') if entering is not None else (None, 'unknown')
+
+
 def fetch_my_team(team_id: int) -> dict:
     """
     Fetch a user's FPL team data using the public FPL API.
