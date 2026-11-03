@@ -1658,6 +1658,7 @@ table tr:hover { background:var(--surface2); }
       <div style="display:inline-block;width:20px;height:20px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
       <p id="model-analysis-progress" style="margin-top:8px;font-size:13px;">Analyzing recent gameweeks...</p>
     </div>
+    <p id="model-analysis-status" role="status" style="display:none;color:var(--text2);padding:12px;"></p>
     <p id="model-analysis-error" role="alert" style="display:none;color:var(--red);padding:12px;"></p>
     <div id="model-analysis-result" style="display:none;">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;">
@@ -2344,6 +2345,7 @@ async function analyzeModelPerformance() {
   progress.textContent = 'Analyzing recent gameweeks...';
   button.disabled = true;
   errorBox.style.display = 'none';
+  document.getElementById('model-analysis-status').style.display = 'none';
   document.getElementById('model-analysis-loading').style.display = 'block';
   document.getElementById('model-analysis-result').style.display = 'none';
   document.getElementById('model-weight-details').style.display = 'none';
@@ -2368,6 +2370,14 @@ async function analyzeModelPerformance() {
         throw error;
       }
       if (job.job_id !== jobId) throw new Error('Analysis was interrupted by a server restart or another run. Please try again.');
+    }
+    if (job.status === 'no_data' && job.result) {
+      const statusBox = document.getElementById('model-analysis-status');
+      const reasons = (job.result.skipped_gameweeks || []).slice(0, 3)
+        .map(item => `GW${item.gw}: ${item.reason}`);
+      statusBox.textContent = [job.result.message, ...reasons].filter(Boolean).join(' ');
+      statusBox.style.display = 'block';
+      return;
     }
     if (job.status !== 'completed' || !job.result) {
       throw new Error([job.error || 'Analysis could not finish.', job.result?.suggestion].filter(Boolean).join(' '));

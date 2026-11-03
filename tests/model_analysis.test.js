@@ -107,3 +107,19 @@ test('repeated polling timeouts stop after a bounded number of retries', async (
   assert.match(h.nodes.get('model-analysis-error').textContent, /timed out/);
   assert.equal(h.nodes.get('model-analysis-btn').disabled, false);
 });
+
+
+test('upcoming forecasts show a neutral waiting message without grades or an error', async () => {
+  const h = harness([
+    {status: 202, body: {status: 'running', job_id: 'job'}},
+    {status: 200, body: {status: 'no_data', job_id: 'job', result: {
+      message: 'Forecast saved for GW10. Wait until it finishes.', skipped_gameweeks: []
+    }}}
+  ]);
+  await h.run();
+  assert.match(h.nodes.get('model-analysis-status').textContent, /GW10/);
+  assert.equal(h.nodes.get('model-analysis-status').style.display, 'block');
+  assert.equal(h.nodes.get('model-analysis-error').style.display, 'none');
+  assert.equal(h.nodes.get('model-analysis-result').style.display, 'none');
+  assert.equal(h.nodes.get('model-analysis-btn').disabled, false);
+});

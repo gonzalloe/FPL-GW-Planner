@@ -41,3 +41,9 @@ database-operation timeout instead of the SDK's 120-second default. Backend
 exceptions become a failed job, and the button and loading indicator recover on
 both success and error. Logs include job duration and start-request authentication
 time to distinguish analysis delays from request/authentication delays.
+
+When only upcoming forecasts exist, the report is a neutral waiting state that
+names their gameweeks. Refresh Data before the relevant deadline, retain the
+snapshot, and analyse after that gameweek finishes. The analyser also recognises
+a matching latest_predictions.json restored from the cloud cache, even when the
+GW-specific local file is absent. Post-deadline forecasts remain excluded.

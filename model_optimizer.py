@@ -14,25 +14,39 @@ from config import PREDICTION_WEIGHTS
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
 
-def load_predictions(gw: int) -> Dict:
-    """Load predictions for a specific GW."""
+def _load_latest_predictions():
     try:
-        with (OUTPUT_DIR / f'gw{gw}_predictions.json').open('r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Warning: Could not load GW{gw} predictions: {e}")
+        data = json.loads((OUTPUT_DIR / 'latest_predictions.json').read_text(encoding='utf-8'))
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
         return None
 
 
+def load_predictions(gw: int) -> Dict:
+    """Load the GW snapshot, including a matching restored latest cache."""
+    try:
+        with (OUTPUT_DIR / f'gw{gw}_predictions.json').open('r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except (OSError, ValueError):
+        pass
+    latest = _load_latest_predictions()
+    return latest if latest and latest.get('gameweek') == gw else None
+
+
 def find_available_prediction_gws() -> List[int]:
-    """Find all GW prediction files available on disk."""
+    """Find GW snapshots and the restored cloud cache, if present."""
     if not OUTPUT_DIR.is_dir():
         return []
-    gws = []
-    for fname in os.listdir(OUTPUT_DIR):
-        m = re.match(r'gw(\d+)_predictions\.json$', fname)
-        if m:
-            gws.append(int(m.group(1)))
+    gws = set()
+    for path in OUTPUT_DIR.glob('gw*_predictions.json'):
+        match = re.fullmatch(r'gw(\d+)_predictions\.json', path.name)
+        if match:
+            gws.add(int(match.group(1)))
+    latest = _load_latest_predictions()
+    if latest and isinstance(latest.get('gameweek'), int):
+        gws.add(latest['gameweek'])
     return sorted(gws)
 
 
@@ -280,9 +294,41 @@ def analyze_recent_gameweeks(num_gws: int = 3) -> Dict:
             break
 
     if not results:
+        # Missing history is an expected initial state, not a server failure.
+        pending = []
+        for event in events:
+            gw = event['id']
+            if event.get('finished') or gw not in available:
+                continue
+            forecast = load_predictions(gw)
+            reason = _forecast_exclusion(forecast, event)
+            if reason and gw in (archived or []) and prefix:
+                reason = _forecast_exclusion(get_setting(f'{prefix}:gw{gw}'), event)
+            if reason:
+                skipped.append({'gw': gw, 'reason': reason})
+            else:
+                pending.append(gw)
+        pending.sort()
+        if attempted:
+            return {
+                'error': 'Saved forecasts were found, but their actual results could not be scored.',
+                'suggestion': 'Try again shortly. Check the skipped-gameweek details if the problem persists.',
+                'skipped_gameweeks': skipped,
+                'available_prediction_gws': available,
+                'current_gw': current_gw,
+            }
+        if pending:
+            message = ('Forecast data is saved for ' + ', '.join(f'GW{gw}' for gw in pending)
+                       + '. Performance analysis becomes available after a gameweek with an eligible saved forecast finishes.')
+        else:
+            message = ('No pre-deadline forecast is available for a completed gameweek. '
+                       'Refresh Data before the next gameweek deadline to save a forecast, then analyse it after that gameweek finishes.')
         return {
+            'status': 'waiting_for_data',
+            'message': message,
             'error': 'No eligible completed-gameweek forecasts are available for analysis.',
-            'suggestion': 'Keep forecasts saved before their gameweek deadline, then analyse them after that gameweek finishes. Missing historical forecasts cannot be recreated fairly after the results are known.',
+            'suggestion': 'Existing pre-deadline forecast backups can be used. Forecasts that were never saved cannot be recovered from results.',
+            'pending_gameweeks': pending,
             'available_prediction_gws': available,
             'skipped_gameweeks': skipped,
             'current_gw': current_gw,

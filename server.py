@@ -3271,12 +3271,13 @@ def _run_model_analysis_job(job_id):
         from model_optimizer import suggest_weight_adjustments
         result = suggest_weight_adjustments()
         error = result.get('error')
+        status = 'no_data' if result.get('status') == 'waiting_for_data' else ('failed' if error else 'completed')
         print(f'[MODEL ANALYSIS] Job {job_id} finished in {time.monotonic() - started:.1f}s: '
-              f"{'failed' if error else 'completed'}")
+              f"{status}")
         with _MODEL_ANALYSIS_LOCK:
             if _MODEL_ANALYSIS_JOB['job_id'] == job_id:
-                _MODEL_ANALYSIS_JOB.update(status='failed' if error else 'completed',
-                                           result=result, error=error)
+                _MODEL_ANALYSIS_JOB.update(status=status, result=result,
+                                           error=error if status == 'failed' else None)
     except Exception:
         app.logger.exception('Model performance analysis failed')
         with _MODEL_ANALYSIS_LOCK:

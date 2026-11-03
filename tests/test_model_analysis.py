@@ -69,6 +69,28 @@ class ModelAnalysisMetricsTests(unittest.TestCase):
         (self.directory / 'gw9_predictions.json').unlink()
         self.assertEqual(optimizer.analyze_recent_gameweeks()['gameweeks_analyzed'], [9])
 
+    def test_restored_latest_cache_can_be_scored_after_its_gw_finishes(self):
+        (self.directory / 'latest_predictions.json').write_text(json.dumps(self.forecast(9)))
+        self.assertEqual(optimizer.find_available_prediction_gws(), [9])
+        result = optimizer.analyze_recent_gameweeks()
+        self.assertEqual(result['gameweeks_analyzed'], [9])
+        self.assertEqual(result['averages']['mae'], 2)
+
+    def test_upcoming_forecast_gives_actionable_waiting_state(self):
+        self.events[1]['finished'] = False
+        (self.directory / 'latest_predictions.json').write_text(json.dumps(self.forecast(9)))
+        result = optimizer.analyze_recent_gameweeks()
+        self.assertEqual(result['status'], 'waiting_for_data')
+        self.assertEqual(result['pending_gameweeks'], [9])
+        self.assertIn('saved for GW9', result['message'])
+        self.assertNotIn('averages', result)
+
+    def test_late_latest_cache_is_still_excluded(self):
+        (self.directory / 'latest_predictions.json').write_text(json.dumps(self.forecast(9, after=True)))
+        result = optimizer.analyze_recent_gameweeks()
+        self.assertEqual(result['status'], 'waiting_for_data')
+        self.assertIn('after the deadline', result['skipped_gameweeks'][0]['reason'])
+
     def test_unfinished_gw_is_not_scored(self):
         self.events[1]['finished'] = False
         self.write(9)
@@ -161,6 +183,18 @@ class ModelAnalysisJobTests(unittest.TestCase):
         with server._MODEL_ANALYSIS_LOCK:
             server._MODEL_ANALYSIS_ACCESS['expires_at'] = 0
         self.assertEqual(self.client.get('/api/admin/model-analysis', headers={'X-Analysis-Token': second}).status_code, 401)
+
+    def test_no_forecast_is_a_waiting_state_instead_of_job_failure(self):
+        with server._MODEL_ANALYSIS_LOCK:
+            server._MODEL_ANALYSIS_JOB.update(status='running', job_id='waiting')
+        with patch('model_optimizer.suggest_weight_adjustments', return_value={
+                'status': 'waiting_for_data', 'error': 'No eligible forecasts',
+                'message': 'Forecast saved for GW10; wait for its results.'}):
+            server._run_model_analysis_job('waiting')
+        response = self.client.get('/api/admin/model-analysis')
+        self.assertEqual(response.json['status'], 'no_data')
+        self.assertIsNone(response.json['error'])
+        self.assertIn('GW10', response.json['result']['message'])
 
     def test_thread_start_failure_returns_json_and_does_not_leave_running_job(self):
         with patch.object(server.threading, 'Thread') as thread:
