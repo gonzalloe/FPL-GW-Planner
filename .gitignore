@@ -24,3 +24,5 @@ _check*.py
 !tests/test_transfer_search.py
 
 !tests/test_chat_context.py
+
+!tests/test_model_analysis.py

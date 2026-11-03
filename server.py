@@ -30,6 +30,8 @@ from supabase import create_client
 #_prediction_engine_lock = threading.Lock()
 _prediction_run_lock = threading.Lock()
 GW_PLANNER_LOCK = threading.Lock()
+_MODEL_ANALYSIS_LOCK = threading.Lock()
+_MODEL_ANALYSIS_JOB = {'status': 'idle', 'job_id': None, 'result': None, 'error': None}
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -347,7 +349,7 @@ def _run_predictions(gw=None):
         from prediction_engine import PLAYER_ROLE_MODEL_VERSION
         output = {
             "role_model_version": PLAYER_ROLE_MODEL_VERSION,
-            "generated_at": datetime.now().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "gameweek": target_gw,
             "gw_info": gw_info,
             "predictions": predictions,
@@ -405,6 +407,13 @@ def _run_predictions(gw=None):
         )
 
         os.replace(latest_tmp, latest)
+
+        # Compact accuracy snapshots survive Render's ephemeral filesystem.
+        try:
+            from model_optimizer import archive_prediction_forecast
+            archive_prediction_forecast(output, engine.bootstrap)
+        except Exception:
+            app.logger.exception('Unable to archive prediction forecast for accuracy analysis')
 
         # Keep only latest 3 GW files
         try:
@@ -3251,24 +3260,47 @@ def api_admin_delete_user():
     d = request.get_json(silent=True) or {}
     return jsonify(admin_delete_user(user["email"], d.get("email","")))
 
-@app.route("/api/admin/model-analysis", methods=["GET"])
-def api_admin_model_analysis():
-    """Admin: Get model performance analysis and weight suggestions."""
-    user = _get_auth_user()
-    if not user or user.get("plan") != "admin": return jsonify({"error": "Admin access required"}), 403
-    # Auto-generate last-completed GW predictions if missing
+def _run_model_analysis_job(job_id):
+    """Score saved forecasts off the request thread; never recreate historical ones."""
     try:
-        from model_optimizer import suggest_weight_adjustments, find_available_prediction_gws
-        from data_fetcher import get_current_gameweek
-        current_gw = get_current_gameweek()
-        last_completed = current_gw - 1
-        available = find_available_prediction_gws()
-        if last_completed > 0 and last_completed not in available:
-            print(f"  [ADMIN] Generating missing GW{last_completed} predictions for analysis...")
-            _run_predictions(gw=last_completed)
-    except Exception as e:
-        print(f"  [ADMIN] Could not auto-generate predictions: {e}")
-    return jsonify(suggest_weight_adjustments())
+        from model_optimizer import suggest_weight_adjustments
+        result = suggest_weight_adjustments()
+        error = result.get('error')
+        with _MODEL_ANALYSIS_LOCK:
+            if _MODEL_ANALYSIS_JOB['job_id'] == job_id:
+                _MODEL_ANALYSIS_JOB.update(status='failed' if error else 'completed',
+                                           result=result, error=error)
+    except Exception:
+        app.logger.exception('Model performance analysis failed')
+        with _MODEL_ANALYSIS_LOCK:
+            if _MODEL_ANALYSIS_JOB['job_id'] == job_id:
+                _MODEL_ANALYSIS_JOB.update(status='failed', result=None,
+                                           error='Model analysis failed. Please retry or check the server logs.')
+
+
+@app.route("/api/admin/model-analysis", methods=["GET", "POST"])
+def api_admin_model_analysis():
+    """Start one background analysis, or poll its status with a short request."""
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
+    if request.method == 'GET':
+        with _MODEL_ANALYSIS_LOCK:
+            return jsonify(dict(_MODEL_ANALYSIS_JOB))
+    with _MODEL_ANALYSIS_LOCK:
+        if _MODEL_ANALYSIS_JOB['status'] == 'running':
+            return jsonify(dict(_MODEL_ANALYSIS_JOB)), 202
+        job_id = hashlib.sha256(os.urandom(32)).hexdigest()[:16]
+        _MODEL_ANALYSIS_JOB.update(status='running', job_id=job_id, result=None, error=None)
+    try:
+        threading.Thread(target=_run_model_analysis_job, args=(job_id,), daemon=True).start()
+    except Exception:
+        app.logger.exception('Unable to start model analysis')
+        with _MODEL_ANALYSIS_LOCK:
+            _MODEL_ANALYSIS_JOB.update(status='failed', error='Could not start analysis. Please retry.')
+        return jsonify({'error': 'Could not start analysis. Please retry.'}), 503
+    return jsonify({'status': 'running', 'job_id': job_id, 'result': None, 'error': None}), 202
+
 
 @app.route("/api/admin/apply-weights", methods=["POST"])
 def api_admin_apply_weights():
@@ -3284,28 +3316,13 @@ def api_admin_apply_weights():
     if not success:
         return jsonify({"ok": False, "message": "Failed to persist weights (storage error)"})
 
-    # Weights are already hot-swapped in memory by apply_weight_adjustments.
-    # Kick off a threaded prediction regen so the new xPts appear ASAP.
-    # IMPORTANT: also regenerate the last-completed GW predictions, because
-    # the model-optimizer's Grade/MAE/correlation are computed from THAT file
-    # (compared against FPL API event_points). Without this, admins apply
-    # weights, see Grade unchanged, and think persistence is broken.
+    # Regenerate upcoming predictions only. Historical forecasts must stay
+    # unchanged so their accuracy can be assessed against unseen results.
     try:
         def _regen():
             try:
                 _run_predictions()
                 print("  [ADMIN] Next-GW predictions regenerated with new weights")
-                # Also rebuild the last-completed GW so Analyze Performance
-                # reflects the NEW weights on the next click.
-                try:
-                    from data_fetcher import get_current_gameweek
-                    current_gw = get_current_gameweek()
-                    last_completed = current_gw - 1
-                    if last_completed > 0:
-                        _run_predictions(gw=last_completed)
-                        print(f"  [ADMIN] Last-completed GW{last_completed} predictions rebuilt for accuracy analysis")
-                except Exception as e:
-                    print(f"  [ADMIN] Could not rebuild last-completed GW predictions: {e}")
             except Exception as e:
                 print(f"  [ADMIN] Regen failed: {e}")
         threading.Thread(target=_regen, daemon=True).start()

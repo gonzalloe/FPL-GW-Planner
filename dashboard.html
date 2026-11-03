@@ -1653,11 +1653,12 @@ table tr:hover { background:var(--surface2); }
 
   <!-- Model Optimization -->
   <div class="card">
-    <div class="card-header"><h3>🧠 Model Optimization</h3><button class="btn btn-primary" onclick="analyzeModelPerformance()" style="font-size:12px;padding:6px 14px;">Analyze Performance</button></div>
+    <div class="card-header"><h3>🧠 Model Optimization</h3><button id="model-analysis-btn" class="btn btn-primary" onclick="analyzeModelPerformance()" style="font-size:12px;padding:6px 14px;">Analyze Performance</button></div>
     <div id="model-analysis-loading" style="display:none;text-align:center;padding:20px;color:var(--text3);">
       <div style="display:inline-block;width:20px;height:20px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
       <p style="margin-top:8px;font-size:13px;">Analyzing recent gameweeks...</p>
     </div>
+    <p id="model-analysis-error" role="alert" style="display:none;color:var(--red);padding:12px;"></p>
     <div id="model-analysis-result" style="display:none;">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;">
         <div class="stat-box">
@@ -2296,20 +2297,55 @@ async function adminQuickDelete(email) {
 
 // ── Model Optimization ──
 let MODEL_ANALYSIS_DATA = null;
+let MODEL_ANALYSIS_BUSY = false;
+
+async function fetchModelAnalysis(method) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch('/api/admin/model-analysis', {
+      method, headers: authHeaders(), cache: 'no-store', signal: controller.signal
+    });
+    const text = await response.text();
+    let data;
+    try { data = JSON.parse(text); }
+    catch (_) { throw new Error(`Analysis service returned HTTP ${response.status}. Please retry shortly.`); }
+    if (!response.ok) throw new Error(data.error || `Analysis request failed (HTTP ${response.status}).`);
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Analysis status request timed out. Please retry shortly.');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 async function analyzeModelPerformance() {
+  if (MODEL_ANALYSIS_BUSY) return;
+  MODEL_ANALYSIS_BUSY = true;
+  MODEL_ANALYSIS_DATA = null;
+  const button = document.getElementById('model-analysis-btn');
+  const errorBox = document.getElementById('model-analysis-error');
+  button.disabled = true;
+  errorBox.style.display = 'none';
   document.getElementById('model-analysis-loading').style.display = 'block';
   document.getElementById('model-analysis-result').style.display = 'none';
+  document.getElementById('model-weight-details').style.display = 'none';
   try {
-    const r = await fetch('/api/admin/model-analysis', {headers: authHeaders()});
-    const d = await r.json();
-    MODEL_ANALYSIS_DATA = d;
-    
-    if (d.error) {
-      alert('Error: ' + d.error);
-      document.getElementById('model-analysis-loading').style.display = 'none';
-      return;
+    let job = await fetchModelAnalysis('POST');
+    const jobId = job.job_id;
+    let polls = 0;
+    while (job.status === 'running') {
+      if (++polls > 120) throw new Error('Analysis is still running. Please check again shortly.');
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      job = await fetchModelAnalysis('GET');
+      if (job.job_id !== jobId) throw new Error('Analysis was interrupted by a server restart or another run. Please try again.');
     }
+    if (job.status !== 'completed' || !job.result) {
+      throw new Error([job.error || 'Analysis could not finish.', job.result?.suggestion].filter(Boolean).join(' '));
+    }
+    const d = job.result;
+    MODEL_ANALYSIS_DATA = d;
     
     // Display metrics (defensive: check multiple possible locations)
     const avg = d.averages || d.analysis?.averages || {};
@@ -2326,7 +2362,7 @@ async function analyzeModelPerformance() {
     if (d.suggestions && d.suggestions.length > 0) {
       let html = '<h4 style="font-size:13px;margin:0 0 8px 0;color:var(--accent);">Recommendations:</h4><ul style="margin:0;padding-left:18px;">';
       d.suggestions.forEach(s => {
-        html += `<li style="margin:6px 0;"><strong>${s.issue}</strong><br><span style="color:var(--text3);">${s.recommendation}</span></li>`;
+        html += `<li style="margin:6px 0;"><strong>${escapeHtml(s.issue)}</strong><br><span style="color:var(--text3);">${escapeHtml(s.recommendation)}</span></li>`;
       });
       html += '</ul>';
       suggestionsDiv.innerHTML = html;
@@ -2337,7 +2373,11 @@ async function analyzeModelPerformance() {
     document.getElementById('model-analysis-loading').style.display = 'none';
     document.getElementById('model-analysis-result').style.display = 'block';
   } catch(e) {
-    alert('Error: ' + e.message);
+    errorBox.textContent = e.message;
+    errorBox.style.display = 'block';
+  } finally {
+    MODEL_ANALYSIS_BUSY = false;
+    button.disabled = false;
     document.getElementById('model-analysis-loading').style.display = 'none';
   }
 }

@@ -6,14 +6,18 @@ import math
 import os
 import re
 from typing import Dict, List, Tuple
+from datetime import datetime, timezone
+from pathlib import Path
 from data_fetcher import fetch_bootstrap, fetch_gameweek_live, get_current_gameweek
 from config import PREDICTION_WEIGHTS
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
 
 def load_predictions(gw: int) -> Dict:
     """Load predictions for a specific GW."""
     try:
-        with open(f'output/gw{gw}_predictions.json', 'r', encoding='utf-8') as f:
+        with (OUTPUT_DIR / f'gw{gw}_predictions.json').open('r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
         print(f"Warning: Could not load GW{gw} predictions: {e}")
@@ -22,35 +26,74 @@ def load_predictions(gw: int) -> Dict:
 
 def find_available_prediction_gws() -> List[int]:
     """Find all GW prediction files available on disk."""
-    if not os.path.isdir('output'):
+    if not OUTPUT_DIR.is_dir():
         return []
     gws = []
-    for fname in os.listdir('output'):
+    for fname in os.listdir(OUTPUT_DIR):
         m = re.match(r'gw(\d+)_predictions\.json$', fname)
         if m:
             gws.append(int(m.group(1)))
     return sorted(gws)
 
 
-def find_analyzable_gw() -> int:
-    """Find the most recent GW that has BOTH predictions on disk AND completed results.
-    
-    FPL event_points contains the LAST FINISHED GW's points.
-    If current_gw is ongoing (33), event_points has GW32 data.
-    We need predictions for GW32 to compare.
-    """
-    current_gw = get_current_gameweek()
-    available = find_available_prediction_gws()
-    
-    # Most recent completed GW = current_gw - 1 (if current is ongoing)
-    # Try current_gw - 1 first, then older ones
-    for candidate in range(current_gw - 1, 0, -1):
-        if candidate in available:
-            return candidate
+def _forecast_exclusion(predictions, event):
+    """Reject reconstructed forecasts and timestamps that cannot establish provenance."""
+    if not predictions or not predictions.get('predictions'):
+        return 'Prediction file is missing, unreadable or empty.'
+    if predictions.get('gameweek') != event['id']:
+        return 'Prediction file gameweek does not match the event.'
+    try:
+        generated = datetime.fromisoformat(predictions['generated_at'].replace('Z', '+00:00'))
+        deadline = datetime.fromisoformat(event['deadline_time'].replace('Z', '+00:00'))
+        # Older releases wrote UTC host timestamps without the offset.
+        generated = generated.replace(tzinfo=timezone.utc) if generated.tzinfo is None else generated
+        deadline = deadline.replace(tzinfo=timezone.utc) if deadline.tzinfo is None else deadline
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return 'Forecast creation time or deadline is unavailable; pre-deadline provenance cannot be verified.'
+    if generated >= deadline:
+        return 'Forecast was generated after the deadline; excluded to prevent hindsight bias.'
     return None
 
 
-def calculate_accuracy_metrics(gw: int) -> Dict:
+def _forecast_archive_prefix(bootstrap):
+    events = sorted(bootstrap.get('events') or [], key=lambda row: row['id'])
+    if not events or not events[0].get('deadline_time'):
+        return None
+    return 'model_forecasts:' + events[0]['deadline_time'][:10]
+
+
+def archive_prediction_forecast(predictions, bootstrap):
+    """Persist a compact pre-deadline snapshot through the existing settings store."""
+    from app_storage import get_setting, set_setting
+    gw = predictions.get('gameweek')
+    event = next((e for e in bootstrap.get('events', []) if e['id'] == gw), None)
+    prefix = _forecast_archive_prefix(bootstrap)
+    if not event or not prefix or _forecast_exclusion(predictions, event):
+        return False
+    compact = {
+        'gameweek': gw, 'generated_at': predictions['generated_at'],
+        'predictions': [{key: player.get(key) for key in ('player_id', 'position_id', 'predicted_points')}
+                        for player in predictions['predictions']],
+        'weights': dict(PREDICTION_WEIGHTS),
+    }
+    if not set_setting(f'{prefix}:gw{gw}', compact):
+        return False
+    index = get_setting(prefix + ':index', []) or []
+    return set_setting(prefix + ':index', sorted(set(index) | {gw}))
+
+
+def find_analyzable_gw() -> int:
+    """Find the latest completed GW with a saved pre-deadline forecast."""
+    bootstrap = fetch_bootstrap()
+    available = set(find_available_prediction_gws())
+    for event in sorted(bootstrap.get('events', []), key=lambda row: row['id'], reverse=True):
+        if event.get('finished') and event['id'] in available:
+            if not _forecast_exclusion(load_predictions(event['id']), event):
+                return event['id']
+    return None
+
+
+def calculate_accuracy_metrics(gw: int, predictions=None) -> Dict:
     """Calculate MAE, RMSE and correlation for a specific GW.
 
     Pulls the actual per-player points for *that* GW from the FPL live
@@ -58,7 +101,7 @@ def calculate_accuracy_metrics(gw: int) -> Dict:
     which only reflects the single most-recently finished GW. This lets
     us score historical GWs and do true rolling evaluation.
     """
-    predictions = load_predictions(gw)
+    predictions = predictions if predictions is not None else load_predictions(gw)
     if not predictions:
         return {"error": f"No predictions found for GW{gw}"}
 
@@ -153,9 +196,9 @@ def analyze_position_accuracy(gw: int) -> Dict:
     if not predictions:
         return {"error": f"No predictions found for GW{gw}"}
     
-    bootstrap = fetch_bootstrap()
-    player_map = {p['id']: p for p in bootstrap['elements']}
-    
+    live = fetch_gameweek_live(gw) or {}
+    player_map = {p['id']: p.get('stats') or {} for p in live.get('elements', []) if p.get('id') is not None}
+
     position_stats = {1: [], 2: [], 3: [], 4: []}  # GKP, DEF, MID, FWD
     
     pred_list = predictions.get('predictions', [])
@@ -169,9 +212,9 @@ def analyze_position_accuracy(gw: int) -> Dict:
         
         if player_id and player_id in player_map and pos in position_stats:
             player_data = player_map[player_id]
-            actual = player_data.get('event_points', 0)
+            actual = player_data.get('total_points', 0) or 0
             
-            if actual > 0 or xpts > 2:
+            if (player_data.get('minutes', 0) or 0) > 0 or xpts > 2:
                 error = abs(actual - xpts)
                 position_stats[pos].append(error)
     
@@ -201,53 +244,48 @@ def analyze_recent_gameweeks(num_gws: int = 3) -> Dict:
     except (TypeError, ValueError):
         num_gws = 3
 
-    current_gw = get_current_gameweek()
-    available = find_available_prediction_gws()
-
-    if not available:
-        return {
-            "error": "No prediction files found on disk",
-            "suggestion": "Run the prediction engine first to generate prediction data.",
-        }
-
-    last_completed = max(0, current_gw - 1)
-    # Candidate GWs: last_completed, last_completed-1, ... (only those with a prediction file)
-    candidate_gws = [gw for gw in range(last_completed, max(0, last_completed - num_gws - 2), -1)
-                     if gw in available]
-    # Keep at most num_gws, ordered most-recent-first for weighting logic.
-    candidate_gws = candidate_gws[:num_gws]
-
-    if not candidate_gws:
-        # Original fallback behaviour if nothing lines up cleanly.
-        gw_to_analyze = find_analyzable_gw()
-        if gw_to_analyze is None:
-            return {
-                "error": f"No analyzable GW found. Current GW is {current_gw}, "
-                         f"available prediction files: {available}",
-                "suggestion": (
-                    f"Generate predictions for GW{current_gw - 1} (the last completed GW) "
-                    f"to enable model analysis."
-                ),
-                "available_prediction_gws": available,
-                "current_gw": current_gw,
-            }
-        candidate_gws = [gw_to_analyze]
-
+    bootstrap = fetch_bootstrap()
+    events = bootstrap.get('events') or []
+    current_gw = next((e['id'] for e in events if e.get('is_current')), None)
+    from app_storage import get_setting
+    prefix = _forecast_archive_prefix(bootstrap)
+    archived = get_setting(prefix + ':index', []) if prefix else []
+    available = sorted(set(find_available_prediction_gws()) | {gw for gw in (archived or []) if isinstance(gw, int)})
+    completed = sorted((event for event in events if event.get('finished')),
+                       key=lambda event: event['id'], reverse=True)
+    skipped = []
     results = []
-    for gw in candidate_gws:
-        metrics = calculate_accuracy_metrics(gw)
+    attempted = 0
+    for event in completed:
+        gw = event['id']
+        if gw not in available:
+            continue
+        if attempted >= num_gws:
+            break
+        forecast = load_predictions(gw)
+        reason = _forecast_exclusion(forecast, event)
+        if reason and gw in (archived or []) and prefix:
+            forecast = get_setting(f'{prefix}:gw{gw}')
+            reason = _forecast_exclusion(forecast, event)
+        if reason:
+            skipped.append({'gw': gw, 'reason': reason})
+            continue
+        attempted += 1
+        metrics = calculate_accuracy_metrics(gw, predictions=forecast)
         if 'error' in metrics:
-            # Skip individual failures but keep going
+            skipped.append({'gw': gw, 'reason': metrics['error']})
             continue
         results.append(metrics)
+        if len(results) >= num_gws:
+            break
 
     if not results:
         return {
-            "error": "All candidate GWs failed to score (live endpoint returned no matchable data).",
-            "gameweeks_attempted": candidate_gws,
-            "available_prediction_gws": available,
-            "current_gw": current_gw,
-            "suggestion": "Make sure prediction files match historical GWs that have finished.",
+            'error': 'No eligible completed-gameweek forecasts are available for analysis.',
+            'suggestion': 'Keep forecasts saved before their gameweek deadline, then analyse them after that gameweek finishes. Missing historical forecasts cannot be recreated fairly after the results are known.',
+            'available_prediction_gws': available,
+            'skipped_gameweeks': skipped,
+            'current_gw': current_gw,
         }
 
     # Linear-decay weights: oldest=1 ... newest=len(results)
@@ -272,6 +310,7 @@ def analyze_recent_gameweeks(num_gws: int = 3) -> Dict:
         'current_gw': current_gw,
         'available_prediction_gws': available,
         'weighting': 'linear_decay (most recent GW weighted highest)',
+        'skipped_gameweeks': skipped,
         'note': (
             f"Rolling analysis over {len(results)} GW(s): "
             f"{[r['gw'] for r in results]}. Averages are linear-decay weighted."
