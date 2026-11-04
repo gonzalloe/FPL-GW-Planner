@@ -943,7 +943,7 @@ def _chat_suggested_lineup(picks, by_id):
     return best
 
 
-def _chat_team_context(team_id, players, target_gw=None):
+def _chat_team_context(team_id, players, target_gw=None, snapshot=None):
     """Read public FPL picks for the imported team; never use simulator edits as the real team."""
     if not team_id:
         return "\nCURRENT SQUAD: No team imported. Ask the user to import their FPL team.\n"
@@ -953,6 +953,8 @@ def _chat_team_context(team_id, players, target_gw=None):
         picks = team.get('picks') or []
         if team.get('error') or len(picks) != 15:
             return "\nCURRENT SQUAD: Imported team unavailable or incomplete. Do not guess or reuse an old squad.\n"
+        if snapshot is not None:
+            snapshot['team'] = team
         by_id = {p.get('player_id'): p for p in players}
         summary = team.get('gw_summary') or {}
         bank = summary.get('bank')
@@ -1010,7 +1012,7 @@ def _chat_team_context(team_id, players, target_gw=None):
         return "\nCURRENT SQUAD: Could not load the imported team. Do not guess or reuse an old squad.\n"
 
 
-def build_fpl_context(user_message="", team_id=None):
+def build_fpl_context(user_message="", team_id=None, snapshot=None):
     """Build rich live FPL context to send to Dify"""
     squad_mode = any(
         x in user_message.lower()
@@ -1025,6 +1027,8 @@ def build_fpl_context(user_message="", team_id=None):
     )
     try:
         players, predictions, cache_status = _cached_predictions()
+        if snapshot is not None:
+            snapshot.update(predictions=players, metadata=predictions or {})
         if not players:
             return "Live FPL prediction data is currently unavailable. Do not invent player data or a squad."
 
@@ -1059,7 +1063,10 @@ def build_fpl_context(user_message="", team_id=None):
                     "Use the current prediction-GW allowance shown below; distinguish entering allowance "
                     "from unconfirmed live remaining, and never invent a hit. If the manager supplies "
                     "their current free-transfer balance, use it over an unconfirmed estimate.\n")
-        context += _chat_team_context(team_id, players, current_gw)
+        team_context = _chat_team_context(team_id, players, current_gw, snapshot=snapshot)
+        if snapshot is not None:
+            snapshot['team_context'] = team_context
+        context += team_context
         context += "\n"
 
         # Top 120 compact — one line each
@@ -1168,15 +1175,33 @@ def build_fpl_context(user_message="", team_id=None):
         traceback.print_exc()
         return f"FPL data temporarily unavailable: {e}"
 
-def ask_dify(user_message, conversation_id=None, team_id=None, dify_user=None):
-    if not DIFY_API_KEY:
-        return {
-            "answer": "Dify API key not configured.",
-            "conversation_id": None,
-            "suggestions": ["Who should I captain?"]
-        }
+def _dify_error_data(response):
+    try:
+        data = response.json()
+        return data if isinstance(data, dict) else {}
+    except (ValueError, requests.exceptions.RequestException):
+        return {}
 
-    fpl_context = build_fpl_context(user_message, team_id)
+
+def _dify_is_busy(response, data):
+    if response.status_code in {429, 500, 502, 503, 504}:
+        return True
+    # Dify wraps some provider 503/429 errors in HTTP 400. Do not retry
+    # ordinary validation/configuration errors just because they are 400s.
+    if response.status_code != 400 or data.get('code') != 'completion_request_error':
+        return False
+    message = str(data.get('message', '')).lower()
+    return bool(re.search(r'\b(?:429|502|503|504)\b', message) or any(
+        marker in message for marker in ('high demand', 'temporarily unavailable',
+                                         'overloaded', 'resource_exhausted', 'rate limit')))
+
+
+def ask_dify(user_message, conversation_id=None, team_id=None, dify_user=None):
+    # Include context preparation in the request budget, rather than allowing
+    # each retry its own 90-second wait.
+    deadline = time.monotonic() + 90
+    snapshot = {}
+    fpl_context = build_fpl_context(user_message, team_id, snapshot=snapshot)
     headers = {
         "Authorization": f"Bearer {DIFY_API_KEY}",
         "Content-Type": "application/json"
@@ -1197,38 +1222,67 @@ def ask_dify(user_message, conversation_id=None, team_id=None, dify_user=None):
     if conversation_id:
         payload["conversation_id"] = conversation_id
 
-    try:
-        response = requests.post(
-            f"{DIFY_API_URL}/chat-messages",
-            headers=headers,
-            json=payload,
-            timeout=90
-        )
-        # Conversation expired/deleted in Dify
-        if response.status_code == 404 and conversation_id:
-            print("[DIFY] Old conversation expired. Starting new one.")
-            payload.pop("conversation_id", None)
+    def failure(code, retryable):
+        # Keep diagnostics on the server while answering from the exact data
+        # snapshot already prepared for this message. No extra API fetches.
+        print(f'[DIFY] Using saved-data response: {code}')
+        try:
+            from chat_fallback import local_chat_response
+            result = local_chat_response(user_message, snapshot)
+        except Exception:
+            app.logger.exception('Saved-data chat response failed')
+            result = {'answer': 'I cannot answer that from the available projections. You can check your squad, captain options and transfer plans in My Team & Planner.',
+                      'suggestions': [], 'source': 'local_data'}
+        return dict(result, conversation_id=payload.get('conversation_id'),
+                    error_code=code, retryable=retryable)
+
+    if not DIFY_API_KEY:
+        return failure('configuration_error', False)
+
+    for attempt in range(3):
+        remaining = deadline - time.monotonic()
+        if remaining <= 5:
+            return failure('timeout', True)
+        try:
             response = requests.post(
-                f"{DIFY_API_URL}/chat-messages",
-                headers=headers,
-                json=payload,
-                timeout=90
+                f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload,
+                timeout=(5, min(85, remaining - 5)),
             )
-        response.raise_for_status()
-        data = response.json()
-    
-        return {
-            "answer": data.get("answer", "No response from AI."),
-            "conversation_id": data.get("conversation_id"),
-            "suggestions": ["Who should I captain?", "Best transfer this GW?", "Should I use my chip?"]
-        }
-    except requests.exceptions.Timeout:
-        return {"answer": "AI response timed out. Please try again.", "conversation_id": conversation_id, "suggestions": []}
-    except requests.exceptions.RequestException as e:
-        # check bug
-        error_detail = e.response.text if e.response is not None else str(e)
-        print(f"DIFY ERROR DETAIL: {error_detail}")
-        return {"answer": f"AI service error: {str(e)}", "conversation_id": conversation_id, "suggestions": []}
+            data = _dify_error_data(response)
+            if response.status_code >= 400:
+                # Log classification, not raw provider errors or request content.
+                print(f'[DIFY] Attempt {attempt + 1}/3 returned HTTP {response.status_code}')
+                if response.status_code == 404 and payload.get('conversation_id') and attempt < 2:
+                    payload.pop('conversation_id', None)
+                    continue
+                if _dify_is_busy(response, data):
+                    delay = 2 ** attempt
+                    try:
+                        retry_after = float(response.headers.get('Retry-After', 0))
+                        if 0 <= retry_after <= 5:
+                            delay = max(delay, retry_after)
+                    except (TypeError, ValueError):
+                        pass
+                    if attempt < 2 and deadline - time.monotonic() > delay + 5:
+                        time.sleep(delay)
+                        continue
+                    return failure('model_busy', True)
+                if response.status_code in {401, 403}:
+                    return failure('configuration_error', False)
+                return failure('request_error', False)
+            if not isinstance(data.get('answer'), str) or not data['answer'].strip():
+                return failure('invalid_response', True)
+            return {
+                'answer': data['answer'],
+                'conversation_id': data.get('conversation_id') or payload.get('conversation_id'),
+                'suggestions': ['Who should I captain?', 'Best transfer this GW?', 'Should I use my chip?'],
+            }
+        except requests.exceptions.Timeout:
+            # An interrupted generation may still have completed upstream. Avoid
+            # blindly creating another billable completion after a read timeout.
+            return failure('timeout', True)
+        except requests.exceptions.RequestException:
+            return failure('connection_error', True)
 
 
 # ── Static files (explicit, no Flask static_folder magic) ──

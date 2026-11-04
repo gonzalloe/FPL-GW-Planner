@@ -33,3 +33,24 @@ remain. Consider a legal XI and the bench: an outfield substitute who plays can
 replace a non-playing starter in bench priority order when the formation stays
 legal; a goalkeeper can only replace a goalkeeper. These substitutions are
 conditional until matches have been played.
+
+Dify provider errors are classified separately from invalid requests. The backend
+retries explicit temporary overload/rate-limit responses, including HTTP 400
+completion_request_error responses wrapping provider 503/429 failures, up to
+three attempts with short backoff and a shared request budget. Every retry keeps
+the same context and user identity. Expired conversations may be reset once
+within that attempt limit. Ordinary validation/configuration failures and
+ambiguous read timeouts are not automatically resubmitted. Continued overload
+uses a deterministic saved-data response. Studio instructions do not need
+to change for this behavior. Provider availability remains outside the app's
+control.
+
+After a provider failure, the response uses the same structured snapshot already
+prepared for that question, with no additional network calls. Captain snapshots
+use imported players when available; named-player and position queries show
+their saved projections. Transfer snapshots expose the imported allowance and
+legal XI, and direct managers to the GW Planner for checked transfer plans. The
+response is labelled as using saved data, and missing projections or exact-match
+score forecasts are explicitly unavailable. This fallback does not receive the
+Dify conversation history, so it asks users to repeat earlier constraints.
+Provider diagnostics remain in server logs and response metadata.

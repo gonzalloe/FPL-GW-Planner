@@ -1,7 +1,7 @@
 import copy
 import os
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 with patch.dict(os.environ, {'SUPABASE_URL': '', 'SUPABASE_KEY': ''}):
     import server
@@ -119,6 +119,157 @@ class ChatContextTests(unittest.TestCase):
                 self.client.post('/api/chat', json={'question':'hi', 'team_id':123, 'chat_user_id':'a'*32})
         self.assertEqual(ask.call_args_list[0].args[2], 123)
         self.assertEqual(ask.call_args_list[0].args[3], ask.call_args_list[1].args[3])
+
+
+class DifyRetryTests(unittest.TestCase):
+    def setUp(self):
+        for manager in (patch.object(server, 'DIFY_API_KEY', 'test-key'),
+                        patch.object(server, 'build_fpl_context', return_value='current squad'),
+                        patch.object(server.time, 'sleep')):
+            manager.start(); self.addCleanup(manager.stop)
+
+    def response(self, status, data):
+        response = server.requests.Response()
+        response.status_code = status
+        response._content = server.json.dumps(data).encode()
+        return response
+
+    def busy(self):
+        return self.response(400, {'code': 'completion_request_error',
+            'message': "[models] Connection Error, 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand.', 'status': 'UNAVAILABLE'}}"})
+
+    def test_reported_wrapped_503_retries_first_question_and_preserves_context(self):
+        payloads = []
+        responses = [self.busy(), self.response(200, {'answer': 'Advice', 'conversation_id': 'new-chat'})]
+        def post(*args, **kwargs):
+            payloads.append(copy.deepcopy(kwargs['json']))
+            return responses.pop(0)
+        with patch.object(server.requests, 'post', side_effect=post) as post, patch.object(server, 'build_fpl_context', return_value='full current squad') as context:
+            result = server.ask_dify('captain?', None, 123, 'same-user')
+        self.assertEqual(result['answer'], 'Advice')
+        self.assertEqual(result['conversation_id'], 'new-chat')
+        self.assertEqual(post.call_count, 2)
+        context.assert_called_once_with('captain?', 123, snapshot=ANY)
+        self.assertEqual(payloads[0], payloads[1])
+        self.assertEqual(payloads[1]['inputs']['fpl_data'], 'full current squad')
+        self.assertEqual(payloads[1]['user'], 'same-user')
+
+    def test_provider_remains_busy_attempts_are_bounded_and_message_is_friendly(self):
+        with patch.object(server.requests, 'post', side_effect=[self.busy() for _ in range(3)]) as post:
+            result = server.ask_dify('question', 'existing-chat', dify_user='user')
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual(result['error_code'], 'model_busy')
+        self.assertTrue(result['retryable'])
+        self.assertEqual(result['conversation_id'], 'existing-chat')
+        self.assertNotIn('400', result['answer'])
+        self.assertNotIn('https://', result['answer'])
+        self.assertEqual([call.args[0] for call in server.time.sleep.call_args_list], [1, 2])
+
+    def test_validation_and_authentication_errors_are_not_retried(self):
+        for status, body in [(400, {'code': 'invalid_param', 'message': 'missing fpl_data'}),
+                             (400, {'code': 'completion_request_error', 'message': 'invalid model configuration'}),
+                             (401, {'code': 'unauthorized'})]:
+            with self.subTest(status=status, body=body), patch.object(server.requests, 'post', return_value=self.response(status, body)) as post:
+                result = server.ask_dify('question', dify_user='user')
+                self.assertEqual(post.call_count, 1)
+                self.assertFalse(result['retryable'])
+
+    def test_http_503_and_rate_limit_responses_can_recover(self):
+        for status in (429, 503):
+            busy = self.response(status, {'message': 'busy'})
+            busy.headers['Retry-After'] = '2'
+            with self.subTest(status=status), patch.object(server.requests, 'post', side_effect=[busy, self.response(200, {'answer': 'OK'})]) as post:
+                result = server.ask_dify('question', dify_user='user')
+                self.assertEqual(result['answer'], 'OK')
+                self.assertEqual(post.call_count, 2)
+
+    def test_expired_conversation_then_busy_recovers_with_same_identity(self):
+        payloads = []
+        responses = [self.response(404, {}), self.busy(), self.response(200, {'answer': 'OK', 'conversation_id': 'fresh'})]
+        def post(*args, **kwargs):
+            payloads.append(copy.deepcopy(kwargs['json']))
+            return responses.pop(0)
+        with patch.object(server.requests, 'post', side_effect=post):
+            result = server.ask_dify('question', 'expired', dify_user='same-user')
+        self.assertEqual(result['conversation_id'], 'fresh')
+        self.assertEqual(payloads[0]['conversation_id'], 'expired')
+        self.assertNotIn('conversation_id', payloads[1])
+        self.assertEqual(payloads[1], payloads[2])
+
+    def test_ambiguous_read_timeout_is_not_automatically_duplicated(self):
+        with patch.object(server.requests, 'post', side_effect=server.requests.exceptions.ReadTimeout) as post:
+            result = server.ask_dify('question', dify_user='user')
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(result['error_code'], 'timeout')
+
+    def test_busy_retry_respects_shared_time_budget(self):
+        clock = [0.0]
+        def post(*args, **kwargs):
+            clock[0] += 86
+            return self.busy()
+        with patch.object(server.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(server.requests, 'post', side_effect=post) as request:
+            result = server.ask_dify('question', dify_user='user')
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(result['error_code'], 'model_busy')
+        server.time.sleep.assert_not_called()
+
+
+class LocalChatFallbackTests(unittest.TestCase):
+    def setUp(self):
+        self.players, self.team = sample()
+        self.snapshot = {'predictions': self.players, 'metadata': {'gameweek': 10}, 'team': self.team,
+                         'team_context': 'Team ID: 123; free transfers: 1\nIf 1 free transfer(s) remain: one transfer costs 0 points'}
+
+    def test_captain_fallback_uses_owned_players(self):
+        from chat_fallback import local_chat_response
+        result = local_chat_response('Who should I captain?', self.snapshot)
+        self.assertEqual(result['source'], 'local_data')
+        self.assertIn('**Player 15**', result['answer'])
+        self.assertNotIn('Player 140', result['answer'])
+        self.assertIn('saved GW10', result['answer'])
+
+    def test_no_prediction_data_is_explicit_without_service_error(self):
+        from chat_fallback import local_chat_response
+        result = local_chat_response('captain?', {})
+        self.assertIn('projections are not available', result['answer'])
+        self.assertNotIn('AI service', result['answer'])
+        self.assertEqual(result['source'], 'local_data')
+
+    def test_named_player_data_and_unknown_match_score_are_honest(self):
+        from chat_fallback import local_chat_response
+        result = local_chat_response('Player 10 score prediction', self.snapshot)
+        self.assertIn('| Player 10 | ABC | MID | £5.0m | 1.0 |', result['answer'])
+        self.assertIn('exact match-score forecast is not available', result['answer'])
+
+    def test_provider_failure_delivers_data_answer_without_refetching(self):
+        def build(question, team_id, snapshot):
+            snapshot.update(self.snapshot)
+            return 'current context'
+        for failure in ('busy', 'timeout'):
+            with self.subTest(failure=failure), patch.object(server, 'DIFY_API_KEY', 'key'), patch.object(server, 'build_fpl_context', side_effect=build) as context, patch.object(server.time, 'sleep'):
+                if failure == 'busy':
+                    response = server.requests.Response(); response.status_code = 503
+                    response._content = b'{"message":"busy"}'
+                    kwargs = {'return_value': response}
+                else:
+                    kwargs = {'side_effect': server.requests.exceptions.ReadTimeout}
+                with patch.object(server.requests, 'post', **kwargs) as post:
+                    result = server.ask_dify('Who should I captain?', 'chat', 123, 'user')
+                self.assertEqual(result['source'], 'local_data')
+                self.assertEqual(result['conversation_id'], 'chat')
+                self.assertIn('**Player 15**', result['answer'])
+                self.assertNotIn('AI service', result['answer'])
+                self.assertEqual(context.call_count, 1)
+                self.assertEqual(post.call_count, 3 if failure == 'busy' else 1)
+
+    def test_snapshot_captures_predictions_and_imported_team_once(self):
+        snapshot = {}
+        with patch.object(server, '_cached_predictions', return_value=(self.players, {'gameweek': 10}, 'ready')), patch('my_team.fetch_my_team', return_value=copy.deepcopy(self.team)) as fetch:
+            server.build_fpl_context('my team', 123, snapshot=snapshot)
+        self.assertEqual(snapshot['team']['picks'], self.team['picks'])
+        self.assertEqual(len(snapshot['predictions']), len(self.players))
+        self.assertIn('CURRENT IMPORTED FPL SQUAD', snapshot['team_context'])
+        fetch.assert_called_once_with(123)
 
 
 if __name__ == '__main__': unittest.main()
