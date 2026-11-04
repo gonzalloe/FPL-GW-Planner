@@ -4963,6 +4963,8 @@ function renderTransfersTab() {
       const progress = Number(p.price_change_percent || 0);
       const prediction = Number(p.price_change_prediction || 0);
       const confidence = getPriceChangeConfidence(p.price_change_likelihood);
+      const owned = p.selected_by_percent != null && Number.isFinite(Number(p.selected_by_percent))
+        ? `${Number(p.selected_by_percent).toFixed(1)}%` : '—';
 
       return `<tr>
         <td style="text-align:center;color:var(--text3);">${i}</td>
@@ -4974,6 +4976,7 @@ function renderTransfersTab() {
         <td><strong>${p.name}</strong></td>
         <td>${p.team}</td>
         <td>£${p.price}m</td>
+        <td>${owned}</td>
         <td style="text-align:right;">${progress.toFixed(1)}%</td>
         <td style="text-align:right;color:${color};font-weight:800;">
           ${arrow} ${Math.abs(prediction).toFixed(1)}%
@@ -5001,6 +5004,7 @@ function renderTransfersTab() {
       <th>Player</th>
       <th>Team</th>
       <th>Price</th>
+      <th>Owned</th>
       <th style="text-align:right;">Progress</th>
       <th style="text-align:right;">Prediction</th>
       <th style="text-align:right;">Confidence</th>
@@ -5082,6 +5086,7 @@ function renderTransfersTab() {
           <th>Player</th>
           <th>Team</th>
           <th>Price</th>
+          <th>Owned</th>
           <th style="text-align:right;">Progress</th>
           <th style="text-align:right;">Prediction</th>
           <th style="text-align:right;">Confidence</th>
