@@ -886,8 +886,11 @@ def _chat_fixtures(player):
     fixtures = player.get('fixtures') or []
     if not fixtures:
         return 'unknown'
+    from chat_fallback import win_probability_percent
     return ', '.join(str(f.get('opponent', '?')) + ' ' + str(f.get('venue', '?'))
-                     + ' FDR ' + str(f.get('fdr', '?')) for f in fixtures if isinstance(f, dict)) or 'unknown'
+                     + ' FDR ' + str(f.get('fdr', '?'))
+                     + ' team_win_probability=' + win_probability_percent(f.get('win_probability'))
+                     for f in fixtures if isinstance(f, dict)) or 'unknown'
 
 
 def _chat_availability(player):
@@ -1063,6 +1066,8 @@ def build_fpl_context(user_message="", team_id=None, snapshot=None):
                     "Use the current prediction-GW allowance shown below; distinguish entering allowance "
                     "from unconfirmed live remaining, and never invent a hit. If the manager supplies "
                     "their current free-transfer balance, use it over an unconfirmed estimate.\n")
+        from chat_fallback import match_probability_context
+        context += match_probability_context(players)
         team_context = _chat_team_context(team_id, players, current_gw, snapshot=snapshot)
         if snapshot is not None:
             snapshot['team_context'] = team_context
@@ -1202,6 +1207,12 @@ def ask_dify(user_message, conversation_id=None, team_id=None, dify_user=None):
     deadline = time.monotonic() + 90
     snapshot = {}
     fpl_context = build_fpl_context(user_message, team_id, snapshot=snapshot)
+    # Direct probability lookups use the exact cached fixture values; they do
+    # not require a model call to reinterpret an already-computed percentage.
+    from chat_fallback import match_probability_response
+    match_answer = match_probability_response(user_message, snapshot)
+    if match_answer:
+        return dict(match_answer, conversation_id=conversation_id)
     headers = {
         "Authorization": f"Bearer {DIFY_API_KEY}",
         "Content-Type": "application/json"

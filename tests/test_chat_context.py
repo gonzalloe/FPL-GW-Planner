@@ -272,4 +272,57 @@ class LocalChatFallbackTests(unittest.TestCase):
         fetch.assert_called_once_with(123)
 
 
+class MatchProbabilityChatTests(unittest.TestCase):
+    def setUp(self):
+        self.players = [
+            {'player_id': 1, 'name': 'Mbeumo', 'team': 'MUN', 'team_name': 'Manchester United',
+             'position': 'MID', 'predicted_points': 4.51, 'price': 7.9,
+             'team_season_wr': 0.11, 'starter_quality': {'p_start': 0.98},
+             'fixtures': [{'opponent': 'AVL', 'venue': 'H', 'win_probability': 0.29, 'fdr': 3},
+                          {'opponent': 'CHE', 'venue': 'A', 'win_probability': 0.2, 'fdr': 4}]},
+            {'player_id': 2, 'name': 'Bruno', 'team': 'MUN', 'position': 'MID', 'price': 10,
+             'predicted_points': 3, 'fixtures': [{'opponent': 'AVL', 'venue': 'H', 'win_probability': 0.29}]},
+            {'player_id': 3, 'name': 'Villa Player', 'team': 'AVL', 'team_name': 'Aston Villa',
+             'position': 'MID', 'price': 5, 'predicted_points': 3,
+             'fixtures': [{'opponent': 'MUN', 'venue': 'A', 'win_probability': 0.43}]},
+        ]
+        self.snapshot = {'predictions': self.players, 'metadata': {'gameweek': 10}}
+
+    def test_exact_question_uses_cached_fixture_values_without_model_call(self):
+        question = 'check the probability of win between the match of Manchester united and aston villa'
+        with patch.object(server, '_cached_predictions', return_value=(self.players, {'gameweek': 10}, 'ready')), patch.object(server.requests, 'post') as post:
+            result = server.ask_dify(question, conversation_id='chat')
+        post.assert_not_called()
+        self.assertEqual(result['source'], 'fixture_model')
+        self.assertEqual(result['conversation_id'], 'chat')
+        self.assertIn('| MUN | AVL | H | 29.0% |', result['answer'])
+        self.assertIn('| AVL | MUN | A | 43.0% |', result['answer'])
+        self.assertNotIn('71.0%', result['answer'])
+        self.assertNotIn('| MUN | CHE', result['answer'])
+        self.assertEqual(result['answer'].count('| MUN | AVL'), 1)
+
+    def test_single_team_question_keeps_double_gameweek_fixtures_separate(self):
+        from chat_fallback import local_chat_response
+        result = local_chat_response('Manchester United win probability?', self.snapshot)
+        self.assertIn('| MUN | AVL | H | 29.0% |', result['answer'])
+        self.assertIn('| MUN | CHE | A | 20.0% |', result['answer'])
+
+    def test_context_contains_match_probabilities_even_outside_top_120(self):
+        others = [{'player_id': i, 'name': str(i), 'predicted_points': 10} for i in range(4, 130)]
+        with patch.object(server, '_cached_predictions', return_value=(others + self.players, {'gameweek': 10}, 'ready')):
+            context = server.build_fpl_context('who wins MUN vs AVL?')
+        block = context.split('PLAYERS (name|')[0]
+        self.assertIn('MUN vs AVL (H): team win probability 29.0%', block)
+        self.assertIn('AVL vs MUN (A): team win probability 43.0%', block)
+
+    def test_missing_zero_and_invalid_probabilities_are_distinct(self):
+        from chat_fallback import win_probability_percent, match_probability_response
+        self.assertEqual(win_probability_percent(0), '0.0%')
+        self.assertEqual(win_probability_percent(0.68), '68.0%')
+        for value in (None, '🔒', float('nan'), 29, -0.1):
+            self.assertEqual(win_probability_percent(value), 'unavailable')
+        result = match_probability_response('Liverpool vs Arsenal win chance?', self.snapshot)
+        self.assertIn('No matching fixture', result['answer'])
+
+
 if __name__ == '__main__': unittest.main()

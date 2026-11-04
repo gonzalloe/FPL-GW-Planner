@@ -3,6 +3,7 @@
 This path never calls a provider or guesses missing squad/forecast information.
 """
 import re
+import math
 import unicodedata
 
 
@@ -31,7 +32,91 @@ def _table(players):
     return '\n'.join(lines)
 
 
+def win_probability_percent(value):
+    """Cached fixture probabilities are fractions; missing values stay unknown."""
+    if value is None or isinstance(value, bool):
+        return 'unavailable'
+    try:
+        probability = float(value)
+    except (TypeError, ValueError):
+        return 'unavailable'
+    if not math.isfinite(probability) or not 0 <= probability <= 1:
+        return 'unavailable'
+    return f'{probability * 100:.1f}%'
+
+
+def fixture_win_probabilities(players):
+    rows = {}
+    for player in players:
+        team = player.get('team')
+        if not team:
+            continue
+        for fixture in player.get('fixtures') or []:
+            if not isinstance(fixture, dict) or not fixture.get('opponent'):
+                continue
+            venue = fixture.get('venue') or ('H' if fixture.get('is_home') is True else 'A' if fixture.get('is_home') is False else '?')
+            key = (team, fixture['opponent'], venue)
+            probability = win_probability_percent(fixture.get('win_probability'))
+            if key not in rows or rows[key]['win_probability'] == 'unavailable':
+                rows[key] = {'team': team, 'opponent': fixture['opponent'], 'venue': venue,
+                             'win_probability': probability}
+    return list(rows.values())
+
+
+def match_probability_context(players):
+    rows = fixture_win_probabilities(players)
+    if not rows:
+        return ''
+    lines = ['MATCH WIN PROBABILITIES (same fixture values as Players table):',
+             'These are model estimates of the named team winning that fixture. '
+             'They differ from season win rate and player starting probability. '
+             'A draw is possible: the opponent win probability is not 100% minus this value. '
+             'Keep each double-gameweek fixture separate. Unavailable means missing, not zero.']
+    lines.extend(f"{row['team']} vs {row['opponent']} ({row['venue']}): team win probability {row['win_probability']}" for row in rows)
+    return '\n'.join(lines) + '\n'
+
+
+def match_probability_response(question, snapshot):
+    query = _normalise(question)
+    if not (re.search(r'\b(win|winning)\b', query) and re.search(r'\b(probability|probabilities|prob|chance|chances|odds|likelihood)\b', query)):
+        return None
+    from ai_chat import FPLChatEngine
+    players = snapshot.get('predictions') or []
+    aliases = dict(FPLChatEngine.TEAM_ALIASES)
+    for player in players:
+        code = str(player.get('team') or '').lower()
+        if code:
+            aliases[code] = code
+            if player.get('team_name'):
+                aliases[_normalise(player['team_name'])] = code
+    # Prefer full names over overlapping aliases such as "United".
+    matches = [(m.start(), m.end(), code) for alias, code in aliases.items()
+               for m in re.finditer(r'\b' + re.escape(_normalise(alias)) + r'\b', query)]
+    spans, teams = [], set()
+    for start, end, code in sorted(matches, key=lambda item: item[1] - item[0], reverse=True):
+        if not any(start < right and end > left for left, right in spans):
+            spans.append((start, end)); teams.add(code)
+    if not teams:
+        return None
+    rows = [row for row in fixture_win_probabilities(players)
+            if row['team'].lower() in teams and
+            (len(teams) == 1 or row['opponent'].lower() in teams)]
+    gw = (snapshot.get('metadata') or {}).get('gameweek', 'unknown')
+    if not rows:
+        answer = f'No matching fixture win probabilities are available for the named teams in the saved GW{gw} projections.'
+    else:
+        lines = [f'Model win probabilities from the saved GW{gw} projections, using the same values as the Players table:',
+                 '| Team | Opponent | Venue | Win probability |', '|---|---|---|---|']
+        lines.extend('| ' + ' | '.join(_cell(row[key]) for key in ('team', 'opponent', 'venue', 'win_probability')) + ' |' for row in rows)
+        lines.append('H = home; A = away. These are fixture-specific model estimates. A draw is possible, so the opposing win probability cannot be inferred by subtracting one team’s probability from 100%.')
+        answer = '\n\n'.join([lines[0], '\n'.join(lines[1:-1]), lines[-1]])
+    return {'answer': answer, 'suggestions': ['Who should I captain?'], 'source': 'fixture_model'}
+
+
 def local_chat_response(question, snapshot):
+    match_answer = match_probability_response(question, snapshot)
+    if match_answer:
+        return match_answer
     players = snapshot.get('predictions') or []
     metadata = snapshot.get('metadata') or {}
     if not players:

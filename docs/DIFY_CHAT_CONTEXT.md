@@ -54,3 +54,12 @@ response is labelled as using saved data, and missing projections or exact-match
 score forecasts are explicitly unavailable. This fallback does not receive the
 Dify conversation history, so it asks users to repeat earlier constraints.
 Provider diagnostics remain in server logs and response metadata.
+
+Match win probabilities are included in the chat context from each cached
+fixture's win_probability field, the same source as the Players table. These
+fractions are converted to percentages once, deduplicated per team/opponent/venue,
+and kept separate for double gameweeks. They represent a team winning a fixture,
+not its season win rate or a player's starting probability. A draw is possible;
+the opponent's win chance must not be calculated as 100% minus the team's chance.
+Direct team win-probability questions return the cached values without a model
+call. Missing or unmatched fixture values remain unavailable.
