@@ -650,8 +650,6 @@ class PredictionEngine:
         if availability["status"] == "unavailable":
             return self._empty_prediction(p, availability)
         all_fixtures = get_player_fixtures(p["team"], target_gw, self.fixtures)
-        if not all_fixtures:
-            return self._empty_prediction(p, {"status": "blank_gw"})
         num_fixtures = len(all_fixtures)
         is_dgw = num_fixtures >= 2
 
@@ -673,6 +671,14 @@ class PredictionEngine:
                 availability,
             ),
         }
+
+        neutral_xpts = self._neutral_fixture_xpts(p, profile)
+        if not all_fixtures:
+            result = self._empty_prediction(p, {"status": "blank_gw"})
+            result.update(neutral_xpts=neutral_xpts,
+                          neutral_starter_quality=dict(p["starter_quality"]),
+                          neutral_availability=dict(availability))
+            return result
 
         # ── Per-fixture xPts ──
         total_raw = 0.0
@@ -767,6 +773,7 @@ class PredictionEngine:
             "selected_by_percent": p.get("selected_by_percent", "0"),
             "predicted_points": round(total_adj, 2),
             "raw_xpts": round(total_raw, 2),
+            "neutral_xpts": neutral_xpts,
             "fixtures": fixture_details,
             "fixture": fixture_details[0] if fixture_details else {},
             "num_fixtures": num_fixtures,
@@ -791,6 +798,17 @@ class PredictionEngine:
             "team_momentum": round(calc_team_momentum(self.team_stats, team_id), 3),
             "team_injury_penalty": getattr(self, '_team_injury_penalty', {}).get(team_id, 1.0),
         }
+
+    def _neutral_fixture_xpts(self, player, profile):
+        """One reference fixture, independent of the baseline GW's opponents/count."""
+        fixture = {"fdr": 3, "is_home": False, "opponent_id": 0}
+        context = {"team_xg": 1.35, "team_xgc": 1.35, "h2h": {}}
+        ev = self._fixture_ev(player, fixture, context, profile["xmins"], profile["p_plays_60"])
+        factors = self._calc_all_factors(player, fixture, context)
+        factors.update(home_away=0.0, h2h_factor=0.0)
+        modifier = sum(factors.get(key, 0) * weight for key, weight in PREDICTION_WEIGHTS.items())
+        modifier = max(-0.35, min(modifier, 0.45))
+        return round(min(22.0, max(0.0, ev["appearance"] + ev["other"] * (1 + modifier))), 4)
 
     def predict_all(self, target_gw: int | None = None,
                     min_chance: int = 0) -> list[dict]:
@@ -2463,7 +2481,7 @@ class PredictionEngine:
             "position_id": p.get("position_id", 0),
             "price": p.get("now_cost", 0) / 10,
             "selected_by_percent": p.get("selected_by_percent", "0"),
-            "predicted_points": 0.0, "raw_xpts": 0.0,
+            "predicted_points": 0.0, "raw_xpts": 0.0, "neutral_xpts": 0.0,
             "fixtures": [], "fixture": {},
             "num_fixtures": 0, "is_dgw": False,
             "availability": availability,

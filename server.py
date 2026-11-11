@@ -80,6 +80,16 @@ _prediction_status = {"running": False, "started_at": None, "finished_at": None,
 
 app = Flask(__name__, static_folder=None)  # Disable Flask's default static handling
 
+from auth import AuthStorageError
+from chip_planner import ProjectionDataUnavailable
+
+
+@app.errorhandler(AuthStorageError)
+def account_storage_unavailable(error):
+    app.logger.warning("Account storage operation failed: %s", type(error).__name__)
+    return jsonify({"error": "Account storage is temporarily unavailable. Please retry."}), 503
+
+
 # Security: cap incoming request body size to prevent memory-exhaustion DoS
 # via giant JSON payloads on any POST endpoint. 256 KB is plenty (the largest
 # legitimate payload we accept is the weight-adjustment dict, ~1 KB).
@@ -173,7 +183,8 @@ def cached_response(ttl_seconds: int = 60, key_prefix: str = ""):
         @wraps(f)
         def wrapper(*args, **kwargs):
             # Build cache key from endpoint + query string
-            cache_key = f"{key_prefix or f.__name__}:{request.full_path}"
+            identity = getattr(request, "_plan_user", {}).get("email", "public")
+            cache_key = f"{key_prefix or f.__name__}:{identity}:{request.full_path}"
             now = time.time()
             with _cache_lock:
                 entry = _response_cache.get(cache_key)
@@ -788,7 +799,6 @@ def _cached_predictions():
 
 # Endpoints safe to cache privately in the browser for a short time.
 _BROWSER_CACHE_API = {
-    "/api/predictions": 60,
     "/api/fixture-ticker": 120,
     "/api/fixture-rankings": 120,
     "/api/top-transfers": 300,
@@ -811,7 +821,7 @@ def _maybe_gzip(resp):
         resp.set_data(gz)
         resp.headers["Content-Encoding"] = "gzip"
         resp.headers["Content-Length"] = str(len(gz))
-        resp.headers["Vary"] = "Accept-Encoding"
+        resp.vary.add("Accept-Encoding")
     except Exception:
         pass
     return resp
@@ -823,6 +833,7 @@ def after_request(resp):
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Analysis-Token"
     path = request.path
     if path.startswith("/api/"):
+        resp.vary.add("Authorization")
         max_age = _BROWSER_CACHE_API.get(path)
         if max_age and request.method == "GET":
             resp.headers["Cache-Control"] = f"private, max-age={max_age}, stale-while-revalidate=120"
@@ -1304,13 +1315,24 @@ def index():
 
 @app.route("/<path:filename>")
 def serve_static(filename):
-    # Security: block access to sensitive files/directories
-    blocked = ("data/", "cache/", ".git", "__pycache__", ".env", "sessions.json", "users.json")
-    if any(filename.startswith(b) or filename.endswith(b) for b in blocked):
-        return jsonify({"error": "Not found"}), 404
-    if filename.endswith(".py") or filename.endswith(".pyc"):
-        return jsonify({"error": "Not found"}), 404
-    return send_from_directory(str(BASE_DIR), filename)
+    # The application is a single self-contained HTML file. Never serve the
+    # repository root, even after path normalization or through a symlink.
+    if filename == "dashboard.html":
+        return send_from_directory(str(BASE_DIR), "dashboard.html")
+    return jsonify({"error": "Not found"}), 404
+
+
+def require_premium(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        user = _get_auth_user()
+        if not user:
+            return jsonify({"error": "Sign in to use this feature."}), 401
+        if user.get("plan") not in ("premium", "admin"):
+            return jsonify({"error": "This feature requires Premium.", "upgrade_required": True}), 403
+        request._plan_user = user
+        return f(*args, **kwargs)
+    return wrapper
 
 
 # ── Auth ──
@@ -1495,7 +1517,7 @@ _CHIP_NAME_MAP = {"bboost": "BB", "3xc": "TC", "freehit": "FH", "wildcard": "WC"
 def _user_used_chips_in_current_half():
     """Returns set of chip codes the user has used in the current half, or empty set."""
     try:
-        settings = _load_settings()
+        settings = _get_auth_user() or {}
         team_id = settings.get("team_id")
         if not team_id: return set()
         from my_team import fetch_my_team
@@ -1563,66 +1585,14 @@ def api_predictions():
     is_premium = user and user.get("plan") in ("premium", "admin")
 
     if not is_premium:
-        import random, copy
-        # CRITICAL: deep-copy the cached data/preds before locking fields.
-        # Without this, mutating predicted_points/captain/etc. poisons the
-        # shared process-wide prediction cache, and the next request (even
-        # from an admin/premium user) will receive the locked "🔒" values.
-        data = copy.deepcopy(data)
-        preds = copy.deepcopy(preds)
-        data["user_plan"] = "free" if user else "guest"
-        # Shuffle predictions for free users so the sort order doesn't reveal xPts ranking.
-        # (xPts is locked with 🔒 — leaving them sorted would leak the ranking)
-        random.shuffle(preds)
-        data["predictions"] = preds
-        for p in preds:
-            # Lock premium numeric fields
-            for k in ["predicted_points", "raw_xpts", "confidence",
-                      "team_last5_wr", "team_season_wr", "team_momentum", "team_injury_penalty"]:
-                p[k] = "🔒"
-            # Lock starter tier but keep the key so frontend can render the lock
-            if isinstance(p.get("starter_quality"), dict):
-                p["starter_quality"] = {"tier": "🔒"}
-            # Keep fixtures but lock win_probability within
-            for f in (p.get("fixtures") or []):
-                if isinstance(f, dict):
-                    f["win_probability"] = "🔒"
-                    f["xp_single"] = "🔒"
-                    f["xp_adjusted"] = "🔒"
-            # Drop raw factors (advanced data)
-            p.pop("factors", None)
-        # Squad data — keep structure but lock xPts & confidence, keep fixtures
-        sq = data.get("squad", {})
-        for p in sq.get("starting_xi", []) + sq.get("bench", []):
-            p["predicted_points"] = "🔒"
-            p["raw_xpts"] = "🔒" if "raw_xpts" in p else p.get("raw_xpts")
-            p["confidence"] = "🔒"
-            if isinstance(p.get("starter_quality"), dict):
-                p["starter_quality"] = {"tier": "🔒"}
-            for f in (p.get("fixtures") or []):
-                if isinstance(f, dict):
-                    f["win_probability"] = "🔒"
-                    f["xp_single"] = "🔒"
-                    f["xp_adjusted"] = "🔒"
-        sq["predicted_total_points"] = "🔒"
-        sq["squad_total_xpts"] = "🔒"
-        # Lock captain info — free users shouldn't see the captain pick
-        if sq.get("captain"):
-            sq["captain"] = {"name": "🔒 Upgrade to see", "predicted_points": "🔒", "player_id": None}
-        if sq.get("vice_captain"):
-            sq["vice_captain"] = {"name": "🔒", "predicted_points": "🔒", "player_id": None}
-        # Lock chip analysis — free users shouldn't see best chip recommendation
-        chip = data.get("chip_analysis", {})
-        if chip.get("best_chip"):
-            chip["best_chip"] = {"code": "🔒", "name": "Premium only", "score": "🔒"}
-        for rec in chip.get("recommendations", []):
-            rec["score"] = "🔒"; rec["code"] = "🔒"
-        for key in ("top_picks", "differentials", "value_picks"):
-            for p in data.get(key, []):
-                p["predicted_points"] = "🔒"
-                p["raw_xpts"] = "🔒"
+        import random
+        from access_control import public_prediction_data
+        data = public_prediction_data(data)
+        random.shuffle(data.get("predictions", []))
     else:
-        data["user_plan"] = user.get("plan", "premium")  # 'premium' or 'admin'
+        import copy
+        data = copy.deepcopy(data)
+    data["user_plan"] = user.get("plan", "free") if user else "guest"
 
     data["status"] = cache_status
     return jsonify(data)
@@ -1701,6 +1671,25 @@ def api_settings():
 
 
 # ── Chat ──
+_CHAT_PROVIDER_SLOTS = threading.BoundedSemaphore(2)
+_GUEST_CHAT_LOCK = threading.Lock()
+_GUEST_CHAT_COUNTS = {}
+
+
+def _reserve_guest_chat():
+    today = datetime.now(timezone.utc).date().isoformat()
+    identity = request.remote_addr or "unknown"
+    with _GUEST_CHAT_LOCK:
+        expired = [key for key, value in _GUEST_CHAT_COUNTS.items() if value[0] != today]
+        for key in expired:
+            del _GUEST_CHAT_COUNTS[key]
+        count = _GUEST_CHAT_COUNTS.get(identity, (today, 0))[1]
+        if count >= 3 or (identity not in _GUEST_CHAT_COUNTS and len(_GUEST_CHAT_COUNTS) >= 10000):
+            return False
+        _GUEST_CHAT_COUNTS[identity] = (today, count + 1)
+        return True
+
+
 @app.route("/api/chat", methods=["POST"])
 @limiter.limit("20 per minute")
 def api_chat():
@@ -1712,6 +1701,8 @@ def api_chat():
         if not question:
             return jsonify({"error": "No question provided"}), 400
 
+        if len(question) > 4000:
+            return jsonify({"error": "Please keep questions under 4,000 characters."}), 400
         user = _get_auth_user()
         # Only FPL's public team ID is accepted from the browser. For signed-in
         # users the saved account setting is authoritative.
@@ -1732,9 +1723,25 @@ def api_chat():
                 conversation_id = None
             identity = 'guest:' + guest
         dify_user = 'fpl-' + hashlib.sha256(identity.encode()).hexdigest()
-        result = ask_dify(question, conversation_id, team_id, dify_user)
-        return jsonify(result)
+        if not _CHAT_PROVIDER_SLOTS.acquire(blocking=False):
+            return jsonify({"error": "Chat is busy. Please try again shortly."}), 429
+        try:
+            if user:
+                from auth import reserve_chat_message
+                allowed = (user.get("plan") in ("premium", "admin") or
+                           reserve_chat_message(user["email"])["allowed"])
+            else:
+                allowed = _reserve_guest_chat()
+            if not allowed:
+                return jsonify({"error": "Daily chat limit reached. Upgrade or try again tomorrow.",
+                                "limit_reached": True}), 429
+            result = ask_dify(question, conversation_id, team_id, dify_user)
+            return jsonify(result)
+        finally:
+            _CHAT_PROVIDER_SLOTS.release()
 
+    except AuthStorageError:
+        raise
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"answer": "Sorry, something went wrong.", "suggestions": ["Who should I captain?"]}), 200
@@ -1811,16 +1818,17 @@ def api_my_team():
         # TRANSFER SUGGESTIONS
         # ============================================================
 
+        is_premium = bool(user and user.get("plan") in ("premium", "admin"))
         suggestions = (
             generate_transfer_suggestions(enriched, preds, free_transfers=int(free_transfers))
-            if free_transfers is not None else []
+            if is_premium and free_transfers is not None else []
         )
 
         # ============================================================
         # RESPONSE
         # ============================================================
 
-        return jsonify({
+        response_data = {
             "team_id": team_id,
             "info": enriched.get("info", {}),
             "gw_summary": enriched.get("gw_summary", {}),
@@ -1840,9 +1848,17 @@ def api_my_team():
             "free_transfers_source": team_data.get("free_transfers_source"),
             "early_transfers_known": team_data.get("early_transfers_known", False),
             "debug_fpl": team_data.get("debug_fpl"),
-        })
+        }
+        if not is_premium:
+            from access_control import public_player, LOCK
+            for key in ("starters", "bench"):
+                response_data[key] = [public_player(player) for player in response_data[key]]
+            response_data.update(predicted_points=LOCK, weakest_links=[], transfer_suggestions=[])
+        return jsonify(response_data)
 
 
+    except AuthStorageError:
+        raise
     except ValueError:
         return jsonify({
             "error": "Invalid team ID"
@@ -1866,6 +1882,7 @@ def api_news():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/transfers")
+@require_premium
 def api_transfers():
     user = _get_auth_user()
     team_id = request.args.get("id") or (user or {}).get("team_id")
@@ -1894,14 +1911,28 @@ def api_transfers():
 
 @app.route("/api/files")
 def api_files():
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
     files = sorted(OUTPUT_DIR.glob("gw*_predictions.json"), reverse=True)
     return jsonify([{"name": f.name, "path": f"/output/{f.name}"} for f in files])
+
+
+@app.route("/output/<filename>")
+def download_prediction_export(filename):
+    user = _get_auth_user()
+    if not user or user.get("plan") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
+    if not re.fullmatch(r"(?:gw[1-9][0-9]?_predictions|latest_predictions)\.json", filename):
+        return jsonify({"error": "Not found"}), 404
+    return send_from_directory(str(OUTPUT_DIR), filename, as_attachment=True)
 
 
 # ── Heavy endpoints (use cached data where possible) ──
 
 @app.route("/api/chip-analysis")
 @limiter.limit("10 per minute")
+@require_premium
 def api_chip_analysis():
     try:
         preds, cached, _ = _cached_predictions()
@@ -1912,7 +1943,7 @@ def api_chip_analysis():
         from prediction_engine import PredictionEngine
         engine = PredictionEngine()
         try:
-            settings = _load_settings()
+            settings = {"team_id": request._plan_user.get("team_id")}
             team_id = settings.get("team_id")
 
             current_squad_ids = None
@@ -1970,6 +2001,7 @@ def api_chip_analysis():
 
 @app.route("/api/gw-planner")
 @limiter.limit("5 per minute")
+@require_premium
 def api_gw_planner():
     print("========== GW PLANNER REQUEST ==========")
     user = _get_auth_user()
@@ -2110,6 +2142,9 @@ def api_gw_planner():
 
         print("[GW PLANNER] Calculation complete")
         return jsonify(plan)
+
+    except ProjectionDataUnavailable as exc:
+        return jsonify({"error": str(exc)}), 503
 
     except MemoryError:
         print("[GW PLANNER] !!! PYTHON MEMORY ERROR !!!")
@@ -2269,6 +2304,7 @@ def api_fixture_rankings():
         _prediction_run_lock.release()
 
 @app.route("/api/search-players")
+@require_premium
 def api_search_players():
     try:
         preds, _, _ = _cached_predictions()
@@ -2292,6 +2328,7 @@ def api_search_players():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/squad-predictions")
+@require_premium
 def api_squad_predictions():
     try:
         gw = request.args.get("gw", 0, type=int)
@@ -2337,6 +2374,7 @@ def api_squad_predictions():
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route("/api/simulate-transfer", methods=["POST"])
+@require_premium
 def api_simulate_transfer():
     try:
         data = request.get_json(silent=True) or {}
@@ -2548,13 +2586,14 @@ def api_simulate_transfer():
     
 
 @app.route("/api/season-chips")
+@require_premium
 @cached_response(ttl_seconds=300, key_prefix="season-chips")
 def api_season_chips():
     engine = None
     try:
         from chip_planner import SeasonChipPlanner
 
-        settings = _load_settings()
+        settings = {"team_id": request._plan_user.get("team_id")}
 
         # ============================================================
         # DEFAULT USER TEAM / CHIP STATE
@@ -3062,6 +3101,8 @@ def api_season_chips():
 
             print("[CHIP] Lightweight season-chip analysis complete.")
 
+        except ProjectionDataUnavailable as exc:
+            return jsonify({"error": str(exc)}), 503
         except Exception:
             import traceback
 
@@ -3157,6 +3198,13 @@ def api_season_chips():
 
 # ── Stripe ──
 
+def _stripe_checkout_customer(email):
+    from auth import _load_users
+    user = _load_users(email).get(email, {})
+    customer = user.get("stripe_customer_id")
+    return {"customer": customer} if customer else {"customer_email": email}
+
+
 @app.route("/api/stripe/create-checkout", methods=["POST"])
 def api_stripe_checkout():
     user = _get_auth_user()
@@ -3182,7 +3230,9 @@ def api_stripe_checkout():
             mode="subscription",
             success_url=request.headers.get("Origin","")+"/?upgraded=1",
             cancel_url=request.headers.get("Origin","")+"/?cancelled=1",
-            client_reference_id=user["email"], customer_email=user["email"],
+            client_reference_id=user["email"],
+            subscription_data={"metadata": {"app_user_email": user["email"]}},
+            **_stripe_checkout_customer(user["email"]),
         )
         return jsonify({"ok": True, "checkout_url": s.url})
     except Exception as e:
@@ -3201,7 +3251,7 @@ def api_stripe_portal():
             return jsonify({"error": "Payment system not configured."}), 400
         # Need stripe_customer_id to create portal session
         from auth import _load_users
-        users = _load_users()
+        users = _load_users(user["email"])
         full_user = users.get(user["email"], {})
         customer_id = full_user.get("stripe_customer_id")
         if not customer_id:
@@ -3218,80 +3268,72 @@ def api_stripe_portal():
 @app.route("/api/stripe/webhook", methods=["POST"])
 @limiter.exempt
 def api_stripe_webhook():
+    import stripe
+    secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    if not secret:
+        return jsonify({"error": "Not configured"}), 403
     try:
-        import stripe
-        stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
-        ws = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
-        if not ws: return jsonify({"error": "Not configured"}), 403
         event = stripe.Webhook.construct_event(
-            request.get_data(), request.headers.get("Stripe-Signature", ""), ws
+            request.get_data(), request.headers.get("Stripe-Signature", ""), secret
         )
-        etype = event.get("type", "")
+    except (ValueError, stripe.SignatureVerificationError):
+        return jsonify({"error": "Invalid webhook signature or payload"}), 400
+
+    try:
+        stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+        event_id = event.get("id")
+        created = event.get("created")
+        if not event_id or not isinstance(created, (int, float)):
+            raise ValueError("Webhook event identity is missing")
+        event_type = event.get("type", "")
         obj = event["data"]["object"]
-        print(f"  [STRIPE] Webhook: {etype}")
-
-        if etype == "checkout.session.completed":
-            # New subscription created — upgrade user
-            email = obj.get("client_reference_id") or obj.get("customer_email")
-            if email:
-                from auth import upgrade_to_premium
-                upgrade_to_premium(
-                    email,
-                    stripe_customer_id=obj.get("customer"),
-                    stripe_subscription_id=obj.get("subscription"),
-                )
-                print(f"  [STRIPE] Upgraded: {email}")
-
-        elif etype == "invoice.paid":
-            # Subscription renewed successfully — extend premium
-            customer_id = obj.get("customer")
-            if customer_id:
-                from auth import extend_premium
-                email = _find_email_by_stripe_customer(customer_id)
-                if email:
-                    extend_premium(email, days=35)  # 35 days buffer for monthly
-                    print(f"  [STRIPE] Renewal extended: {email}")
-                else:
-                    print(f"  [STRIPE] Could not find user for customer: {customer_id}")
-
-        elif etype == "invoice.payment_failed":
-            # Payment failed — log warning (Stripe retries automatically)
-            customer_id = obj.get("customer")
-            attempt = obj.get("attempt_count", 0)
-            email = _find_email_by_stripe_customer(customer_id) if customer_id else ""
-            print(
-                f"  [STRIPE] Payment failed for {email or customer_id} "
-                f"(attempt {attempt})"
-            )
-            # Do not downgrade immediately. Stripe retries failed payments automatically.
-            # If subscription is eventually cancelled, customer.subscription.deleted handles downgrade.
-
-        elif etype == "customer.subscription.deleted":
-            # Subscription cancelled or expired — downgrade to free
-            customer_id = obj.get("customer")
-            if customer_id:
-                from auth import downgrade_to_free
-                email = _find_email_by_stripe_customer(customer_id)
-                if email:
-                    downgrade_to_free(email)
-                    print(f"  [STRIPE] Downgraded: {email}")
-
-        elif etype == "customer.subscription.updated":
-            # Subscription status changed (e.g., paused, past_due)
-            customer_id = obj.get("customer")
-            status = obj.get("status")
-            print(f"  [STRIPE] Subscription updated: customer={customer_id} status={status}")
-            if status in ("canceled", "unpaid", "past_due"):
-                from auth import downgrade_to_free
-                email = _find_email_by_stripe_customer(customer_id)
-                if email:
-                    downgrade_to_free(email)
-                    print(f"  [STRIPE] Downgraded due to status={status}: {email}")
-
-        return jsonify({"ok": True})
-    except Exception as e:
-        print(f"  [STRIPE] Webhook error: {e}")
-        return jsonify({"error": str(e)}), 400
+        subscription_events = {"customer.subscription.created", "customer.subscription.updated",
+                               "customer.subscription.deleted", "customer.subscription.paused",
+                               "customer.subscription.resumed"}
+        if event_type not in subscription_events | {"checkout.session.completed", "invoice.paid"}:
+            return jsonify({"ok": True})
+        customer_id = obj.get("customer")
+        if isinstance(customer_id, dict):
+            customer_id = customer_id.get("id")
+        if event_type in subscription_events:
+            subscription_id = obj.get("id")
+        else:
+            subscription_id = obj.get("subscription") or (
+                ((obj.get("parent") or {}).get("subscription_details") or {}).get("subscription"))
+        if isinstance(subscription_id, dict):
+            subscription_id = subscription_id.get("id")
+        if not subscription_id:
+            # A paid non-subscription invoice must not grant subscription access.
+            return jsonify({"ok": True, "ignored": True})
+        if not customer_id:
+            raise ValueError("Webhook customer is missing")
+        # Read authoritative state so delayed events cannot replay an old paid
+        # status. Deleted subscriptions use the terminal signed event object.
+        if event_type == "customer.subscription.deleted":
+            subscription = dict(obj)
+            subscription["status"] = "canceled"
+        else:
+            subscription = stripe.Subscription.retrieve(subscription_id)
+        subscription_customer = subscription.get("customer")
+        if isinstance(subscription_customer, dict):
+            subscription_customer = subscription_customer.get("id")
+        if subscription_customer != customer_id:
+            raise ValueError("Subscription customer mismatch")
+        email = _find_email_by_stripe_customer(customer_id)
+        if event_type == "checkout.session.completed":
+            email = obj.get("client_reference_id") or email
+        email = email or (subscription.get("metadata") or {}).get("app_user_email") or obj.get("customer_email")
+        if not email:
+            raise ValueError("Webhook account mapping is not available yet")
+        from auth import apply_stripe_subscription
+        result = apply_stripe_subscription(
+            email, event_id, created, subscription, customer_id,
+            allow_subscription_change=event_type == "checkout.session.completed",
+        )
+        return jsonify(result)
+    except Exception:
+        app.logger.exception("Subscription synchronization failed; Stripe should retry")
+        return jsonify({"error": "Subscription synchronization is temporarily unavailable"}), 503
 
 
 def _find_email_by_stripe_customer(customer_id: str) -> str:
@@ -3470,8 +3512,8 @@ def api_reset_accounts():
         return jsonify({"error": "Reset disabled (SETUP_KEY not configured or too short)"}), 403
     if not hmac.compare_digest(request.args.get("key", ""), sk):
         return jsonify({"error": "Invalid key"}), 403
-    from auth import _save_users, _save_sessions
-    _save_users({}); _save_sessions({})
+    from auth import reset_all_accounts
+    reset_all_accounts()
     _auto_setup_accounts()
     return jsonify({"ok": True, "message": "Reset done"})
 

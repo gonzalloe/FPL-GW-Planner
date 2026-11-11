@@ -70,7 +70,7 @@ class TeamIDPlannerTests(unittest.TestCase):
         self.bootstrap, self.teams, self.players, self.preds, self.fixtures, self.team = context()
         for manager in (
             patch.object(server,'_ensure_refresh_thread'), patch.object(server,'_auto_setup_accounts'),
-            patch.object(server,'_get_auth_user',return_value={'email':'test@example.test','team_id':101}),
+            patch.object(server,'_get_auth_user',return_value={'email':'test@example.test','team_id':101,'plan':'premium'}),
             patch('auth.update_team_id'),
             patch('my_team.fetch_my_team',side_effect=lambda *args: copy.deepcopy(self.team)),
             patch.object(server,'_cached_predictions',return_value=(self.preds,{'gameweek':9},'fresh')),

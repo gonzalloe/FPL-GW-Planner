@@ -23,7 +23,7 @@ test('Uses the requested GW official timestamp and viewer local timezone', () =>
   process.env.TZ = 'Asia/Kuala_Lumpur';
   try {
     const label = context.gameweekDeadlineText(context.GAMEWEEK_DEADLINES, 11, 0);
-    assert.match(label, /GW 11 transfer deadline:/);
+    assert.match(label, /Transfer deadline:/);
     assert.match(label, /21/);
     assert.match(label, /07:00 PM|19:00/);
     assert.match(label, /GMT\+8|MYT/);
@@ -47,6 +47,6 @@ test('A passed deadline is explicitly identified', () => {
 
 test('Overview and imported team use their own gameweek context', () => {
   context.renderGameweekDeadlines();
-  assert.match(elements['overview-deadline'].textContent, /GW 10 transfer deadline:/);
-  assert.match(elements['myteam-deadline'].textContent, /GW 11 transfer deadline:/);
+  assert.match(elements['overview-deadline'].textContent, /Nov 7|7 Nov/);
+  assert.match(elements['myteam-deadline'].textContent, /Nov 21|21 Nov/);
 });

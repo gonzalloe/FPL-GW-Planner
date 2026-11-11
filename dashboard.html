@@ -1880,15 +1880,19 @@ async function checkAuth() {
   if (!AUTH_TOKEN) { showAuthOverlay(); return false; }
   try {
     const r = await fetch('/api/auth/me', {method: 'POST', headers: authHeaders()});
+    if (r.status >= 500) { showAuthError('Account service is temporarily unavailable. Please retry.'); return false; }
     const d = await r.json();
     if (d.ok && d.user) {
       AUTH_USER = d.user;
       onAuthSuccess();
       return true;
     }
-  } catch(e) {}
+  } catch(e) { showAuthError('Unable to verify your account. Please retry.'); return false; }
   localStorage.removeItem('fpl_auth_token');
   AUTH_TOKEN = '';
+  AUTH_USER = null;
+  sessionStorage.removeItem('fpl_preds_snapshot_v2');
+  void loadData();
   showAuthOverlay();
   return false;
 }
@@ -1944,19 +1948,7 @@ async function authLogin() {
       localStorage.setItem('fpl_auth_token', AUTH_TOKEN);
       hideAuthOverlay();
       onAuthSuccess();
-      // Re-fetch predictions with auth token to get unmasked premium data
-      try {
-        // Skipped: loadData() below already re-fetches predictions with proper auth + browser cache.
-        const pr = {ok: true};
-        if (pr.ok) {
-          DATA = await pr.json();
-          if (DATA && DATA.predictions) {
-            USER_PLAN = DATA.user_plan || (AUTH_USER?.plan) || 'free';
-            ALL_PREDICTIONS = DATA.predictions || [];
-            render();
-          }
-        }
-      } catch(e2) { console.warn('Re-fetch predictions after login failed:', e2); }
+      // onAuthSuccess refreshes predictions for the authenticated plan.
       return;  // Success — exit retry loop
     } else {
       showAuthError(d.error || 'Login failed');
@@ -2112,6 +2104,8 @@ function authLogout() {
   AUTH_TOKEN = '';
   AUTH_USER = null;
   localStorage.removeItem('fpl_auth_token');
+  sessionStorage.removeItem('fpl_preds_snapshot_v1');
+  sessionStorage.removeItem('fpl_preds_snapshot_v2');
   location.reload();
 }
 
@@ -2120,7 +2114,8 @@ function onAuthSuccess() {
   loadSettings();
   // Update sidebar with user info
   const sidebar = document.querySelector('.sidebar');
-  if (sidebar && !document.getElementById('user-info-bar')) {
+  document.getElementById('user-info-bar')?.remove();
+  if (sidebar) {
     const bar = document.createElement('div');
     bar.id = 'user-info-bar';
     bar.style.cssText = 'padding:14px 18px;border-top:1px solid rgba(255,255,255,.06);font-size:11px;color:var(--text3);margin:16px 8px 0;border-radius:10px;background:rgba(255,255,255,.02);';
@@ -2168,13 +2163,13 @@ function onAuthSuccess() {
   });
 
   // Free users: stay on Overview (but with locked xPts + blurred pitch)
-  if (!isPremiumOrAdmin) {
-    // Hide premium sub-tabs within My Team
-    const simBtn = document.getElementById('mtab-btn-simulator');
-    const planBtn = document.getElementById('mtab-btn-planner');
-    if (simBtn) simBtn.style.display = 'none';
-    if (planBtn) planBtn.style.display = 'none';
+  // Update both directions when a user signs in or changes plan.
+  for (const id of ['mtab-btn-simulator', 'mtab-btn-planner']) {
+    const button = document.getElementById(id);
+    if (button) button.style.display = isPremiumOrAdmin ? '' : 'none';
   }
+  _prewarmed = false;
+  void loadData();
 }
 
 async function upgradeToPremium() {
@@ -2236,15 +2231,27 @@ async function loadAdminUsers() {
         <td>${u.team_id || '-'}</td>
         <td style="font-size:11px;">${created}</td>
         <td>
-          ${u.plan !== 'admin' ? `<button onclick="adminQuickUpgrade('${escapeHtml(u.email)}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--accent);color:#000;border:none;cursor:pointer;">→PRO</button>
-          <button onclick="adminQuickFree('${escapeHtml(u.email)}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--surface3);color:var(--text2);border:1px solid var(--border);cursor:pointer;">→Free</button>
-          <button onclick="adminQuickDelete('${escapeHtml(u.email)}')" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--red);color:#fff;border:none;cursor:pointer;">Del</button>` : '<span style="font-size:10px;color:var(--gold);">Owner</span>'}
+          ${u.plan !== 'admin' ? `<button data-user-action="upgrade" data-email="${escapeHtml(u.email)}" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--accent);color:#000;border:none;cursor:pointer;">→PRO</button>
+          <button data-user-action="free" data-email="${escapeHtml(u.email)}" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--surface3);color:var(--text2);border:1px solid var(--border);cursor:pointer;">→Free</button>
+          <button data-user-action="delete" data-email="${escapeHtml(u.email)}" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--red);color:#fff;border:none;cursor:pointer;">Del</button>` : '<span style="font-size:10px;color:var(--gold);">Owner</span>'}
         </td>
       </tr>`;
     });
     html += '</tbody>';
-    document.getElementById('admin-users-table').innerHTML = html;
+    const table = document.getElementById('admin-users-table');
+    table.innerHTML = html;
+    bindAdminUserActions(table);
   } catch(e) { alert('Error: ' + e.message); }
+}
+
+function bindAdminUserActions(table) {
+  const actions = {upgrade:adminQuickUpgrade, free:adminQuickFree, delete:adminQuickDelete};
+  table.querySelectorAll('[data-user-action]').forEach(button => {
+    button.addEventListener('click', () => {
+      const action = actions[button.dataset.userAction];
+      if (action) action(button.dataset.email);
+    });
+  });
 }
 
 async function adminSetPlan() {
@@ -2700,7 +2707,7 @@ function prewarmSecondaryData() {
     '/api/top-transfers',
   ];
   // Only prewarm season-chips if user has a team_id configured (else it returns default)
-  if (AUTH_USER) endpoints.push('/api/season-chips');
+  if (['premium', 'admin'].includes(AUTH_USER?.plan)) endpoints.push('/api/season-chips');
   // Defer to idle to avoid competing with initial render
   const runPrewarm = () => {
     endpoints.forEach(url => {
@@ -2752,7 +2759,14 @@ async function loadGameweekDeadlines() {
   renderGameweekDeadlines();
 }
 
+function predictionSnapshotOwner() {
+  if (AUTH_TOKEN && !AUTH_USER) return null;
+  return AUTH_USER ? `${AUTH_USER.email}:${AUTH_USER.plan}` : 'guest';
+}
+
 async function loadData() {
+  const loadToken = AUTH_TOKEN;
+  const snapshotOwner = predictionSnapshotOwner();
   void loadGameweekDeadlines();
   // SWR_SNAPSHOT_v1: stale-while-revalidate. On page refresh, if we have a
   // snapshot from the last successful load (<= 10 min old), render it instantly
@@ -2760,11 +2774,11 @@ async function loadData() {
   // data in the background and re-render when it arrives.
   let _swrHydrated = false;
   try {
-    const raw = sessionStorage.getItem('fpl_preds_snapshot_v1');
+    const raw = sessionStorage.getItem('fpl_preds_snapshot_v2');
     if (raw) {
       const snap = JSON.parse(raw);
       const ageMs = Date.now() - (snap.__savedAt || 0);
-      if (snap && snap.predictions && ageMs < 10 * 60 * 1000) {
+      if (snapshotOwner && snap?.__owner === snapshotOwner && snap.predictions && ageMs < 10 * 60 * 1000) {
         DATA = snap;
         USER_PLAN = snap.user_plan || (AUTH_USER?.plan) || 'free';
         ALL_PREDICTIONS = snap.predictions || [];
@@ -2803,15 +2817,17 @@ async function loadData() {
   try {
     const r = await fetch('/api/predictions', {headers: authHeaders(), cache: 'default'});
     if (r.ok) {
-      DATA = await r.json();
+      const received = await r.json();
+      if (loadToken !== AUTH_TOKEN) return;
+      DATA = received;
       if (DATA && DATA.predictions) {
         USER_PLAN = DATA.user_plan || (AUTH_USER?.plan) || 'free';
         ALL_PREDICTIONS = DATA.predictions || [];
         // SWR_SNAPSHOT_v1: persist for next refresh. Wrapped in try/catch because
         // very large premium payloads may exceed ~5MB sessionStorage quota.
         try {
-          const snap = Object.assign({}, DATA, {__savedAt: Date.now()});
-          sessionStorage.setItem('fpl_preds_snapshot_v1', JSON.stringify(snap));
+          const snap = Object.assign({}, DATA, {__savedAt: Date.now(), __owner: snapshotOwner});
+          sessionStorage.setItem('fpl_preds_snapshot_v2', JSON.stringify(snap));
         } catch(e) { /* quota exceeded / private mode: silently skip */ }
         // _clearPhaseTimers();
         if (window.__phaseTimer1) clearTimeout(window.__phaseTimer1);
@@ -2865,17 +2881,19 @@ async function loadData() {
     let _attempt = 0;
     const _hintEl = errDiv.querySelector('p:last-child');
     const _retry = async function retry() {
+      if (loadToken !== AUTH_TOKEN) return;
       try {
         const r3 = await fetch('/api/predictions?_t=' + Date.now(), {headers: authHeaders()});
         if (r3.ok) {
           const d = await r3.json();
+          if (loadToken !== AUTH_TOKEN) return;
           if (d && d.predictions) {
             DATA = d;
             USER_PLAN = d.user_plan || (AUTH_USER?.plan) || 'free';
             ALL_PREDICTIONS = d.predictions || [];
             try {
-              const snap = Object.assign({}, d, {__savedAt: Date.now()});
-              sessionStorage.setItem('fpl_preds_snapshot_v1', JSON.stringify(snap));
+              const snap = Object.assign({}, d, {__savedAt: Date.now(), __owner: snapshotOwner});
+              sessionStorage.setItem('fpl_preds_snapshot_v2', JSON.stringify(snap));
             } catch(e) {}
             const waiting = document.getElementById('data-waiting-card');
             if (waiting) waiting.remove();
@@ -3552,6 +3570,10 @@ let SIM_FH_GW = null; // GW where Free Hit was applied (squad reverts after)
 
 function switchMyTeamTab(btn) {
   const tabName = btn.dataset.mtab;
+  if (['simulator', 'planner'].includes(tabName) && !['premium', 'admin'].includes(AUTH_USER?.plan)) {
+    upgradeToPremium();
+    return;
+  }
 
   console.log('[MY TEAM TAB] clicked:', btn);
   console.log('[MY TEAM TAB] data-mtab:', tabName);
@@ -3744,8 +3766,7 @@ async function loadMyTeam() {
       document.getElementById('myteam-suggestions-list').innerHTML = sugHtml;
     }
 
-    // Populate simulator sell list
-    renderSimSellList();
+    // Simulator initialization is deferred until its tab is opened.
 
   } catch(e) {
     content.innerHTML = '<div class="card"><p style="color:var(--red);">Error: ' + e.message + '</p></div>';
@@ -4552,7 +4573,7 @@ function addToTransferQueue(simData) {
 function removeFromQueue(idx) {
   TRANSFER_QUEUE.splice(idx, 1);
   renderTransferQueue();
-  renderSimSellList();
+  renderSimPitch();
 }
 
 function getSimulatorBank() {
@@ -4719,7 +4740,7 @@ function clearSimChanges() {
 
   renderSimPitch();
   renderTransferQueue();
-  renderSimSellList();
+  renderSimPitch();
 }
 
 
@@ -5591,7 +5612,7 @@ async function sendChat(){
     if(data.conversation_id){
       difyConversationId = data.conversation_id;
     }
-    appendChatMsg('bot',data.answer||'Sorry, no answer.',data.suggestions||[]);
+    appendChatMsg('bot',data.answer||data.error||'Sorry, no answer.',data.suggestions||[]);
   }catch(e){
     removeTyping(tid);
     appendChatMsg('bot','Error: '+e.message,['Who should I captain?','Best DGW players?']);

@@ -31,3 +31,7 @@ _check*.py
 .DS_Store
 .venv/
 venv/
+
+!tests/test_security.py
+!tests/test_auth_storage.py
+!tests/test_projections.py

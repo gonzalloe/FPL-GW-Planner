@@ -25,6 +25,8 @@ class ChatContextTests(unittest.TestCase):
         self.players, self.team = sample()
         for p in (patch.object(server, '_ensure_refresh_thread'),
                   patch.object(server, '_auto_setup_accounts'),
+                  patch('auth.reserve_chat_message', return_value={'allowed':True}),
+                  patch.object(server, '_reserve_guest_chat', return_value=True),
                   patch.object(server, '_cached_predictions', return_value=(self.players, {'gameweek': 9}, 'ready')),
                   patch('my_team.fetch_my_team', side_effect=lambda team_id: copy.deepcopy(self.team))):
             p.start(); self.addCleanup(p.stop)
@@ -101,7 +103,7 @@ class ChatContextTests(unittest.TestCase):
             response = Mock(status_code=200)
             response.json.return_value = {'answer': 'ok', 'conversation_id': 'conversation'}
             return response
-        with patch.object(server, 'DIFY_API_KEY', 'test'), patch.object(server, '_get_auth_user', return_value={'email':'user@example.test', 'team_id':123}), patch.object(server.requests, 'post', side_effect=post):
+        with patch.object(server, 'DIFY_API_KEY', 'test'), patch.object(server, '_get_auth_user', return_value={'email':'user@example.test', 'team_id':123, 'plan':'premium'}), patch.object(server.requests, 'post', side_effect=post):
             first = self.client.post('/api/chat', json={'question':'my squad', 'team_id':999})
             self.team['gw_summary']['bank'] = 2.0
             second = self.client.post('/api/chat', json={'question':'and now?', 'conversation_id':'conversation'})

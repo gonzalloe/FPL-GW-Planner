@@ -18,6 +18,10 @@ from data_fetcher import (
 )
 
 
+class ProjectionDataUnavailable(ValueError):
+    pass
+
+
 class SeasonChipPlanner:
     """
     Analyzes ALL remaining GWs to find the optimal deployment for each chip.
@@ -203,6 +207,33 @@ class SeasonChipPlanner:
                 count += 1
 
         return total / count if count else 0.0
+
+    def _neutral_baseline(self, base):
+        neutral = base.get("neutral_xpts")
+        if isinstance(neutral, (int, float)) and math.isfinite(neutral) and neutral >= 0:
+            return float(neutral)
+        if "neutral_xpts" in base:
+            raise ProjectionDataUnavailable("Prediction baseline is invalid. Please refresh the prediction cache.")
+        if (base.get("availability") or {}).get("status") == "unavailable":
+            return 0.0
+        # Compatibility with existing non-blank caches: undo each baseline
+        # fixture modifier before averaging. Never repeat a DGW total per match.
+        fixtures = base.get("fixtures") or []
+        count = base.get("num_fixtures", len(fixtures) or 1)
+        if count == 0 or (base.get("availability") or {}).get("status") == "blank_gw":
+            raise ProjectionDataUnavailable("Blank-GW projections need refreshed predictions. Please refresh the prediction cache.")
+        total = float(base.get("raw_xpts", base.get("predicted_points", 0)) or 0)
+        if not math.isfinite(total) or total < 0:
+            raise ProjectionDataUnavailable("Prediction baseline is invalid. Please refresh the prediction cache.")
+        if not fixtures:
+            return total / max(count, 1)
+        normalized = []
+        for fixture in fixtures:
+            value = fixture.get("xp_adjusted", fixture.get("xp_single", total / max(count, 1)))
+            modifier = self._position_fdr_modifier(base.get("position_id", 3),
+                                                   fixture.get("fdr", 3), fixture.get("is_home", False))
+            normalized.append(float(value) / modifier)
+        return sum(normalized) / len(normalized)
 
     def _get_target_predictions(self, gw, candidate_ids=None):
         """
@@ -419,6 +450,8 @@ class SeasonChipPlanner:
                     projected["num_fixtures"] = 0
                     projected["is_dgw"] = False
                     projected["fixtures"] = []
+                    projected["availability"] = {"status": "blank_gw"}
+                    projected["starter_quality"] = {"tier": "unavailable", "p_start": 0.0}
 
                     results.append(projected)
 
@@ -428,21 +461,7 @@ class SeasonChipPlanner:
                 # BASELINE XPTS
                 # ========================================================
 
-                base_xpts = float(
-                    base.get(
-                        "raw_xpts",
-                        base.get(
-                            "predicted_points",
-                            0.0,
-                        ),
-                    )
-                    or 0.0
-                )
-
-                base_xpts = max(
-                    base_xpts,
-                    0.0,
-                )
+                base_xpts = self._neutral_baseline(base)
 
                 # ========================================================
                 # POSITION
@@ -552,9 +571,15 @@ class SeasonChipPlanner:
                 )
 
                 projected["fixtures"] = fixtures
+                if (base.get("availability") or {}).get("status") == "blank_gw":
+                    projected["starter_quality"] = dict(base.get("neutral_starter_quality") or {})
+                    projected["availability"] = dict(base.get("neutral_availability") or {})
+                projected["projection_source"] = ("neutral_fixture" if "neutral_xpts" in base else "legacy_normalized")
 
                 results.append(projected)
 
+            except ProjectionDataUnavailable:
+                raise
             except Exception as exc:
 
                 print(

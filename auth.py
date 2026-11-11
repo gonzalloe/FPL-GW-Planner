@@ -14,8 +14,10 @@ import hashlib
 import secrets
 import time
 import threading
+import copy
+import re
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -45,16 +47,15 @@ def _get_supabase():
     if _supabase_client is not None:
         return _supabase_client
     try:
-        from supabase import create_client
-        _supabase_client = create_client(_SUPABASE_URL, _SUPABASE_KEY)
+        from supabase import create_client, ClientOptions
+        _supabase_client = create_client(_SUPABASE_URL, _SUPABASE_KEY,
+                                         options=ClientOptions(postgrest_client_timeout=5))
         if not _backend_logged:
             print(f"  [AUTH] Using Supabase backend ({_SUPABASE_URL[:40]}...)")
             _backend_logged = True
         return _supabase_client
     except Exception as e:
-        print(f"  [AUTH] Supabase init failed, falling back to JSON files: {e}")
-        _USE_SUPABASE = False
-        return None
+        raise AuthStorageError("Account storage is temporarily unavailable") from e
 
 # Subscription config
 PLANS = {
@@ -137,102 +138,142 @@ def _hash_password(password: str, salt: str = None) -> tuple:
     return hashed, salt
 
 
-def _load_users() -> dict:
+class AuthStorageError(RuntimeError):
+    """Storage failed; callers must not treat this as an empty account store."""
+
+
+class ConcurrentAccountUpdate(AuthStorageError):
+    """A record changed after it was read; retry from a fresh snapshot."""
+
+
+class _RecordSnapshot(dict):
+    def __init__(self, rows):
+        super().__init__(rows)
+        self.original = copy.deepcopy(rows)
+
+
+def _read_records(table, key, path, identity=None):
+    sb = _get_supabase()
+    try:
+        if sb is not None:
+            if identity is not None:
+                result = sb.table(table).select(f"{key},data").eq(key, identity).execute()
+                return _RecordSnapshot({row[key]: row["data"] for row in (result.data or [])})
+            rows = {}
+            offset = 0
+            # Paginate explicitly; PostgREST's default row limit is not a full table.
+            while True:
+                result = sb.table(table).select(f"{key},data").order(key).range(offset, offset + 499).execute()
+                batch = result.data or []
+                rows.update({row[key]: row["data"] for row in batch})
+                if len(batch) < 500:
+                    break
+                offset += len(batch)
+            return _RecordSnapshot(rows)
+        rows = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(rows, dict):
+            raise ValueError("Invalid account storage")
+        if identity is not None:
+            rows = {identity: rows[identity]} if identity in rows else {}
+        return _RecordSnapshot(rows)
+    except AuthStorageError:
+        raise
+    except Exception as exc:
+        raise AuthStorageError("Account storage is temporarily unavailable") from exc
+
+
+def _write_records(table, key, path, rows):
+    # A plain dict is not evidence that absent records were intentionally removed.
+    if not isinstance(rows, _RecordSnapshot):
+        raise AuthStorageError("Account changes require a loaded snapshot")
+    original = rows.original
+    changed = {identity: value for identity, value in rows.items()
+               if identity not in original or value != original[identity]}
+    removed = original.keys() - rows.keys()
+    if not changed and not removed:
+        return
+    sb = _get_supabase()
+    try:
+        if sb is not None:
+            for identity in removed | changed.keys():
+                revision = original.get(identity, {}).get("_revision")
+                if revision is not None and (type(revision) is not int or revision < 0):
+                    raise AuthStorageError("Invalid account revision")
+                if identity in changed:
+                    changed[identity]["_revision"] = (revision or 0) + 1
+                if identity not in original:
+                    sb.table(table).insert({key: identity, "data": changed[identity]}).execute()
+                    continue
+                query = (sb.table(table).delete() if identity in removed else
+                         sb.table(table).update({"data": changed[identity]}))
+                query = query.eq(key, identity)
+                # Revision lives inside the existing JSON column: no schema
+                # migration, and no large account payload in the query URL.
+                query = (query.is_("data->>_revision", "null") if revision is None else
+                         query.eq("data->>_revision", str(revision)))
+                result = query.execute()
+                if not result.data:
+                    raise ConcurrentAccountUpdate("Account changed; please retry")
+        else:
+            current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            for identity in removed | changed.keys():
+                if ((identity in current) != (identity in original) or
+                        (identity in original and current[identity] != original[identity])):
+                    raise ConcurrentAccountUpdate("Account changed; please retry")
+            for identity in removed:
+                del current[identity]
+            current.update(changed)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
+        rows.original = copy.deepcopy(dict(rows))
+    except AuthStorageError:
+        raise
+    except Exception as exc:
+        # Never acknowledge an ephemeral file write when the configured DB failed.
+        raise AuthStorageError("Account changes could not be saved; please retry") from exc
+
+
+def _load_users(email=None):
     with _users_lock:
-        sb = _get_supabase()
-        if sb is not None:
-            try:
-                res = sb.table("users").select("email,data").execute()
-                return {row["email"]: row["data"] for row in (res.data or [])}
-            except Exception as e:
-                print(f"  [AUTH] Supabase load_users failed: {e}")
-                return {}
-        if USERS_FILE.exists():
-            return json.loads(USERS_FILE.read_text(encoding="utf-8"))
-        return {}
+        return _read_records("users", "email", USERS_FILE, email)
 
 
-def _save_users(users: dict):
+def _save_users(users):
     with _users_lock:
-        sb = _get_supabase()
-        if sb is not None:
-            try:
-                # Fetch existing emails so we can compute deletions
-                existing = sb.table("users").select("email").execute()
-                existing_emails = {row["email"] for row in (existing.data or [])}
-                new_emails = set(users.keys())
-
-                # Delete users that were removed
-                to_delete = existing_emails - new_emails
-                for email in to_delete:
-                    sb.table("users").delete().eq("email", email).execute()
-
-                # Upsert all current users
-                if users:
-                    rows = [{"email": e, "data": u} for e, u in users.items()]
-                    sb.table("users").upsert(rows, on_conflict="email").execute()
-                return
-            except Exception as e:
-                print(f"  [AUTH] Supabase save_users failed: {e}")
-                # Fall through to file save as emergency backup
-        tmp = USERS_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(users, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(USERS_FILE)
+        _write_records("users", "email", USERS_FILE, users)
 
 
-def _load_sessions() -> dict:
+def _load_sessions(token=None):
     with _sessions_lock:
-        sb = _get_supabase()
-        if sb is not None:
-            try:
-                res = sb.table("sessions").select("token,data").execute()
-                return {row["token"]: row["data"] for row in (res.data or [])}
-            except Exception as e:
-                print(f"  [AUTH] Supabase load_sessions failed: {e}")
-                return {}
-        if SESSIONS_FILE.exists():
-            return json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
-        return {}
+        return _read_records("sessions", "token", SESSIONS_FILE, token)
 
 
-def _save_sessions(sessions: dict):
+def _save_sessions(sessions):
     with _sessions_lock:
-        sb = _get_supabase()
-        if sb is not None:
-            try:
-                existing = sb.table("sessions").select("token").execute()
-                existing_tokens = {row["token"] for row in (existing.data or [])}
-                new_tokens = set(sessions.keys())
+        _write_records("sessions", "token", SESSIONS_FILE, sessions)
 
-                to_delete = existing_tokens - new_tokens
-                if to_delete:
-                    # Chunk to avoid URL length limits on large in-lists
-                    tok_list = list(to_delete)
-                    for i in range(0, len(tok_list), 100):
-                        sb.table("sessions").delete().in_("token", tok_list[i:i+100]).execute()
 
-                if sessions:
-                    rows = [{"token": t, "data": d} for t, d in sessions.items()]
-                    # Batch upsert to avoid huge payloads
-                    for i in range(0, len(rows), 500):
-                        sb.table("sessions").upsert(rows[i:i+500], on_conflict="token").execute()
-                return
-            except Exception as e:
-                print(f"  [AUTH] Supabase save_sessions failed: {e}")
-        tmp = SESSIONS_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(sessions, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(SESSIONS_FILE)
+def reset_all_accounts():
+    """Explicit destructive operation; never inferred from an empty snapshot."""
+    with _users_lock, _sessions_lock:
+        users, sessions = _load_users(), _load_sessions()
+        users.clear()
+        sessions.clear()
+        _save_users(users)
+        _save_sessions(sessions)
 
 
 def register(email: str, password: str, name: str = "") -> dict:
     """Register a new user. Returns {ok, token, user} or {error}."""
     email = email.strip().lower()
-    if not email or "@" not in email:
+    if (len(email) > 254 or not re.fullmatch(
+            r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", email)):
         return {"error": "Invalid email"}
     if len(password) < 6:
         return {"error": "Password must be at least 6 characters"}
 
-    users = _load_users()
+    users = _load_users(email)
     if email in users:
         return {"error": "Email already registered"}
 
@@ -240,6 +281,7 @@ def register(email: str, password: str, name: str = "") -> dict:
     needs_verify = REQUIRE_EMAIL_VERIFICATION
     user = {
         "email": email,
+        "auth_generation": secrets.token_hex(16),
         "name": name or email.split("@")[0],
         "password_hash": hashed,
         "salt": salt,
@@ -298,7 +340,7 @@ def login(email: str, password: str) -> dict:
         remaining = int(attempt["lockout_until"] - time.time())
         return {"error": f"Too many failed attempts. Try again in {remaining}s."}
 
-    users = _load_users()
+    users = _load_users(email)
     user = users.get(email)
     if not user:
         return {"error": "Email not found"}
@@ -344,7 +386,7 @@ def get_user_from_token(token: str) -> dict:
     """Validate session token and return user. Returns None if invalid."""
     if not token:
         return None
-    sessions = _load_sessions()
+    sessions = _load_sessions(token)
     session = sessions.get(token)
     if not session:
         return None
@@ -354,9 +396,10 @@ def get_user_from_token(token: str) -> dict:
         return None
 
     email = session.get("email")
-    users = _load_users()
+    users = _load_users(email)
     user = users.get(email)
-    if not user:
+    if (not user or session.get("auth_generation") != user.get("auth_generation")
+            or session.get("session_version", 0) != user.get("session_version", 0)):
         return None
 
     # Only write back if plan expiry actually changed (avoid write-on-every-read)
@@ -373,7 +416,7 @@ def upgrade_to_premium(email: str, months: int = 1,
                        stripe_customer_id: str = None,
                        stripe_subscription_id: str = None) -> dict:
     """Upgrade user to premium plan."""
-    users = _load_users()
+    users = _load_users(email)
     user = users.get(email)
     if not user:
         return {"error": "User not found"}
@@ -409,7 +452,7 @@ def upgrade_to_premium(email: str, months: int = 1,
 def downgrade_to_free(email: str) -> dict:
     """Downgrade user to free plan (called by Stripe webhooks on cancellation/failure)."""
     email = email.strip().lower()
-    users = _load_users()
+    users = _load_users(email)
     user = users.get(email)
     if not user:
         return {"error": "User not found"}
@@ -428,7 +471,7 @@ def extend_premium(email: str, days: int = 35) -> dict:
     """Extend premium plan expiry (called by Stripe webhooks on successful renewal).
     Uses 35 days for monthly to provide buffer for payment processing."""
     email = email.strip().lower()
-    users = _load_users()
+    users = _load_users(email)
     user = users.get(email)
     if not user:
         return {"error": "User not found"}
@@ -459,10 +502,15 @@ def extend_premium(email: str, days: int = 35) -> dict:
 def _create_session(email: str) -> str:
     """Create a new session token."""
     token = secrets.token_hex(32)
-    sessions = _load_sessions()
+    user = _load_users(email).get(email)
+    if user is None:
+        raise AuthStorageError("Account no longer exists")
+    sessions = _load_sessions(token)
     sessions[token] = {
         "email": email,
         "created_at": time.time(),
+        "auth_generation": user.get("auth_generation"),
+        "session_version": user.get("session_version", 0),
     }
     _save_sessions(sessions)
     return token
@@ -499,7 +547,7 @@ def _public_user(user: dict) -> dict:
 
 def update_team_id(email: str, team_id: int) -> dict:
     """Save user's FPL team ID."""
-    users = _load_users()
+    users = _load_users(email)
     user = users.get(email)
     if not user:
         return {"error": "User not found"}
@@ -511,7 +559,7 @@ def update_team_id(email: str, team_id: int) -> dict:
 
 def check_chat_limit(email: str) -> dict:
     """Check if user has chat messages remaining today."""
-    users = _load_users()
+    users = _load_users(email)
     user = users.get(email)
     if not user:
         return {"allowed": False, "remaining": 0}
@@ -530,7 +578,7 @@ def check_chat_limit(email: str) -> dict:
 
 def increment_chat_count(email: str):
     """Increment daily chat count."""
-    users = _load_users()
+    users = _load_users(email)
     user = users.get(email)
     if not user:
         return
@@ -647,7 +695,7 @@ def verify_email_with_token(token: str) -> dict:
 def resend_verification_email(email: str) -> dict:
     """Generate a fresh verification token and email it to the user."""
     email = (email or "").strip().lower()
-    users = _load_users()
+    users = _load_users(email)
     user = users.get(email)
     if not user:
         # Do not leak which emails exist
@@ -676,7 +724,7 @@ def resend_verification_email(email: str) -> dict:
 def request_password_reset(email: str) -> dict:
     """Generate a reset token and email it. Always returns ok (no enumeration)."""
     email = (email or "").strip().lower()
-    users = _load_users()
+    users = _load_users(email)
     user = users.get(email)
     # Silently succeed even if user does not exist — do not leak account presence
     if user and user.get("password_hash"):
@@ -707,6 +755,7 @@ def reset_password_with_token(token: str, new_password: str) -> dict:
             if now > exp:
                 return {"error": "Reset link expired. Please request a new one."}
             hashed, salt = _hash_password(new_password)
+            user["session_version"] = user.get("session_version", 0) + 1
             user["password_hash"] = hashed
             user["salt"] = salt
             user["reset_token"] = None
@@ -747,11 +796,12 @@ def upsert_oauth_user(email: str, name: str = "", provider: str = "google") -> d
     if not email or "@" not in email:
         return {"error": "Invalid email from provider"}
 
-    users = _load_users()
+    users = _load_users(email)
     user = users.get(email)
     if user is None:
         user = {
             "email": email,
+            "auth_generation": secrets.token_hex(16),
             "name": name or email.split("@")[0],
             "password_hash": None,  # OAuth-only account
             "salt": None,
@@ -781,3 +831,68 @@ def upsert_oauth_user(email: str, name: str = "", provider: str = "google") -> d
 
     token = _create_session(email)
     return {"ok": True, "token": token, "user": _public_user(user)}
+
+
+def reserve_chat_message(email):
+    """Consume one daily request atomically, before paid provider work begins."""
+    with _users_lock:
+        for attempt in range(3):
+            users = _load_users(email)
+            user = users.get(email)
+            if not user:
+                return {"allowed": False, "remaining": 0}
+            _check_plan_expiry(user)
+            limit = PLANS.get(user.get("plan"), PLANS["free"])["limits"]["chat_limit"]
+            today = datetime.now().strftime("%Y-%m-%d")
+            count = user.get("chat_count_today", 0) if user.get("chat_date") == today else 0
+            if count >= limit:
+                return {"allowed": False, "remaining": 0}
+            user.update(chat_date=today, chat_count_today=count + 1)
+            try:
+                _save_users(users)
+                return {"allowed": True, "remaining": limit - count - 1}
+            except ConcurrentAccountUpdate:
+                if attempt == 2:
+                    raise
+
+
+def apply_stripe_subscription(email, event_id, event_created, subscription, customer_id,
+                              allow_subscription_change=False):
+    """Persist an absolute Stripe entitlement and its replay marker in one row."""
+    email = email.strip().lower()
+    with _users_lock:
+        users = _load_users(email)
+        user = users.get(email)
+        if not user:
+            raise AuthStorageError("Billing account is not available yet")
+        if event_id in user.get("stripe_processed_events", []):
+            return {"ok": True, "duplicate": True}
+        if event_created < user.get("stripe_event_created", 0):
+            return {"ok": True, "ignored": True}
+        subscription_id = subscription.get("id")
+        if (user.get("stripe_subscription_id") not in (None, subscription_id)
+                and not allow_subscription_change):
+            return {"ok": True, "ignored": True}
+        status = subscription.get("status")
+        if not subscription_id or not status:
+            raise ValueError("Incomplete subscription state")
+        active = status in ("active", "trialing")
+        period_end = subscription.get("current_period_end")
+        if not period_end:
+            items = (subscription.get("items") or {}).get("data") or []
+            ends = [item.get("current_period_end") for item in items if item.get("current_period_end")]
+            period_end = max(ends) if ends else None
+        if active and not period_end:
+            raise ValueError("Subscription period is unavailable")
+        if user.get("stripe_customer_id") not in (None, customer_id):
+            raise ValueError("Billing customer does not match account")
+        if user.get("plan") != "admin":
+            user["plan"] = "premium" if active else "free"
+            # Existing auth expiry handling uses naive UTC timestamps on Render.
+            user["plan_expires"] = (datetime.fromtimestamp(period_end, timezone.utc)
+                                    .replace(tzinfo=None).isoformat() if active else None)
+        user.update(stripe_customer_id=customer_id, stripe_subscription_id=subscription_id,
+                    stripe_event_created=event_created,
+                    stripe_processed_events=(user.get("stripe_processed_events", []) + [event_id])[-64:])
+        _save_users(users)
+        return {"ok": True}
