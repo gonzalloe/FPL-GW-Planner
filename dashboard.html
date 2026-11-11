@@ -296,6 +296,15 @@ h2 .dgw-alert {
 .gw-alert-bgw { background:rgba(255,82,82,.1); border:1px solid rgba(255,82,82,.3); }
 .gw-alert-normal { background:rgba(0,230,118,.08); border:1px solid rgba(0,230,118,.25); }
 
+.form-history-button { border:0; background:none; color:inherit; font:inherit; font-weight:600; cursor:pointer; padding:4px 2px; text-decoration:underline dotted; text-underline-offset:4px; }
+.form-history-button:hover, .form-history-button:focus-visible { color:var(--accent); }
+.player-history-dialog { margin:auto; width:min(780px,calc(100vw - 32px)); max-height:85vh; overflow:auto; padding:24px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); color:var(--text); box-shadow:var(--shadow-lg); }
+.player-history-dialog::backdrop { background:rgba(0,0,0,.65); backdrop-filter:blur(5px); }
+.player-history-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; position:sticky; top:0; z-index:1; background:var(--surface); padding-bottom:10px; }
+.player-history-heading h3 { min-width:0; overflow-wrap:anywhere; }
+.player-history-live { color:var(--accent); }
+.player-history-detail { color:var(--text2); font-size:12px; white-space:normal; }
+
 /* Cards */
 .card {
   background:var(--gradient-surface);
@@ -1778,6 +1787,15 @@ table tr:hover { background:var(--surface2); }
   </div>
 </footer>
 
+<!-- Player history shared by every table with a Form column -->
+<dialog id="player-history-dialog" class="player-history-dialog" aria-labelledby="player-history-title">
+  <div class="player-history-heading">
+    <h3 id="player-history-title">Player points history</h3>
+    <form method="dialog"><button class="filter-btn" aria-label="Close player history">✕ Close</button></form>
+  </div>
+  <div id="player-history-content" aria-live="polite"></div>
+</dialog>
+
 <!-- Footer Modals (Privacy / Terms) -->
 <div id="footer-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);z-index:10000;align-items:center;justify-content:center;padding:20px;">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;max-width:640px;width:100%;max-height:80vh;overflow-y:auto;padding:32px;box-shadow:var(--shadow-lg);position:relative;">
@@ -3159,6 +3177,73 @@ function renderTeamL5(form) {
 }
 
 
+function formHistoryButton(player) {
+  const value = player.form == null || player.form === '' ? '--' : String(player.form);
+  const id = Number(player.player_id);
+  if (!Number.isSafeInteger(id) || id <= 0) return escapeHtml(value);
+  return `<button type="button" class="form-history-button" data-player-history="${id}" title="View current-season FPL points history" aria-label="View points history for ${escapeHtml(player.name || 'player')}">${escapeHtml(value)}</button>`;
+}
+
+function playerHistoryHTML(data) {
+  const number = value => value == null ? '—' : escapeHtml(String(value));
+  const status = {complete:'Complete', live:'In progress', no_record:'No record', upcoming:'Upcoming'};
+  const rows = data.gameweeks || [];
+  let html = `<p style="margin-bottom:12px;color:var(--text2);">${escapeHtml(data.season || 'Current season')} · Season total: <strong style="color:var(--text);">${number(data.season_points)} points</strong></p>`;
+  html += '<p class="player-history-detail" style="margin-bottom:16px;">Official FPL points before captain multipliers. Double-gameweek fixtures are added together. In-progress points may change. A dash means no recorded value.</p>';
+  html += '<div class="tbl-wrap"><table><thead><tr><th>GW</th><th>Opponent(s)</th><th>Points</th><th>Minutes</th><th>Status</th></tr></thead><tbody>';
+  for (const gw of rows) {
+    const fixtures = gw.fixtures || [];
+    const opponents = fixtures.map(fixture => {
+      const venue = fixture.venue ? ` (${escapeHtml(fixture.venue)})` : '';
+      const detail = fixtures.length > 1 ? ` · ${number(fixture.points)} pts, ${number(fixture.minutes)} min` : '';
+      return `<div>${escapeHtml(fixture.opponent || 'Unknown opponent')}${venue}<span class="player-history-detail">${detail}</span></div>`;
+    }).join('') || '—';
+    html += `<tr${gw.status === 'live' ? ' class="player-history-live"' : ''}><td>GW ${number(gw.gameweek)}</td><td>${opponents}</td><td><strong>${number(gw.points)}</strong></td><td>${number(gw.minutes)}</td><td>${escapeHtml(status[gw.status] || 'Unknown')}</td></tr>`;
+  }
+  html += '</tbody></table></div>';
+  if (!rows.some(gw => (gw.fixtures || []).length)) html += '<p class="player-history-detail" style="margin-top:12px;">No current-season points history has been recorded for this player yet.</p>';
+  return html;
+}
+
+let playerHistoryController = null;
+let playerHistoryRequestId = 0;
+
+async function openPlayerHistory(playerId) {
+  const dialog = document.getElementById('player-history-dialog');
+  const content = document.getElementById('player-history-content');
+  const title = document.getElementById('player-history-title');
+  const requestId = ++playerHistoryRequestId;
+  if (playerHistoryController) playerHistoryController.abort();
+  const controller = new AbortController();
+  playerHistoryController = controller;
+  title.textContent = 'Player points history';
+  content.innerHTML = '<p>Loading current-season points…</p>';
+  if (!dialog.open) dialog.showModal();
+  try {
+    const response = await fetch(`/api/players/${Number(playerId)}/history`, {signal:controller.signal});
+    const data = await response.json().catch(() => ({}));
+    if (requestId !== playerHistoryRequestId || !dialog.open) return;
+    if (!response.ok) throw new Error(data.error || 'Player history is temporarily unavailable. Please try again.');
+    if (!Array.isArray(data.gameweeks)) throw new Error('Player history is temporarily unavailable. Please try again.');
+    title.textContent = `${data.name} — points history${data.team ? ' · ' + data.team : ''}`;
+    content.innerHTML = playerHistoryHTML(data);
+  } catch (error) {
+    if (error.name === 'AbortError' || requestId !== playerHistoryRequestId || !dialog.open) return;
+    content.innerHTML = `<p style="color:var(--red);">${escapeHtml(error.message || 'Player history is temporarily unavailable.')}</p><p class="player-history-detail">Close this window and click Form to try again.</p>`;
+  }
+}
+
+document.addEventListener('click', event => {
+  const button = event.target.closest('button[data-player-history]');
+  if (!button) return;
+  event.stopPropagation();
+  void openPlayerHistory(button.dataset.playerHistory);
+});
+document.getElementById('player-history-dialog').addEventListener('close', () => {
+  playerHistoryRequestId++;
+  if (playerHistoryController) playerHistoryController.abort();
+});
+
 function playerTableHTML(players, captain, vice, sortable = false) {
     const sortArrow = (key) => {
     if (_playersSortKey !== key) return '';
@@ -3278,7 +3363,7 @@ function playerTableHTML(players, captain, vice, sortable = false) {
       <td>${xptsHtml}</td>
       <td>&pound;${p.price}m</td>
       <td>${tierHtml}</td>
-      <td>${p.form || '--'}</td>
+      <td>${formHistoryButton(p)}</td>
       <td><span class="form-str">${formStr}</span></td>
       <td>${wrHtml}</td>
       <td>${startHtml}</td>

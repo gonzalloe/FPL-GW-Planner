@@ -2303,6 +2303,23 @@ def api_fixture_rankings():
         gc.collect()
         _prediction_run_lock.release()
 
+@app.route("/api/players/<int:player_id>/history")
+@limiter.limit("30 per minute")
+def api_player_history(player_id):
+    # Actual FPL history is public. Reuse the existing short-lived FPL caches;
+    # do not initialize a prediction engine or expose any projected fields.
+    from data_fetcher import fetch_player_detail
+    from player_history import build_player_history
+    try:
+        bootstrap = fetch_bootstrap()
+        if not any(player.get("id") == player_id for player in bootstrap.get("elements", [])):
+            return jsonify({"error": "Player not found"}), 404
+        return jsonify(build_player_history(bootstrap, fetch_player_detail(player_id), player_id))
+    except Exception:
+        app.logger.exception("Unable to fetch current-season player history")
+        return jsonify({"error": "Player history is temporarily unavailable. Please try again."}), 503
+
+
 @app.route("/api/search-players")
 @require_premium
 def api_search_players():

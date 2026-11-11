@@ -49,7 +49,7 @@ test('Free team import renders locked prediction fields without simulator initia
     fetch:async()=>({json:async()=>({team_id:101,info:{name:'Public team'},gw_summary:{bank:2,value:100},
       starters:[player],bench:[],transfer_suggestions:[],free_transfers:1,squad_value:100,predicted_points:'🔒'})})};
   vm.createContext(context);
-  for(const name of ['escapeHtml','playerTableHTML','loadMyTeam']){
+  for(const name of ['escapeHtml','formHistoryButton','playerTableHTML','loadMyTeam']){
     const match=source.match(new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`));
     vm.runInContext(match[0],context);
   }
