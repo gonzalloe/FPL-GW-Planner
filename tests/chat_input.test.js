@@ -28,3 +28,17 @@ test('chat normalizes escaped markdown safely', () => {
   assert.ok(!output.includes('&#x20;'));
   assert.ok(output.includes('&lt;script&gt;'));
 });
+
+test('comparison suggestions send the player names written on the button', () => {
+  const handler = html.match(/function askSuggestion\(btn\)\{[^\n]+/)[0];
+  const input = {value:''};
+  let question;
+  const context = {document:{getElementById:()=>input},sendChat:()=>{question=input.value;}};
+  vm.createContext(context);vm.runInContext(handler,context);
+  const label = html.match(/<button[^>]*onclick="askSuggestion\(this\)"[^>]*>(Compare [^<]+)<\/button>/)[1];
+  assert.equal(label,'Compare B.Fernandes vs Palmer');
+  context.askSuggestion({textContent:label});
+  assert.equal(question,label);
+  context.askSuggestion({textContent:'Compare Haaland vs Palmer'});
+  assert.equal(question,'Compare Haaland vs Palmer');
+});

@@ -1495,7 +1495,7 @@ table tr:hover { background:var(--surface2); }
       <div class="card" style="margin-bottom:16px;">
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
           <label style="font-size:13px;color:var(--text2);">Target GW:</label>
-          <select id="sim-gw-select" onchange="onSimGWChange()" style="width:80px;"></select>
+          <select id="sim-gw-select" onchange="onSimGWChange()" style="width:140px;min-width:140px;"></select>
           <label style="font-size:13px;color:var(--text2);margin-left:12px;">Chip:</label>
           <select id="sim-chip-select" onchange="onChipChange()" style="width:120px;">
             <option value="">None</option>
@@ -1601,7 +1601,7 @@ table tr:hover { background:var(--surface2); }
           <div class="chat-text">Hi! I'm your FPL AI assistant. Ask me anything about your squad, player picks, or strategy. Here are some things I can help with:</div>
           <div class="chat-suggestions" id="initial-suggestions">
             <button class="suggestion-btn" onclick="askSuggestion(this)">Who should I captain this GW?</button>
-            <button class="suggestion-btn" onclick="askSuggestion(this)">Compare B.Fernandes vs Haaland</button>
+            <button class="suggestion-btn" onclick="askSuggestion(this)">Compare B.Fernandes vs Palmer</button>
             <button class="suggestion-btn" onclick="askSuggestion(this)">Best DGW players?</button>
             <button class="suggestion-btn" onclick="askSuggestion(this)">Should I use Bench Boost?</button>
             <button class="suggestion-btn" onclick="askSuggestion(this)">Best differential picks?</button>
@@ -2764,8 +2764,24 @@ function predictionSnapshotOwner() {
   return AUTH_USER ? `${AUTH_USER.email}:${AUTH_USER.plan}` : 'guest';
 }
 
+let predictionLoadId = 0;
+let predictionRetryTimer = null;
+
+function clearPredictionLoading() {
+  document.querySelectorAll('#loading-overlay, #data-waiting-card').forEach(el => el.remove());
+  if (window._loadingTicker) clearInterval(window._loadingTicker);
+  if (window.__phaseTimer1) clearTimeout(window.__phaseTimer1);
+  if (window.__phaseTimer2) clearTimeout(window.__phaseTimer2);
+  if (predictionRetryTimer) clearTimeout(predictionRetryTimer);
+  window._loadingTicker = window.__phaseTimer1 = window.__phaseTimer2 = null;
+  predictionRetryTimer = null;
+}
+
 async function loadData() {
   const loadToken = AUTH_TOKEN;
+  const loadId = ++predictionLoadId;
+  const isCurrentLoad = () => loadId === predictionLoadId && loadToken === AUTH_TOKEN;
+  clearPredictionLoading();
   const snapshotOwner = predictionSnapshotOwner();
   void loadGameweekDeadlines();
   // SWR_SNAPSHOT_v1: stale-while-revalidate. On page refresh, if we have a
@@ -2818,7 +2834,7 @@ async function loadData() {
     const r = await fetch('/api/predictions', {headers: authHeaders(), cache: 'default'});
     if (r.ok) {
       const received = await r.json();
-      if (loadToken !== AUTH_TOKEN) return;
+      if (!isCurrentLoad()) return;
       DATA = received;
       if (DATA && DATA.predictions) {
         USER_PLAN = DATA.user_plan || (AUTH_USER?.plan) || 'free';
@@ -2829,12 +2845,7 @@ async function loadData() {
           const snap = Object.assign({}, DATA, {__savedAt: Date.now(), __owner: snapshotOwner});
           sessionStorage.setItem('fpl_preds_snapshot_v2', JSON.stringify(snap));
         } catch(e) { /* quota exceeded / private mode: silently skip */ }
-        // _clearPhaseTimers();
-        if (window.__phaseTimer1) clearTimeout(window.__phaseTimer1);
-        if (window.__phaseTimer2) clearTimeout(window.__phaseTimer2);
-        if (window._loadingTicker) { clearInterval(window._loadingTicker); window._loadingTicker = null; }
-        const overlay = document.getElementById('loading-overlay');
-        if (overlay) overlay.remove();
+        clearPredictionLoading();
         render();
         // Prewarm secondary endpoints in the background so page switches feel instant
         prewarmSecondaryData();
@@ -2845,6 +2856,8 @@ async function loadData() {
     console.warn('Cached predictions not available:', e.message);
   }
 
+  if (!isCurrentLoad()) return;
+
   // Fallback: trigger prediction run (admin only) or wait for auto-refresh
   const isAdmin = AUTH_USER?.plan === 'admin';
   if (isAdmin) {
@@ -2852,16 +2865,15 @@ async function loadData() {
       const overlay = document.getElementById('loading-overlay');
       if (overlay) overlay.querySelector('p').textContent = 'Predictions are being generated — this can take a few minutes. Checking again shortly...';
       await fetch('/api/refresh', {headers: authHeaders()});  // fire-and-forget, backend already guards duplicates
-      setTimeout(() => location.reload(), 15000);  // poll by reload instead of blocking on the result
-      return;
+      if (!isCurrentLoad()) return;
     } catch(e2) {
       console.error('Failed to run predictions:', e2.message);
     }
   }
 
-  // Predictions not ready yet — show waiting message with auto-retry
-  const overlay = document.getElementById('loading-overlay');
-  if (overlay) overlay.remove();
+  if (!isCurrentLoad()) return;
+  // Replace the initial loader with one waiting card and one retry loop.
+  clearPredictionLoading();
   if (mainEl) {
     const errDiv = document.createElement('div');
     errDiv.className = 'card';
@@ -2869,24 +2881,24 @@ async function loadData() {
     errDiv.style.cssText = 'margin-top:40px;text-align:center;padding:30px;';
     errDiv.innerHTML = `<div style="font-size:32px;margin-bottom:12px;">⏳</div>
       <h3>Predictions are being generated...</h3>
-      <p style="color:var(--text3);margin-top:8px;">The server just started up. Predictions will be ready in about 4-5 minutes.</p>
+      <p style="color:var(--text3);margin-top:8px;">The server is preparing prediction data. This may take a few minutes.</p>
       <div style="margin-top:16px;width:200px;height:4px;background:var(--surface3);border-radius:2px;margin:16px auto 0;overflow:hidden;">
         <div style="width:60%;height:100%;background:var(--accent);border-radius:2px;animation:loading 1.5s ease-in-out infinite;"></div>
       </div>
       <p style="margin-top:12px;font-size:12px;color:var(--text3);">Auto-retrying in 3s...</p>`;
-    mainEl.prepend(errDiv);
+    (overviewPage || mainEl).prepend(errDiv);
     // Exponential-ish backoff: 3s, 5s, 8s, 12s, then 15s forever. Jumps on
     // the server the instant it finishes the first cold-start prediction run.
     const _delays = [3000, 5000, 8000, 12000];
     let _attempt = 0;
     const _hintEl = errDiv.querySelector('p:last-child');
     const _retry = async function retry() {
-      if (loadToken !== AUTH_TOKEN) return;
+      if (!isCurrentLoad()) return;
       try {
         const r3 = await fetch('/api/predictions?_t=' + Date.now(), {headers: authHeaders()});
         if (r3.ok) {
           const d = await r3.json();
-          if (loadToken !== AUTH_TOKEN) return;
+          if (!isCurrentLoad()) return;
           if (d && d.predictions) {
             DATA = d;
             USER_PLAN = d.user_plan || (AUTH_USER?.plan) || 'free';
@@ -2895,19 +2907,19 @@ async function loadData() {
               const snap = Object.assign({}, d, {__savedAt: Date.now(), __owner: snapshotOwner});
               sessionStorage.setItem('fpl_preds_snapshot_v2', JSON.stringify(snap));
             } catch(e) {}
-            const waiting = document.getElementById('data-waiting-card');
-            if (waiting) waiting.remove();
+            clearPredictionLoading();
             render();
             return;
           }
         }
       } catch(e) {}
+      if (!isCurrentLoad()) return;
       const next = _delays[_attempt] || 15000;
       _attempt++;
       if (_hintEl) _hintEl.textContent = 'Auto-retrying in ' + Math.round(next/1000) + 's (attempt ' + _attempt + ')...';
-      setTimeout(_retry, next);
+      predictionRetryTimer = setTimeout(_retry, next);
     };
-    setTimeout(_retry, _delays[0]);
+    predictionRetryTimer = setTimeout(_retry, _delays[0]);
   }
 }
 
