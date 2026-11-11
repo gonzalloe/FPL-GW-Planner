@@ -1531,6 +1531,21 @@ def _filter_chip_analysis(chip_analysis, used_codes):
     return ca
 # --- FILTER_USED_CHIPS_END ---
 
+@app.route("/api/gameweek-deadlines")
+@cached_response(ttl_seconds=300, key_prefix="gameweek-deadlines")
+def api_gameweek_deadlines():
+    """Official event deadlines, independent of the expensive prediction cache."""
+    try:
+        events = fetch_bootstrap().get("events", [])
+        return jsonify({"events": [
+            {"id": event["id"], "deadline_time": event.get("deadline_time")}
+            for event in events if event.get("id") is not None
+        ]})
+    except Exception:
+        app.logger.exception("Could not load FPL gameweek deadlines")
+        return jsonify({"error": "Gameweek deadlines are temporarily unavailable"}), 503
+
+
 @app.route("/api/predictions")
 def api_predictions():
     preds, data, cache_status = _cached_predictions()

@@ -288,6 +288,9 @@ h2 .dgw-alert {
   border-radius:var(--radius-sm); font-size:12px; margin-top:10px;
   backdrop-filter:blur(8px); position:relative; z-index:1;
 }
+.gw-deadline { margin-left:auto; color:var(--text2); font-size:12px; }
+.gw-alert-item { flex-wrap:wrap; }
+.deadline-header { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
 .gw-alert-dgw { background:rgba(255,167,38,.12); border:1px solid rgba(255,167,38,.3); }
 .gw-alert-bgw { background:rgba(255,82,82,.1); border:1px solid rgba(255,82,82,.3); }
 .gw-alert-normal { background:rgba(0,230,118,.08); border:1px solid rgba(0,230,118,.25); }
@@ -1477,7 +1480,7 @@ table tr:hover { background:var(--surface2); }
 
     <!-- Tab: My Squad -->
     <div class="mtab active" id="mtab-squad">
-      <div class="card"><h3 style="margin-bottom:12px;">Starting XI</h3><div class="tbl-wrap"><table id="myteam-xi"></table></div></div>
+      <div class="card"><div class="deadline-header"><h3 style="margin:0;">Starting XI</h3><span class="gw-deadline" id="myteam-deadline"></span></div><div class="tbl-wrap"><table id="myteam-xi"></table></div></div>
       <div class="card"><h3 style="margin-bottom:12px;">Bench</h3><div class="tbl-wrap"><table id="myteam-bench"></table></div></div>
       <div class="card" id="myteam-suggestions" style="display:none;">
         <h3 style="margin-bottom:12px;">💡 AI Transfer Suggestions</h3>
@@ -2711,7 +2714,45 @@ function prewarmSecondaryData() {
 }
 
 // ── Load Data (robust) ──
+let GAMEWEEK_DEADLINES = [];
+
+function gameweekDeadlineText(events, gw, now = Date.now()) {
+  const event = events.find(event => Number(event.id) === Number(gw));
+  const timestamp = event?.deadline_time;
+  const deadline = typeof timestamp === 'string' && timestamp.trim() ? new Date(timestamp) : null;
+  if (!deadline || !Number.isFinite(deadline.getTime())) return 'Transfer deadline unavailable';
+  const formatted = deadline.toLocaleString(undefined, {
+    weekday:'short', day:'numeric', month:'short', year:'numeric',
+    hour:'2-digit', minute:'2-digit', timeZoneName:'short'
+  });
+  return `GW ${event.id} transfer deadline: ${formatted}${deadline.getTime() <= now ? ' (passed)' : ''}`;
+}
+
+function renderGameweekDeadlines() {
+  const targets = [
+    ['overview-deadline', DATA?.gameweek],
+    ['myteam-deadline', MY_TEAM_DATA?.info?.planning_gw]
+  ];
+  for (const [id, gw] of targets) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = gameweekDeadlineText(GAMEWEEK_DEADLINES, gw);
+  }
+}
+
+async function loadGameweekDeadlines() {
+  try {
+    const response = await fetch('/api/gameweek-deadlines');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    GAMEWEEK_DEADLINES = Array.isArray(data.events) ? data.events : [];
+  } catch (error) {
+    console.warn('Gameweek deadlines:', error);
+  }
+  renderGameweekDeadlines();
+}
+
 async function loadData() {
+  void loadGameweekDeadlines();
   // SWR_SNAPSHOT_v1: stale-while-revalidate. On page refresh, if we have a
   // snapshot from the last successful load (<= 10 min old), render it instantly
   // so the user NEVER sees a "server is waking up" screen. We still fetch fresh
@@ -2904,6 +2945,8 @@ function render() {
   }
 
   alertsEl.innerHTML = alertsHtml;
+  alertsEl.lastElementChild?.insertAdjacentHTML('beforeend', '<span class="gw-deadline" id="overview-deadline"></span>');
+  renderGameweekDeadlines();
 
   try { renderOverviewStats(squad, gwInfo, chips); } catch(e) { console.error('renderOverviewStats:', e); }
   try { renderPitch(squad); } catch(e) { console.error('renderPitch:', e); }
@@ -3597,6 +3640,7 @@ async function loadMyTeam() {
     }
 
     MY_TEAM_DATA = data;
+    renderGameweekDeadlines();
     MY_TEAM_ORIGINAL = JSON.parse(JSON.stringify(data));
     updateSimulatorFreeTransferDisplay();
     SIM_BASE_BANK = Number(data.gw_summary?.bank ?? 0);
