@@ -26,3 +26,8 @@ _check*.py
 !tests/test_chat_context.py
 
 !tests/test_model_analysis.py
+
+# Local macOS metadata and Python virtual environments
+.DS_Store
+.venv/
+venv/
