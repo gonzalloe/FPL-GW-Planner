@@ -55,7 +55,7 @@ test('Free team import renders locked prediction fields without simulator initia
   }
   await context.loadMyTeam();
   assert.match(get('myteam-xi').innerHTML,/Public Player/);
-  assert.match(get('myteam-xi').innerHTML,/<th>Win Prob<\/th>\s*<th[^>]*>TOT_PTS<\/th>\s*<th[^>]*>xPts/);
+  assert.match(get('myteam-xi').innerHTML,/<th[^>]*>Win Prob<\/th>\s*<th[^>]*>TOT_PTS<\/th>\s*<th[^>]*>xPts/);
   assert.match(get('myteam-xi').innerHTML,/<td>0<\/td>/);
   assert.match(get('myteam-xi').innerHTML,/🔒/);
   assert.equal(get('myteam-loaded').style.display,'');

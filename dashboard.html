@@ -3258,19 +3258,19 @@ function playerTableHTML(players, captain, vice, sortable = false) {
   };
   const sortClass = sortable ? ' sortable-th' : '';
   let html = `<thead><tr>
-    <th>Pos</th>
-    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('name')"` : ''}>Player${sortArrow('name')}</th>
-    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('team')"` : ''}>Team${sortArrow('team')}</th>
-    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('status')"` : ''}>Status${sortArrow('status')}</th>
-    <th>Fixtures</th>
-    <th>Win Prob</th>
+    <th title="FPL position: GKP (goalkeeper), DEF (defender), MID (midfielder) or FWD (forward)">Pos</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('name')"` : ''} title="Player name">Player${sortArrow('name')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('team')"` : ''} title="The player's current club">Team${sortArrow('team')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('status')"` : ''} title="Player availability, including injury, suspension and blank-gameweek status. Hover a flagged status for details.">Status${sortArrow('status')}</th>
+    <th title="Opponents for the displayed gameweek. H = home, A = away. Fixture difficulty: 1 = easiest, 5 = hardest.">Fixtures</th>
+    <th title="Model probability that the player's team wins each fixture in the displayed gameweek">Win Prob</th>
     <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('total_points')"` : ''} title="Actual FPL points earned this season">TOT_PTS${sortArrow('total_points')}</th>
-    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('xpts')"` : ''}>xPts${sortArrow('xpts')}</th>
-    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('price')"` : ''}>Price${sortArrow('price')}</th>
-    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('tier')"` : ''}>Tier${sortArrow('tier')}</th>
-    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('form')"` : ''}>Form${sortArrow('form')}</th>
-    <th>Team L5</th>
-    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('wr')"` : ''}>Team WR${sortArrow('wr')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('xpts')"` : ''} title="Predicted FPL points for the displayed gameweek, including all its fixtures, before captain multipliers">xPts${sortArrow('xpts')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('price')"` : ''} title="Current player price in millions of pounds. Your selling price may differ.">Price${sortArrow('price')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('tier')"` : ''} title="Model classification of starting reliability, taking player availability into account">Tier${sortArrow('tier')}</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('form')"` : ''} title="Official FPL recent form rating. Click a value to view current-season gameweek points history.">Form${sortArrow('form')}</th>
+    <th title="Team results from the last five completed matches: W = win, D = draw, L = loss">Team L5</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('wr')"` : ''} title="Team win rate in completed matches this season">Team WR${sortArrow('wr')}</th>
     <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('start_prob')"` : ''} title="Model probability of starting the next fixture, including availability. -- means insufficient data.">Start %${sortArrow('start_prob')}</th>
   </tr></thead><tbody>`;
 
