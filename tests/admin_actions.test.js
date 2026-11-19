@@ -40,7 +40,7 @@ test('Free team import renders locked prediction fields without simulator initia
     if(!elements.has(id))elements.set(id,{value:id==='team-id-input'?'101':'',innerHTML:'',style:{}});
     return elements.get(id);
   };
-  const player={player_id:1,name:'Public Player',team:'ABC',position:'MID',price:5,
+  const player={player_id:1,name:'Public Player',team:'ABC',position:'MID',price:5,total_points:0,
     predicted_points:'🔒',raw_xpts:'🔒',team_season_wr:'🔒',starter_quality:{tier:'🔒',p_start:'🔒'},
     availability:{status:'available'},fixtures:[{opponent:'XYZ',venue:'H',fdr:3,win_probability:'🔒'}]};
   const context={document:{getElementById:get},console:{log:()=>{}},authHeaders:()=>({}),
@@ -49,12 +49,14 @@ test('Free team import renders locked prediction fields without simulator initia
     fetch:async()=>({json:async()=>({team_id:101,info:{name:'Public team'},gw_summary:{bank:2,value:100},
       starters:[player],bench:[],transfer_suggestions:[],free_transfers:1,squad_value:100,predicted_points:'🔒'})})};
   vm.createContext(context);
-  for(const name of ['escapeHtml','formHistoryButton','playerTableHTML','loadMyTeam']){
+  for(const name of ['escapeHtml','formHistoryButton','playerTotalPoints','playerTableHTML','loadMyTeam']){
     const match=source.match(new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`));
     vm.runInContext(match[0],context);
   }
   await context.loadMyTeam();
   assert.match(get('myteam-xi').innerHTML,/Public Player/);
+  assert.match(get('myteam-xi').innerHTML,/<th>Win Prob<\/th>\s*<th[^>]*>TOT_PTS<\/th>\s*<th[^>]*>xPts/);
+  assert.match(get('myteam-xi').innerHTML,/<td>0<\/td>/);
   assert.match(get('myteam-xi').innerHTML,/🔒/);
   assert.equal(get('myteam-loaded').style.display,'');
   assert.doesNotMatch(get('myteam-content').innerHTML,/Error:/);

@@ -3244,6 +3244,13 @@ document.getElementById('player-history-dialog').addEventListener('close', () =>
   if (playerHistoryController) playerHistoryController.abort();
 });
 
+function playerTotalPoints(player) {
+  const value = player.total_points;
+  if (!['number', 'string'].includes(typeof value) || String(value).trim() === '') return null;
+  const points = Number(value);
+  return Number.isSafeInteger(points) ? points : null;
+}
+
 function playerTableHTML(players, captain, vice, sortable = false) {
     const sortArrow = (key) => {
     if (_playersSortKey !== key) return '';
@@ -3257,6 +3264,7 @@ function playerTableHTML(players, captain, vice, sortable = false) {
     <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('status')"` : ''}>Status${sortArrow('status')}</th>
     <th>Fixtures</th>
     <th>Win Prob</th>
+    <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('total_points')"` : ''} title="Actual FPL points earned this season">TOT_PTS${sortArrow('total_points')}</th>
     <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('xpts')"` : ''}>xPts${sortArrow('xpts')}</th>
     <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('price')"` : ''}>Price${sortArrow('price')}</th>
     <th class="${sortClass}" ${sortable ? `onclick="sortPlayersBy('tier')"` : ''}>Tier${sortArrow('tier')}</th>
@@ -3360,6 +3368,7 @@ function playerTableHTML(players, captain, vice, sortable = false) {
       <td>${statusHtml}</td>
       <td>${renderFixtures(p.fixtures)}</td>
       <td>${winProbHtml}</td>
+      <td>${playerTotalPoints(p) ?? '--'}</td>
       <td>${xptsHtml}</td>
       <td>&pound;${p.price}m</td>
       <td>${tierHtml}</td>
@@ -3557,6 +3566,8 @@ function sortPlayersTable(players) {
         return String(p.team_name || p.team || '').toLowerCase();
       case 'status':
         return String(p.availability?.status || 'unknown').toLowerCase();
+      case 'total_points':
+        return playerTotalPoints(p);
       case 'xpts':
         return Number(p.predicted_points) || 0;
       case 'price':
