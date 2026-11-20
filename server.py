@@ -1830,6 +1830,7 @@ def api_my_team():
 
         response_data = {
             "team_id": team_id,
+            "market_prices": team_data.get("market_prices", {}),
             "info": enriched.get("info", {}),
             "gw_summary": enriched.get("gw_summary", {}),
             "starters": enriched.get("starters", []),
@@ -2471,6 +2472,16 @@ def api_simulate_transfer():
                 )
             }), 404
 
+        selling_price = data.get("selling_price")
+        purchase_price = data.get("purchase_price")
+        for value in (selling_price, purchase_price):
+            if value is not None:
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 <= value <= 30):
+                    return jsonify({"error": "Invalid simulated transfer price"}), 400
+        selling_source = data.get("selling_price_source") if selling_price is not None else "market_estimate"
+        selling_price = round(selling_price if selling_price is not None else out_p.get("price", 0), 1)
+        purchase_price = round(purchase_price if purchase_price is not None else in_p.get("price", 0), 1)
+
         # ============================================================
         # CURRENT XI
         # ============================================================
@@ -2545,6 +2556,9 @@ def api_simulate_transfer():
                 "team": out_p.get("team", "?"),
                 "position": out_p.get("position", "?"),
                 "price": out_p.get("price", 0),
+                "position_id": out_p.get("position_id"),
+                "selling_price": selling_price,
+                "selling_price_source": selling_source or "fpl_pick",
                 "predicted_points": out_p.get(
                     "predicted_points", 0
                 ),
@@ -2556,7 +2570,9 @@ def api_simulate_transfer():
                 "name": in_p.get("name", "?"),
                 "team": in_p.get("team", "?"),
                 "position": in_p.get("position", "?"),
-                "price": in_p.get("price", 0),
+                "price": purchase_price,
+                "purchase_price": purchase_price,
+                "position_id": in_p.get("position_id"),
                 "predicted_points": in_p.get(
                     "predicted_points", 0
                 ),
@@ -2588,8 +2604,7 @@ def api_simulate_transfer():
                 ),
 
                 "price_delta": round(
-                    in_p.get("price", 0)
-                    - out_p.get("price", 0),
+                    purchase_price - selling_price,
                     1
                 ),
             },

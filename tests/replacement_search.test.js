@@ -9,10 +9,10 @@ function setup(){
     SIM_SELL_ID:1,SIM_BUY_ID:null,authHeaders:()=>({'Authorization':'Bearer test-session','Content-Type':'application/json'}),
     document:{getElementById:get,querySelectorAll:()=>[],querySelector:()=>null},
     renderBuyList:players=>rendered.push(players),renderFixtures:()=>'',addToTransferQueue:data=>queued.push(data),
-    fetch:async(url,options)=>{requests.push({url,options});return {ok:true,json:async()=>({players:[{player_id:80,name:'Van Hecke'}],impact:{},in_player:{name:'Van Hecke'}})};},
+    fetch:async(url,options)=>{requests.push({url,options});return {ok:true,json:async()=>({players:[{player_id:80,name:'Van Hecke'}],impact:{},out_player:{selling_price:5,selling_price_source:'fpl_pick'},in_player:{name:'Van Hecke',purchase_price:5}})};},
     setTimeout:cb=>{const id=++timerId;timers.set(id,cb);return id;},clearTimeout:id=>timers.delete(id)};
   vm.createContext(context);vm.runInContext('let _searchTimeout=null;let replacementSearchId=0;let replacementSearchController=null;',context);
-  for(const name of ['escapeHtml','fetchSimulatorJSON','showReplacementError','searchReplacements','searchReplacementById','selectBuyPlayer','quickBuyPlayer']){
+  for(const name of ['escapeHtml','simulatorTransferPrices','fetchSimulatorJSON','showReplacementError','searchReplacements','searchReplacementById','selectBuyPlayer','quickBuyPlayer']){
     vm.runInContext(source.match(new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`))[0],context);
   }
   const run=()=>{const [id,callback]=Array.from(timers.entries()).pop();timers.delete(id);return callback();};

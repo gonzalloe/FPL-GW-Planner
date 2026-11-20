@@ -296,6 +296,7 @@ def fetch_my_team(team_id: int) -> dict:
     # ================================================================
 
     events = []
+    bootstrap_data = {}
 
     try:
         bootstrap_url = f"{FPL_API_BASE}/bootstrap-static/"
@@ -406,7 +407,7 @@ def fetch_my_team(team_id: int) -> dict:
             if isinstance(transfer_data, list):
                 all_transfers = transfer_data
                 transfer_endpoint_ok = True
-                result["transfers"] = all_transfers[:20]
+                result["transfers"] = all_transfers
 
     except Exception as e:
         print("[FT] Transfer endpoint failed:", repr(e))
@@ -752,7 +753,48 @@ def fetch_my_team(team_id: int) -> dict:
         "free_hit_gw": free_hit_gw,
     }
 
+    result["market_prices"] = {
+        player["id"]: player["now_cost"] / 10
+        for player in bootstrap_data.get("elements", [])
+        if player.get("id") is not None and player.get("now_cost") is not None
+    }
+    result["picks_event"] = picks_event
+
     return result
+
+
+def player_transfer_prices(team_data, pick, market_price):
+    """Use explicit selling prices or reconstruct them from permanent purchases.
+
+    Public picks omit original GW1 purchase prices. Keep those unknown instead
+    of presenting the current market price as a confirmed selling price.
+    """
+    purchase = pick.get("purchase_price")
+    selling = pick.get("selling_price")
+    source = "fpl_pick" if selling is not None else None
+    if purchase is None:
+        free_hits = {int(chip["event"]) for chip in team_data.get("chips", [])
+                     if chip.get("name") == "freehit" and chip.get("event") is not None}
+        cutoff = team_data.get("picks_event")
+        transfers = sorted(team_data.get("transfers", []),
+                           key=lambda transfer: (transfer.get("event", 0), transfer.get("time", "")))
+        for transfer in transfers:
+            if transfer.get("event") in free_hits:
+                continue
+            if cutoff is not None and transfer.get("event", 0) > cutoff:
+                continue
+            if transfer.get("element_in") == pick.get("element") and transfer.get("element_in_cost") is not None:
+                purchase = int(transfer["element_in_cost"])
+    if selling is None and purchase is not None and market_price is not None:
+        current = int(round(float(market_price) * 10))
+        purchase = int(purchase)
+        selling = current if current <= purchase else purchase + (current - purchase) // 2
+        source = "purchase_history"
+    return {
+        "purchase_price": int(purchase) / 10 if purchase is not None else None,
+        "selling_price": int(selling) / 10 if selling is not None else None,
+        "selling_price_source": source or "unknown",
+    }
 
 
 def enrich_my_team(team_data: dict, player_map: dict, predictions: list) -> dict:
@@ -770,19 +812,12 @@ def enrich_my_team(team_data: dict, player_map: dict, predictions: list) -> dict
         pid = pick.get("element")
         # player_map contains our prediction data which has all the fields we need
         pred = player_map.get(pid, {})
+        market_price = team_data.get("market_prices", {}).get(pid, pred.get("price"))
+        prices = player_transfer_prices(team_data, pick, market_price)
 
         enriched = {
             "player_id": pid,
-            "purchase_price": (
-                float(pick["purchase_price"]) / 10
-                if pick.get("purchase_price") is not None
-                else None
-            ),
-            "selling_price": (
-                float(pick["selling_price"]) / 10
-                if pick.get("selling_price") is not None
-                else None
-            ),            
+            **prices,
             # From our predictions (which already have the right field names)
             "name": pred.get("name", "Unknown"),
             "full_name": pred.get("full_name", "Unknown"),
@@ -790,7 +825,7 @@ def enrich_my_team(team_data: dict, player_map: dict, predictions: list) -> dict
             "team_name": pred.get("team_name", "Unknown"),
             "position": pred.get("position", "???"),
             "position_id": pred.get("position_id", 0),
-            "price": pred.get("price", 0),
+            "price": market_price if market_price is not None else pred.get("price", 0),
             "selected_by_percent": pred.get("selected_by_percent", "0"),
             "form": pred.get("form", 0),
             "ppg": pred.get("ppg", 0),

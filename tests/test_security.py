@@ -171,3 +171,17 @@ class SecurityRouteTests(unittest.TestCase):
             self.assertEqual(self.client.get('/api/search-players?id=bad').status_code,400)
         with patch.object(server,'_cached_predictions',return_value=([],{},'preparing')):
             self.assertEqual(self.client.get('/api/search-players?q=hecke').status_code,503)
+
+
+    def test_simulation_uses_personal_selling_price_for_net_cost(self):
+        self.user={'plan':'premium','email':'premium@example.test'}
+        _,_,_,preds,_,_=context()
+        preds[2]['price']=5.2;preds[16]['price']=5.3
+        with patch.object(server,'_cached_predictions',return_value=(preds,{'gameweek':11},'ready')):
+            result=self.client.post('/api/simulate-transfer',json={
+                'squad_ids':list(range(1,16)),'out_id':3,'in_id':17,'gw':11,
+                'selling_price':5.1,'selling_price_source':'purchase_history','purchase_price':5.3})
+            self.assertEqual(result.status_code,200)
+            self.assertEqual(result.json['out_player']['selling_price'],5.1)
+            self.assertEqual(result.json['in_player']['purchase_price'],5.3)
+            self.assertEqual(result.json['impact']['price_delta'],.2)

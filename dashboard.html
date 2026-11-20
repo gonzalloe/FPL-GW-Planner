@@ -4082,6 +4082,10 @@ function applyTransferToSquadHelper(t) {
         name: t.in_name,
         team: t.in_team,
         price: t.in_price,
+        purchase_price: t.in_price,
+        selling_price: t.in_price,
+        selling_price_source: 'simulated_purchase',
+        position_id: t.in_player_full.position_id || old.position_id,
         is_starter: old.is_starter,
         position_in_squad: old.position_in_squad,
         is_new: true,
@@ -4409,6 +4413,25 @@ function selectSellPlayer(pid) {
   searchReplacements();
 }
 
+function simulatorTransferPrices(outId, inId, incoming = null) {
+  const players = [...(MY_TEAM_DATA?.starters || []), ...(MY_TEAM_DATA?.bench || [])];
+  const outgoing = players.find(player => player.player_id === outId);
+  const market = MY_TEAM_DATA?.market_prices || {};
+  const current = market[outId] ?? outgoing?.price;
+  let selling = outgoing?.selling_price ?? null;
+  let source = outgoing?.selling_price_source || 'unknown';
+  if (selling == null && outgoing?.purchase_price != null && current != null) {
+    const paid = Math.round(Number(outgoing.purchase_price) * 10);
+    const now = Math.round(Number(current) * 10);
+    selling = (now <= paid ? now : paid + Math.floor((now - paid) / 2)) / 10;
+    source = 'purchase_history';
+  }
+  if (selling == null) { selling = current ?? null; source = 'market_estimate'; }
+  const cached = (typeof ALL_PREDICTIONS === 'undefined' ? [] : ALL_PREDICTIONS).find(player => player.player_id === inId);
+  return {selling_price:selling == null ? null : Number(selling), selling_price_source:source,
+          purchase_price:market[inId] ?? incoming?.purchase_price ?? incoming?.price ?? cached?.price ?? null};
+}
+
 async function fetchSimulatorJSON(url, options = {}) {
   const response = await fetch(url, {...options, headers:{...authHeaders(), ...(options.headers || {})}});
   const data = await response.json().catch(() => null);
@@ -4541,7 +4564,7 @@ async function selectBuyPlayer(pid) {
     const targetGW = document.getElementById('sim-gw-select')?.value;
     const data = await fetchSimulatorJSON('/api/simulate-transfer', {
       method: 'POST',
-      body: JSON.stringify({ squad_ids: squadIds, out_id: SIM_SELL_ID, in_id: SIM_BUY_ID, gw: targetGW ? parseInt(targetGW) : undefined })
+      body: JSON.stringify({ ...simulatorTransferPrices(SIM_SELL_ID, SIM_BUY_ID), squad_ids: squadIds, out_id: SIM_SELL_ID, in_id: SIM_BUY_ID, gw: targetGW ? parseInt(targetGW) : undefined })
     });
 
     const impact = data.impact || {};
@@ -4554,6 +4577,9 @@ async function selectBuyPlayer(pid) {
       <div class="sim-impact-card"><div class="label">Multi-GW Value</div><div class="val" style="color:var(--blue);">${data.total_multi_gw_gain >= 0 ? '+' : ''}${data.total_multi_gw_gain}</div><div style="font-size:11px;color:var(--text3);">Next 4 GWs</div></div>
       <div class="sim-impact-card"><div class="label">Price Change</div><div class="val">${impact.price_delta >= 0 ? '+' : ''}&pound;${impact.price_delta}m</div></div>
     </div>`;
+
+    html += `<p style="margin-top:10px;">Sell: £${Number(data.out_player.selling_price).toFixed(1)}m · Buy: £${Number(data.in_player.purchase_price).toFixed(1)}m</p>`;
+    if (data.out_player.selling_price_source === 'market_estimate') html += '<p style="color:var(--orange);font-size:12px;">Selling price is estimated: the public data does not contain this player’s purchase price.</p>';
 
     // Multi-GW breakdown
     if (data.multi_gw?.length) {
@@ -4591,7 +4617,7 @@ async function quickBuyPlayer(pid) {
     const targetGW = document.getElementById('sim-gw-select')?.value;
     const data = await fetchSimulatorJSON('/api/simulate-transfer', {
       method: 'POST',
-      body: JSON.stringify({ squad_ids: squadIds, out_id: SIM_SELL_ID, in_id: pid, gw: targetGW ? parseInt(targetGW) : undefined })
+      body: JSON.stringify({ ...simulatorTransferPrices(SIM_SELL_ID, pid), squad_ids: squadIds, out_id: SIM_SELL_ID, in_id: pid, gw: targetGW ? parseInt(targetGW) : undefined })
     });
     addToTransferQueue(data);
   } catch(e) {
@@ -4605,8 +4631,9 @@ function addToTransferQueue(simData) {
   const inPlayer = simData.in_player;
   const targetGW = simData.gameweek || SIM_CURRENT_GW;
 
-  const outSellPrice = Number(outPlayer.selling_price ?? outPlayer.sell_price ?? outPlayer.price ?? 0);
-  const inPurchasePrice = Number(inPlayer.purchase_price ?? inPlayer.price ?? 0);
+  const prices = simulatorTransferPrices(outPlayer.player_id, inPlayer.player_id, inPlayer);
+  const outSellPrice = Number(prices.selling_price ?? outPlayer.selling_price ?? outPlayer.price ?? 0);
+  const inPurchasePrice = Number(prices.purchase_price ?? inPlayer.purchase_price ?? inPlayer.price ?? 0);
   TRANSFER_QUEUE.push({
     out_id: outPlayer.player_id,
     out_name: outPlayer.name,
@@ -4617,6 +4644,8 @@ function addToTransferQueue(simData) {
 
     // Actual FPL selling price — used for budget.
     out_sell_price: outSellPrice,
+    out_sell_price_source: prices.selling_price_source,
+    pricing_version: 2,
 
     out_position_id:
       outPlayer.position_id ||
@@ -4645,7 +4674,10 @@ function addToTransferQueue(simData) {
       team_name: inPlayer.team,
       position: inPlayer.position,
       position_id: outPlayer.position_id || ({'GKP':1,'DEF':2,'MID':3,'FWD':4}[inPlayer.position] || 0),
-      price: inPlayer.price,
+      price: inPurchasePrice,
+      purchase_price: inPurchasePrice,
+      selling_price: inPurchasePrice,
+      selling_price_source: 'simulated_purchase',
       predicted_points: inPlayer.predicted_points || 0,
       form: inPlayer.form || 0,
       is_dgw: inPlayer.is_dgw || false,
@@ -4675,8 +4707,7 @@ function addToTransferQueue(simData) {
 
     // Update bank
     if (MY_TEAM_DATA.gw_summary) {
-      const currentBank = Number(MY_TEAM_DATA.gw_summary.bank ?? 0);
-      MY_TEAM_DATA.gw_summary.bank = (Math.round(currentBank * 10) + Math.round(outSellPrice * 10) - Math.round(inPurchasePrice * 10)) / 10;
+      MY_TEAM_DATA.gw_summary.bank = getSimulatorBank();
     }
 
     // Recalculate squad value and predicted points
@@ -4717,7 +4748,7 @@ function getSimulatorBank() {
 
 function updateSimulatorBankDisplay() {
   const element = document.getElementById('sim-budget-display');
-  if (element) element.textContent = 'Bank: £' + getSimulatorBank().toFixed(1) + 'm';
+  if (element) element.textContent = (TRANSFER_QUEUE.some(t => t.out_sell_price_source === 'market_estimate') ? 'Bank (estimated): £' : 'Bank: £') + getSimulatorBank().toFixed(1) + 'm';
 }
 
 function renderTransferQueue() {
@@ -4739,7 +4770,7 @@ function renderTransferQueue() {
   TRANSFER_QUEUE.forEach((t, i) => {
     const gainColor = t.gain >= 0 ? 'var(--accent)' : 'var(--red)';
     html += `<div class="sim-queue-item">
-      <div class="out"><strong>${t.out_name}</strong><br><span style="font-size:10px;">${t.out_team} &middot; &pound;${t.out_price}m</span></div>
+      <div class="out"><strong>${t.out_name}</strong><br><span style="font-size:10px;">${t.out_team} &middot; sell &pound;${Number(t.out_sell_price ?? t.out_price).toFixed(1)}m${t.out_sell_price_source === 'market_estimate' ? ' (est.)' : ''}</span></div>
       <div style="color:var(--accent);font-size:16px;">&rarr;</div>
       <div class="in"><strong>${t.in_name}</strong><br><span style="font-size:10px;">${t.in_team} &middot; &pound;${t.in_price}m</span></div>
       <div class="gain" style="color:${gainColor};">${t.gain >= 0 ? '+' : ''}${t.gain}</div>
@@ -4883,18 +4914,29 @@ function loadSimState() {
     const currentIds = new Set();
     [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])].forEach(p => currentIds.add(p.player_id));
 
-    const valid = state.transfers.every(t => currentIds.has(t.out_id));
+    const valid = state.transfers.every(transfer => {
+      if (!currentIds.has(transfer.out_id) || currentIds.has(transfer.in_id) || !transfer.in_player_full) return false;
+      currentIds.delete(transfer.out_id);
+      currentIds.add(transfer.in_id);
+      return true;
+    });
     if (!valid) {
-      // Saved state is stale (squad changed since last save) — discard
       localStorage.removeItem(simulatorStorageKey());
       return;
     }
 
-    // Re-apply saved transfers
-    state.transfers.forEach(t => {
-      TRANSFER_QUEUE.push(t);
-      applyTransferToSquadHelper(t);
+    // Reprice saved plans against this import. Old plans stored market price
+    // as sale proceeds, and player prices may also have moved since saving.
+    state.transfers.forEach(transfer => {
+      const prices = simulatorTransferPrices(transfer.out_id, transfer.in_id, transfer.in_player_full);
+      const repriced = {...transfer,
+        out_sell_price: prices.selling_price ?? transfer.out_sell_price ?? transfer.out_price,
+        out_sell_price_source: prices.selling_price_source,
+        in_price: Number(prices.purchase_price ?? transfer.in_price), pricing_version:2};
+      TRANSFER_QUEUE.push(repriced);
+      applyTransferToSquadHelper(repriced);
     });
+    if (MY_TEAM_DATA.gw_summary) MY_TEAM_DATA.gw_summary.bank = getSimulatorBank();
     if (state.chip) {
       const chipSel = document.getElementById('sim-chip-select');
       if (chipSel) chipSel.value = state.chip;

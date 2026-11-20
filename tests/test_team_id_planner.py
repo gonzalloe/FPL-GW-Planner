@@ -162,3 +162,33 @@ class TeamIDPlannerTests(unittest.TestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+
+class TransferPriceTests(unittest.TestCase):
+    def test_hall_purchase_history_gives_selling_price_not_market_price(self):
+        from my_team import player_transfer_prices
+        team={'transfers':[{'event':4,'element_in':449,'element_in_cost':51}], 'picks_event':10}
+        result=player_transfer_prices(team,{'element':449},5.2)
+        self.assertEqual(result['purchase_price'],5.1)
+        self.assertEqual(result['selling_price'],5.1)
+        self.assertAlmostEqual(3.1+result['selling_price']-5.3,2.9)
+
+    def test_sell_on_profit_rounding_losses_and_explicit_fpl_prices(self):
+        from my_team import player_transfer_prices
+        for current,expected in [(5.1,5.1),(5.2,5.1),(5.3,5.2),(5.4,5.2),(4.9,4.9)]:
+            result=player_transfer_prices({}, {'element':1,'purchase_price':51},current)
+            self.assertEqual(result['selling_price'],expected)
+        self.assertEqual(player_transfer_prices({}, {'element':1,'selling_price':50},5.3)['selling_price'],5)
+
+    def test_latest_permanent_purchase_is_used_and_unknown_stays_unknown(self):
+        from my_team import player_transfer_prices
+        team={'transfers':[{'event':i,'element_in':i+100,'element_in_cost':50} for i in range(30)]}
+        team['transfers'] += [{'event':2,'element_in':1,'element_in_cost':50},
+                             {'event':6,'element_in':1,'element_in_cost':51},
+                             {'event':7,'element_in':1,'element_in_cost':55},
+                             {'event':11,'element_in':1,'element_in_cost':56}]
+        team.update(chips=[{'event':7,'name':'freehit'}],picks_event=10)
+        self.assertEqual(player_transfer_prices(team,{'element':1},5.2)['purchase_price'],5.1)
+        result=player_transfer_prices({}, {'element':1},5.2)
+        self.assertIsNone(result['selling_price'])
+        self.assertEqual(result['selling_price_source'],'unknown')
