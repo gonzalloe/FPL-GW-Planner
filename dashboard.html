@@ -3984,9 +3984,7 @@ function initSimulator() {
   }
   renderSimPitch();
   SIM_CURRENT_GW = parseInt(gwSel?.value || DATA?.gameweek || 33);
-  const bank = MY_TEAM_DATA.gw_summary?.bank || 0;
-  const budgetEl = document.getElementById('sim-budget-display');
-  if (budgetEl) { budgetEl.textContent = 'Bank: £' + bank + 'm'; }
+  updateSimulatorBankDisplay();
   updateSimulatorFreeTransferDisplay();
   // Restore any saved transfer state
   if (TRANSFER_QUEUE.length === 0) loadSimState();
@@ -4451,7 +4449,7 @@ function searchReplacements() {
           sellP.price ??
           0
         );
-        budget = sellPrice + bank;
+        budget = (Math.round(sellPrice * 10) + Math.round(bank * 10)) / 10;
       }
 
     }
@@ -4678,7 +4676,7 @@ function addToTransferQueue(simData) {
     // Update bank
     if (MY_TEAM_DATA.gw_summary) {
       const currentBank = Number(MY_TEAM_DATA.gw_summary.bank ?? 0);
-      MY_TEAM_DATA.gw_summary.bank = currentBank + outSellPrice - inPurchasePrice;
+      MY_TEAM_DATA.gw_summary.bank = (Math.round(currentBank * 10) + Math.round(outSellPrice * 10) - Math.round(inPurchasePrice * 10)) / 10;
     }
 
     // Recalculate squad value and predicted points
@@ -4688,9 +4686,7 @@ function addToTransferQueue(simData) {
     ) / 10;
 
     // Update stats display
-    const bank = MY_TEAM_DATA.gw_summary?.bank || 0;
-    const budgetEl = document.getElementById('sim-budget-display');
-    if (budgetEl) budgetEl.textContent = 'Bank: \u00A3' + bank.toFixed(1) + 'm';
+    updateSimulatorBankDisplay();
   }
 
   SIM_SELL_ID = null; SIM_BUY_ID = null;
@@ -4708,23 +4704,24 @@ function removeFromQueue(idx) {
 }
 
 function getSimulatorBank() {
+  // FPL money moves in £0.1m increments. Sum integer tenths to avoid
+  // floating-point tails and incorrect comparisons at the budget boundary.
   const baseBank = Number(SIM_BASE_BANK ?? MY_TEAM_DATA?.gw_summary?.bank ?? 0);
-  const transferCost = TRANSFER_QUEUE.reduce(
-    (sum, t) => {
-      const sellPrice = Number(
-        t.out_sell_price ??
-        t.out_price ??
-        0
-      );
-      const buyPrice = Number(t.in_price ?? 0);
-      return sum + buyPrice - sellPrice;
-    },
-    0
-  );
-  return baseBank - transferCost;
+  const transferCost = TRANSFER_QUEUE.reduce((sum, transfer) => {
+    const sellPrice = Number(transfer.out_sell_price ?? transfer.out_price ?? 0);
+    const buyPrice = Number(transfer.in_price ?? 0);
+    return sum + Math.round(buyPrice * 10) - Math.round(sellPrice * 10);
+  }, 0);
+  return (Math.round(baseBank * 10) - transferCost) / 10;
+}
+
+function updateSimulatorBankDisplay() {
+  const element = document.getElementById('sim-budget-display');
+  if (element) element.textContent = 'Bank: £' + getSimulatorBank().toFixed(1) + 'm';
 }
 
 function renderTransferQueue() {
+  updateSimulatorBankDisplay();
   const list = document.getElementById('sim-queue-list');
   const summary = document.getElementById('sim-queue-summary');
   const count = document.getElementById('sim-queue-count');
