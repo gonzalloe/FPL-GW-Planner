@@ -156,3 +156,18 @@ class SecurityRouteTests(unittest.TestCase):
                     'squad_ids':list(range(1,16)),'out_id':3,'in_id':17,'gw':9})
                 self.assertEqual(result.status_code,200)
                 self.assertIsInstance(result.json['impact']['xi_gain'],(int,float))
+
+    def test_replacement_lookup_finds_player_beyond_first_page_and_preserves_filters(self):
+        self.user={'plan':'premium','email':'premium@example.test'}
+        predictions=[{'player_id':i,'name':'Player '+str(i),'position':'DEF',
+                      'predicted_points':3,'price':5} for i in range(1,81)]
+        predictions[-1]['name']='Van Hecke'
+        with patch.object(server,'_cached_predictions',return_value=(predictions,{'gameweek':11},'ready')):
+            result=self.client.get('/api/search-players?id=80')
+            self.assertEqual(result.status_code,200)
+            self.assertEqual([p['player_id'] for p in result.json['players']],[80])
+            self.assertEqual(self.client.get('/api/search-players?q=hecke&pos=DEF').json['players'][0]['player_id'],80)
+            self.assertEqual(self.client.get('/api/search-players?q=hecke&pos=MID').json['players'],[])
+            self.assertEqual(self.client.get('/api/search-players?id=bad').status_code,400)
+        with patch.object(server,'_cached_predictions',return_value=([],{},'preparing')):
+            self.assertEqual(self.client.get('/api/search-players?q=hecke').status_code,503)

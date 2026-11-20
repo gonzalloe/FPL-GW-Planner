@@ -4411,9 +4411,26 @@ function selectSellPlayer(pid) {
   searchReplacements();
 }
 
+async function fetchSimulatorJSON(url, options = {}) {
+  const response = await fetch(url, {...options, headers:{...authHeaders(), ...(options.headers || {})}});
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error || `Simulator request failed (HTTP ${response.status}). Please try again.`);
+  if (!data || data.error) throw new Error(data?.error || 'The simulator returned an invalid response. Please try again.');
+  return data;
+}
+
+function showReplacementError(error) {
+  document.getElementById('sim-buy-list').innerHTML = `<p style="color:var(--red);font-size:12px;">Replacement search failed: ${escapeHtml(error.message)}</p>`;
+}
+
+let replacementSearchId = 0;
+let replacementSearchController = null;
 let _searchTimeout = null;
 function searchReplacements() {
+  const requestId = ++replacementSearchId;
+  if (replacementSearchController) replacementSearchController.abort();
   clearTimeout(_searchTimeout);
+  document.getElementById('sim-buy-list').innerHTML = '<p class="loading">Searching replacements…</p>';
   _searchTimeout = setTimeout(async () => {
     const query = document.getElementById('sim-search').value.trim();
     const pos = document.getElementById('sim-pos-filter').value;
@@ -4440,27 +4457,36 @@ function searchReplacements() {
     }
     try {
       let url = '/api/search-players?q=' + encodeURIComponent(query || '');
-      if (pos) url += '&pos=' + pos;
-      // Don't filter by price — show all, indicate affordability in UI
-      const r = await fetch(url);
-      const data = await r.json();
-      renderBuyList(data.players || [], budget);
+      if (pos) url += '&pos=' + encodeURIComponent(pos);
+      // Don't filter by price — show all, indicate affordability in UI.
+      replacementSearchController = new AbortController();
+      const data = await fetchSimulatorJSON(url, {signal:replacementSearchController.signal});
+      if (requestId !== replacementSearchId) return;
+      if (!Array.isArray(data.players)) throw new Error('Player search is temporarily unavailable.');
+      renderBuyList(data.players, budget);
     } catch(e) {
-      document.getElementById('sim-buy-list').innerHTML = '<p style="color:var(--red);font-size:12px;">Search error: ' + e.message + '</p>';
+      if (e.name !== 'AbortError' && requestId === replacementSearchId) showReplacementError(e);
     }
   }, 300);
 }
 
 async function searchReplacementById(inId) {
+  const requestId = ++replacementSearchId;
+  clearTimeout(_searchTimeout);
+  if (replacementSearchController) replacementSearchController.abort();
+  replacementSearchController = new AbortController();
+  document.getElementById('sim-buy-list').innerHTML = '<p class="loading">Loading suggested replacement…</p>';
   try {
-    const r = await fetch('/api/search-players?q=');
-    const data = await r.json();
-    const player = (data.players || []).find(p => p.player_id === inId);
-    if (player) {
-      renderBuyList([player]);
-      selectBuyPlayer(inId);
-    }
-  } catch(e) {}
+    const data = await fetchSimulatorJSON('/api/search-players?id=' + encodeURIComponent(inId),
+                                         {signal:replacementSearchController.signal});
+    if (requestId !== replacementSearchId) return;
+    const player = (data.players || []).find(p => p.player_id === Number(inId));
+    if (!player) throw new Error('This suggested player is not available in the current prediction cache.');
+    renderBuyList([player]);
+    await selectBuyPlayer(Number(inId));
+  } catch(e) {
+    if (e.name !== 'AbortError' && requestId === replacementSearchId) showReplacementError(e);
+  }
 }
 
 function renderBuyList(players, budget) {
@@ -4515,13 +4541,10 @@ async function selectBuyPlayer(pid) {
       [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])].forEach(p => squadIds.push(p.player_id));
     }
     const targetGW = document.getElementById('sim-gw-select')?.value;
-    const r = await fetch('/api/simulate-transfer', {
+    const data = await fetchSimulatorJSON('/api/simulate-transfer', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ squad_ids: squadIds, out_id: SIM_SELL_ID, in_id: SIM_BUY_ID, gw: targetGW ? parseInt(targetGW) : undefined })
     });
-    const data = await r.json();
-    if (data.error) { contentDiv.innerHTML = '<p style="color:var(--red);">Error: ' + data.error + '</p>'; return; }
 
     const impact = data.impact || {};
     const gain = impact.this_gw_gain || 0;
@@ -4555,7 +4578,7 @@ async function selectBuyPlayer(pid) {
 
     contentDiv.innerHTML = html;
   } catch(e) {
-    contentDiv.innerHTML = '<p style="color:var(--red);">Simulation error: ' + e.message + '</p>';
+    contentDiv.innerHTML = '<p style="color:var(--red);">Simulation error: ' + escapeHtml(e.message) + '</p>';
   }
 }
 
@@ -4568,15 +4591,15 @@ async function quickBuyPlayer(pid) {
       [...(MY_TEAM_DATA.starters || []), ...(MY_TEAM_DATA.bench || [])].forEach(p => squadIds.push(p.player_id));
     }
     const targetGW = document.getElementById('sim-gw-select')?.value;
-    const r = await fetch('/api/simulate-transfer', {
+    const data = await fetchSimulatorJSON('/api/simulate-transfer', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ squad_ids: squadIds, out_id: SIM_SELL_ID, in_id: pid, gw: targetGW ? parseInt(targetGW) : undefined })
     });
-    const data = await r.json();
-    if (data.error) return;
     addToTransferQueue(data);
-  } catch(e) {}
+  } catch(e) {
+    document.getElementById('sim-result').style.display = '';
+    document.getElementById('sim-result-content').innerHTML = `<p style="color:var(--red);">${escapeHtml(e.message)}</p>`;
+  }
 }
 
 function addToTransferQueue(simData) {

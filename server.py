@@ -2325,12 +2325,21 @@ def api_player_history(player_id):
 def api_search_players():
     try:
         preds, _, _ = _cached_predictions()
-        if not preds: return jsonify({"players": []})
+        if not preds: return jsonify({"error": "Predictions are not ready yet. Please try again after the refresh."}), 503
         q = (request.args.get("q", "") or "").lower().strip()
         pos = request.args.get("pos")
         mp = request.args.get("max_price", type=float)
+        requested_id = request.args.get("id")
+        if requested_id is not None:
+            try:
+                requested_id = int(requested_id)
+                if requested_id <= 0:
+                    raise ValueError()
+            except (TypeError, ValueError):
+                return jsonify({"error": "Invalid player ID"}), 400
         results = []
         for p in preds:
+            if requested_id is not None and p.get("player_id") != requested_id: continue
             if q and not (q in p.get("name","").lower() or q in p.get("full_name","").lower() or
                           q in p.get("team","").lower() or q in p.get("team_name","").lower()): continue
             if pos and p.get("position") != pos: continue
